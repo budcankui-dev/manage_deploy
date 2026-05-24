@@ -1,0 +1,38 @@
+services:
+  task-manager:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+aiomysql://root:Bupt%401234@10.112.249.191:3306/task_manager
+    volumes:
+      - ./backend:/app
+    networks:
+      - management
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  node-agent:
+    build:
+      context: ./node_agent
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - AGENT_PORT=8001
+      - DOCKER_SOCKET=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - management
+    privileged: true
+
+networks:
+  management:
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

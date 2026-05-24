@@ -1,0 +1,13 @@
+{
+  "name": "abc-topology",
+  "description": "三节点随路计算拓扑 A→B→C",
+  "nodes": [
+    { "client_id": "source", "name": "source" },
+    { "client_id": "compute", "name": "compute" },
+    { "client_id": "sink", "name": "sink" }
+  ],
+  "edges": [
+    { "from_node_id": "source", "to_node_id": "compute" },
+    { "from_node_id": "compute", "to_node_id": "sink" }
+  ]
+}

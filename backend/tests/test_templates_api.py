@@ -1,0 +1,85 @@
+import pytest
+
+from api.templates import update_template
+from models import TaskTemplate, TaskTemplateEdge, TaskTemplateNode
+from schemas import TaskTemplateNodeCreate, TaskTemplateEdgeCreate, TaskTemplateUpdate
+
+
+class FakeResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+    def scalar_one(self):
+        return self.value
+
+
+class FakeSession:
+    def __init__(self, template):
+        self.template = template
+        self.flush_calls = 0
+        self.commit_calls = 0
+        self.execute_calls = 0
+
+    async def execute(self, _query):
+        self.execute_calls += 1
+        return FakeResult(self.template)
+
+    async def flush(self):
+        self.flush_calls += 1
+
+    async def commit(self):
+        self.commit_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_update_template_rebuilds_nodes_and_edges(monkeypatch):
+    template = TaskTemplate(name="old", description="before")
+    template.nodes = [
+        TaskTemplateNode(name="legacy", image="busybox", node_id="worker-1"),
+    ]
+    template.edges = [
+        TaskTemplateEdge(from_node_id="legacy", to_node_id="legacy"),
+    ]
+
+    captured = {}
+
+    async def fake_populate(db, db_template, nodes_data, edges_data):
+        captured["template"] = db_template
+        captured["nodes"] = nodes_data
+        captured["edges"] = edges_data
+
+    monkeypatch.setattr("api.templates._populate_template_graph", fake_populate)
+
+    response = await update_template(
+        "template-1",
+        TaskTemplateUpdate(
+            name="new",
+            description="after",
+            nodes=[
+                TaskTemplateNodeCreate(
+                    name="extract",
+                    image="python:3.11",
+                    node_id="worker-2",
+                )
+            ],
+            edges=[
+                TaskTemplateEdgeCreate(
+                    from_node_id="worker-2",
+                    to_node_id="worker-2",
+                )
+            ],
+        ),
+        FakeSession(template),
+    )
+
+    assert response is template
+    assert template.name == "new"
+    assert template.description == "after"
+    assert template.nodes == []
+    assert template.edges == []
+    assert len(captured["nodes"]) == 1
+    assert len(captured["edges"]) == 1
+

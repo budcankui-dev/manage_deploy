@@ -1,0 +1,216 @@
+import logging
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from config import settings
+from docker_handler import DockerHandler
+from health_checks import check_port, check_http, check_log, check_container
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+docker_handler = DockerHandler(settings.docker_socket)
+
+
+class ContainerStartRequest(BaseModel):
+    image: str
+    command: Optional[str] = None
+    env: Optional[dict[str, str]] = None
+    volumes: Optional[dict[str, str]] = None
+    ports: Optional[dict[str, str]] = None
+    gpu_id: Optional[str] = None
+    cpu_limit: Optional[float] = None
+    memory_limit: Optional[str] = None
+    network_mode: str = "host"
+    restart_policy: str = "on-failure"
+    health_check: Optional[dict] = None
+
+
+class ContainerStatusResponse(BaseModel):
+    container_id: Optional[str] = None
+    container_name: Optional[str] = None
+    status: str
+    healthy: bool = False
+    message: Optional[str] = None
+
+
+class PortPreflightRequest(BaseModel):
+    ports: Optional[dict[str, str]] = None
+    network_mode: str = "bridge"
+    exclude_container_name: Optional[str] = None
+
+
+class ManagedContainerResponse(BaseModel):
+    container_id: str
+    container_name: str
+    status: str
+    image: str
+    ports: Optional[dict] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"Node Agent starting on port {settings.agent_port}")
+    yield
+    logger.info("Node Agent shutting down")
+
+
+app = FastAPI(
+    title="Node Agent",
+    description="Docker container control agent",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+@app.post("/containers/{task_id}/{node_id}/start")
+async def start_container(
+    task_id: str,
+    node_id: str,
+    request: ContainerStartRequest,
+):
+    container_name = f"{task_id}_{node_id}"
+
+    success, container_id, error = docker_handler.start_container(
+        container_name=container_name,
+        image=request.image,
+        command=request.command,
+        env=request.env,
+        volumes=request.volumes,
+        ports=request.ports,
+        gpu_id=request.gpu_id,
+        cpu_limit=request.cpu_limit,
+        memory_limit=request.memory_limit,
+        network_mode=request.network_mode,
+        restart_policy=request.restart_policy,
+    )
+
+    if not success:
+        raise HTTPException(status_code=500, detail=error)
+
+    return {"container_id": container_id}
+
+
+@app.post("/containers/{task_id}/{node_id}/stop")
+async def stop_container(task_id: str, node_id: str):
+    container_name = f"{task_id}_{node_id}"
+
+    success, error = docker_handler.stop_container(container_name)
+
+    if not success:
+        raise HTTPException(status_code=500, detail=error)
+
+    return {"message": "Container stopped"}
+
+
+@app.delete("/containers/{task_id}/{node_id}")
+async def delete_container(task_id: str, node_id: str):
+    container_name = f"{task_id}_{node_id}"
+
+    success, error = docker_handler.remove_container(container_name)
+
+    if not success:
+        raise HTTPException(status_code=500, detail=error)
+
+    return {"message": "Container deleted"}
+
+
+@app.get("/containers/{task_id}/{node_id}/status")
+async def get_container_status(task_id: str, node_id: str):
+    container_name = f"{task_id}_{node_id}"
+
+    status, container_id = docker_handler.get_container_status(container_name)
+
+    return ContainerStatusResponse(
+        container_id=container_id,
+        container_name=container_name,
+        status=status,
+        healthy=status == "running",
+    )
+
+
+@app.get("/containers/{task_id}/{node_id}/logs")
+async def get_container_logs(task_id: str, node_id: str):
+    container_name = f"{task_id}_{node_id}"
+
+    logs, error = docker_handler.get_container_logs(container_name)
+
+    if error:
+        raise HTTPException(status_code=500, detail=error)
+
+    return {"logs": logs}
+
+
+@app.post("/preflight/ports")
+async def preflight_ports(request: PortPreflightRequest):
+    conflicts, warnings = docker_handler.find_port_binding_conflicts(
+        ports=request.ports,
+        exclude_container_name=request.exclude_container_name,
+        network_mode=request.network_mode,
+    )
+    return {
+        "ok": not conflicts,
+        "conflicts": conflicts,
+        "warnings": warnings,
+    }
+
+
+@app.get("/containers/managed", response_model=list[ManagedContainerResponse])
+async def list_managed_containers():
+    return docker_handler.list_managed_containers()
+
+
+@app.delete("/managed-containers/{container_name:path}")
+async def delete_container_by_name(container_name: str):
+    success, error = docker_handler.remove_container(container_name)
+    if not success:
+        raise HTTPException(status_code=500, detail=error)
+    return {"message": "Container deleted"}
+
+
+@app.get("/health-check/port/{task_id}/{node_id}")
+async def health_check_port(task_id: str, node_id: str, port: int):
+    container_name = f"{task_id}_{node_id}"
+
+    healthy, message = await check_port(docker_handler, container_name, port)
+
+    return {"healthy": healthy, "message": message}
+
+
+@app.get("/health-check/http/{task_id}/{node_id}")
+async def health_check_http(task_id: str, node_id: str, url: str):
+    container_name = f"{task_id}_{node_id}"
+
+    healthy, message = await check_http(docker_handler, container_name, url)
+
+    return {"healthy": healthy, "message": message}
+
+
+@app.get("/health-check/log/{task_id}/{node_id}")
+async def health_check_log(task_id: str, node_id: str, keyword: str):
+    container_name = f"{task_id}_{node_id}"
+
+    healthy, message = await check_log(docker_handler, container_name, keyword)
+
+    return {"healthy": healthy, "message": message}
+
+
+@app.get("/health-check/container/{task_id}")
+async def health_check_container(task_id: str, container: str):
+    healthy, message = await check_container(docker_handler, task_id, container)
+
+    return {"healthy": healthy, "message": message}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=settings.agent_port)

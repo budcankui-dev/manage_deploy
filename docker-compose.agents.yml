@@ -1,0 +1,21 @@
+services:
+  node-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - AGENT_PORT=8001
+      - DOCKER_SOCKET=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+
+networks:
+  business:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 2001:db8:1::/64
+        - subnet: 10.0.1.0/24

@@ -1,0 +1,8 @@
+[project]
+name = "manage-deploy"
+version = "0.1.0"
+description = "Docker DAG Task Orchestration System"
+requires-python = ">=3.11"
+
+[tool.hatch]
+workspace = "backend"

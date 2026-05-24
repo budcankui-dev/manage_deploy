@@ -1,0 +1,23 @@
+[project]
+name = "node-agent"
+version = "0.1.0"
+description = "Node Agent for Docker DAG Task Orchestration"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "docker>=7.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+]
+
+[project.scripts]
+node-agent = "node_agent.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build-targets.wheel]
+packages = ["."]

@@ -1,0 +1,106 @@
+import axios from 'axios'
+import { ElMessage } from 'element-plus'
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+})
+
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const message = error.response?.data?.detail || error.message || '请求失败'
+    ElMessage.error(message)
+    return Promise.reject(error)
+  }
+)
+
+export const nodesApi = {
+  list: () => api.get('/nodes'),
+  get: (id) => api.get(`/nodes/${id}`),
+  create: (data) => api.post('/nodes', data),
+  update: (id, data) => api.put(`/nodes/${id}`, data),
+  delete: (id) => api.delete(`/nodes/${id}`),
+  listOrphans: (id) => api.get(`/nodes/${id}/orphans`),
+  cleanupOrphans: (id, containerNames = []) => api.post(`/nodes/${id}/orphans/cleanup`, { container_names: containerNames })
+}
+
+export const templatesApi = {
+  list: () => api.get('/templates'),
+  get: (id) => api.get(`/templates/${id}`),
+  create: (data) => api.post('/templates', data),
+  update: (id, data) => api.put(`/templates/${id}`, data),
+  delete: (id) => api.delete(`/templates/${id}`)
+}
+
+export const instancesApi = {
+  list: () => api.get('/instances'),
+  get: (id) => api.get(`/instances/${id}`),
+  preflight: (data) => api.post('/instances/preflight', data),
+  create: (data) => api.post('/instances', data),
+  update: (id, data) => api.put(`/instances/${id}`, data),
+  delete: (id) => api.delete(`/instances/${id}`),
+  start: (id) => api.post(`/instances/${id}/start`),
+  stop: (id) => api.post(`/instances/${id}/stop`),
+  restart: (id) => api.post(`/instances/${id}/restart`),
+  schedule: (id, data) => api.put(`/instances/${id}/schedule`, data),
+  getEvents: (id) => api.get(`/instances/${id}/events`),
+  getNodeLogs: (instanceId, nodeId) => api.get(`/instances/${instanceId}/nodes/${nodeId}/logs`),
+  batchStart: (ids) => api.post('/instances/batch/start', { instance_ids: ids }),
+  batchStop: (ids) => api.post('/instances/batch/stop', { instance_ids: ids }),
+  batchDelete: (ids) => api.post('/instances/batch/delete', { instance_ids: ids }),
+  reportMetric: (id, data) => api.post(`/instances/${id}/metrics`, data),
+  templateMetricSummary: (templateId) =>
+    api.get('/instances/metrics/template-summary', { params: templateId ? { template_id: templateId } : {} })
+}
+
+export const ordersApi = {
+  list: (status) => api.get('/orders', { params: status ? { status } : {} }),
+  create: (data) => api.post('/orders', data),
+  materialize: (id) => api.post(`/orders/${id}/materialize`),
+  materializePending: () => api.post('/orders/materialize/pending')
+}
+
+export const businessApi = {
+  submit: (data) => api.post('/business-tasks', data),
+  summary: () => api.get('/business-tasks/summary'),
+  evaluation: (instanceId) => api.get(`/business-tasks/${instanceId}/evaluation`),
+  results: (instanceId) => api.get(`/business-tasks/${instanceId}/results`),
+  catalog: () => api.get('/business-template-catalog'),
+  createCatalog: (data) => api.post('/business-template-catalog', data)
+}
+
+export const authApi = {
+  bootstrap: (data) => api.post('/auth/bootstrap', data),
+  login: (data) => api.post('/auth/login', data),
+  me: () => api.get('/auth/me'),
+  createUser: (data) => api.post('/auth/users', data)
+}
+
+export const conversationApi = {
+  create: (data) => api.post('/conversations', data),
+  list: () => api.get('/conversations'),
+  get: (id) => api.get(`/conversations/${id}`),
+  sendMessage: (id, data) => api.post(`/conversations/${id}/messages`, data),
+  updateDraft: (id, data) => api.patch(`/conversations/${id}/draft`, data),
+  confirmIntent: (id) => api.post(`/conversations/${id}/confirm-intent`),
+  submit: (id, params = {}) =>
+    api.post(`/conversations/${id}/submit`, null, {
+      params: { auto_start: params.auto_start ?? false }
+    }),
+  createRoutingRequest: (data) => api.post('/routing-requests', data),
+  getRoutingRequest: (id) => api.get(`/routing-requests/${id}`)
+}
+
+export default api

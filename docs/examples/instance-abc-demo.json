@@ -1,0 +1,33 @@
+{
+  "name": "task-001",
+  "template_name": "abc-topology",
+  "auto_start": true,
+  "node_overrides": [
+    {
+      "template_node_name": "source",
+      "node_id": "demo-worker-a",
+      "image": "busybox:latest",
+      "command": "sleep 3600",
+      "network_mode": "host"
+    },
+    {
+      "template_node_name": "compute",
+      "node_id": "demo-worker-b",
+      "image": "my-app:v1",
+      "command": "python run.py --batch 32",
+      "cpu_limit": 2,
+      "memory_limit": "4g",
+      "gpu_id": "0",
+      "network_mode": "bridge",
+      "ports": { "8080": "8080" },
+      "env": { "TASK_ROLE": "compute" }
+    },
+    {
+      "template_node_name": "sink",
+      "node_id": "demo-worker-c",
+      "image": "busybox:latest",
+      "command": "sleep 3600",
+      "network_mode": "host"
+    }
+  ]
+}
