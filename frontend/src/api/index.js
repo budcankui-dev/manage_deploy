@@ -83,6 +83,7 @@ export const businessApi = {
 
 export const authApi = {
   bootstrap: (data) => api.post('/auth/bootstrap', data),
+  register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
   me: () => api.get('/auth/me'),
   createUser: (data) => api.post('/auth/users', data)

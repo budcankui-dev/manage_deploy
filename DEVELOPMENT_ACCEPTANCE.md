@@ -272,9 +272,50 @@
   - 旧版本只删数据库未删 Docker 的历史遗留
   - 调试阶段中断流程后留下的脏容器
 
-## 9. 业务任务 E2E 验收清单
+## 9. 运行时能力验收（macro / port / IPv6）
 
-### 9.1 L1 API 集成（自动化）
+### 9.0 自动化
+
+```bash
+cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
+cd frontend && npm run build
+```
+
+当前基线（2026-05-24）：**36 passed**（含 `test_auth_register_creates_regular_user`、`test_conversations_api` 的 `task_id` / `workflow_trace`）。
+
+脚本：`python scripts/verify_macro_port_e2e.py`（需 backend + agent + `alpine:latest`）。
+
+### 9.1 模板与实例
+
+- [x] 模板支持 `macro_defs`、节点 `port_defs`
+- [x] 实例支持 `macro_values`、`port_values`
+- [x] 模板名称去重（API 409）
+- [x] 从模板创建实例必须走完整表单（禁止仅填名称裸创建）
+
+### 9.2 部署与 PEER 环境变量
+
+- [ ] 本地 `alpine` 镜像下 preflight + start 全链路脚本通过
+- [ ] compute 容器 env 含 `PEER_*_URL_*`（业务 IPv6 优先）、`DB_URL` 等宏变量
+
+## 10. 意图与认证（骨架，下阶段启用路由守卫）
+
+后端已具备：
+
+- `POST /api/auth/register`（普通用户）
+- `intent_workflow` 抽象层（当前为规则 parser）
+- `Conversation.task_id` 与 API 字段 `task_id`
+
+前端已具备（**本轮不启用路由守卫**，登录/对话页仅作占位）：
+
+- `auth` store、`/login`、`/register`
+- 三栏 `IntentChatView` 原型
+- 开发绕过：`backend AUTH_BYPASS` 或 `frontend VITE_AUTH_BYPASS`
+
+下阶段再启用：`router.beforeEach` 角色分流、admin 侧栏隐藏对话入口。
+
+## 11. 业务任务 E2E 验收清单
+
+### 11.1 L1 API 集成（自动化）
 
 ```bash
 cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
@@ -288,7 +329,7 @@ cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 - [x] conversations 解析 → confirm → routing callback → submit
 - [x] 不合理时延目标 rejected
 
-### 9.2 L2 部署链路（半自动）
+### 11.2 L2 部署链路（半自动）
 
 前置：backend + node_agent 已启动，已执行 seed 脚本。
 
@@ -297,10 +338,10 @@ cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 3. [ ] metric 上报后 evaluation 中 `business_success` 正确
 4. [ ] Admin 页 `/business-tasks` 可查看 summary
 
-### 9.3 意图对话链路
+### 11.3 意图对话链路（下阶段，与路由守卫一并启用）
 
-1. [x] 用户登录后进入 `/intent-chat`
-2. [x] 发送自然语言，右侧展示解析 draft
+1. [ ] 路由守卫 + 角色分流后，user 进入 `/intent-chat`
+2. [x] 发送自然语言，右侧展示解析 draft（API + 页面原型已有）
 3. [ ] 确认意图 → 请求路由 → `mock_router_callback.sh` 回调
 4. [ ] 确认提交后产生 TaskOrder + instance
 

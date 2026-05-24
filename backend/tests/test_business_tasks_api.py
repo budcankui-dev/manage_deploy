@@ -106,6 +106,26 @@ async def test_auth_bootstrap_and_login(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_auth_register_creates_regular_user(client, db_session):
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "regular-user", "password": "password123"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["username"] == "regular-user"
+    assert body["role"] == "user"
+
+    login = await client.post(
+        "/api/auth/login",
+        json={"username": "regular-user", "password": "password123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["role"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_business_task_create_and_metric_evaluation(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
 

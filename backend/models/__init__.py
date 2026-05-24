@@ -338,6 +338,14 @@ class Conversation(Base):
         "RoutingRequest", back_populates="conversation", cascade="all, delete-orphan"
     )
 
+    @property
+    def task_id(self) -> str:
+        return self.id
+
+    @property
+    def workflow_trace(self) -> dict:
+        return {"engine": "rule_parser"}
+
 
 class ConversationMessage(Base):
     __tablename__ = "conversation_messages"

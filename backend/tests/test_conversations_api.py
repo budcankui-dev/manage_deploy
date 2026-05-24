@@ -12,6 +12,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session):
     create_response = await client.post("/api/conversations", json={"title": "视频任务"}, headers=headers)
     assert create_response.status_code == 200
     conversation_id = create_response.json()["id"]
+    assert create_response.json()["task_id"] == conversation_id
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
@@ -23,6 +24,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session):
     assert body["latest_draft"]["task_type"] == "low_latency_video_pipeline"
     assert body["latest_draft"]["parse_status"] == "valid"
     assert len(body["messages"]) == 2
+    assert body["workflow_trace"]["engine"] == "rule_parser"
 
     confirm_response = await client.post(
         f"/api/conversations/{conversation_id}/confirm-intent",

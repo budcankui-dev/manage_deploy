@@ -22,6 +22,20 @@ async def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    if settings.auth_bypass:
+        role = UserRole(settings.auth_bypass_role)
+        username = f"{settings.auth_bypass_username}-{role.value}"
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+        if not user:
+            user = User(
+                username=username,
+                password_hash=hash_password("auth-bypass"),
+                role=role,
+            )
+            db.add(user)
+            await db.flush()
+        return user
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1]
@@ -105,6 +119,22 @@ async def login(payload: AuthLoginRequest, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return AuthTokenResponse(access_token=create_access_token(user), role=user.role)
+
+
+@router.post("/register", response_model=UserResponse)
+async def register_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+    existing = await db.execute(select(User).where(User.username == payload.username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="username already exists")
+    user = User(
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+        role=UserRole.USER,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 @router.get("/me", response_model=UserResponse)

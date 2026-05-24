@@ -21,7 +21,8 @@ from schemas import (
     IntentDraftUpdate,
     RoutingResult,
 )
-from services.intent_parser import parse_intent, validate_draft_fields
+from services.intent_parser import validate_draft_fields
+from services.intent_workflow import run_intent_workflow
 
 from .business_tasks import create_business_task
 
@@ -90,7 +91,7 @@ async def send_message(
 
     latest_draft = await _get_latest_draft(db, conversation.id)
     existing = _draft_to_dict(latest_draft) if latest_draft else None
-    parsed = parse_intent(payload.content, existing)
+    parsed, _trace = run_intent_workflow(payload.content, existing)
 
     version = (latest_draft.version + 1) if latest_draft else 1
     draft = IntentDraft(
@@ -277,12 +278,14 @@ async def _get_conversation_detail(
     routing = await _get_latest_routing(db, conversation.id)
     return ConversationResponse(
         id=conversation.id,
+        task_id=conversation.id,
         user_id=conversation.user_id,
         status=conversation.status,
         title=conversation.title,
         materialized_order_id=conversation.materialized_order_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
+        workflow_trace=conversation.workflow_trace,
         messages=sorted(conversation.messages, key=lambda item: item.created_at),
         latest_draft=draft,
         latest_routing_request=routing,

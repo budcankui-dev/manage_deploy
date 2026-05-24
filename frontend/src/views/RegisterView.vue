@@ -3,25 +3,21 @@
     <el-card class="auth-card">
       <template #header>
         <div>
-          <h2>登录</h2>
-          <p>Admin 进入部署管理界面，普通用户进入意图解析对话界面。</p>
+          <h2>注册普通用户</h2>
+          <p>普通用户注册后进入意图解析对话工作台。</p>
         </div>
       </template>
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="用户名">
-          <el-input v-model="form.username" placeholder="admin" />
+          <el-input v-model="form.username" placeholder="user001" />
         </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" show-password />
         </el-form-item>
         <div class="actions">
-          <el-button type="primary" :loading="loading" @click="handleLogin">登录</el-button>
-          <el-button :loading="loading" @click="handleBootstrap">初始化管理员</el-button>
+          <el-button type="primary" :loading="loading" @click="handleRegister">注册</el-button>
+          <el-button @click="$router.push('/login')">返回登录</el-button>
         </div>
-        <p class="auth-link">
-          还没有账号？
-          <router-link to="/register">注册普通用户</router-link>
-        </p>
       </el-form>
     </el-card>
   </div>
@@ -29,32 +25,25 @@
 
 <script setup>
 import { reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
-const route = useRoute()
 const auth = useAuthStore()
 const loading = ref(false)
 const form = reactive({ username: '', password: '' })
 
-async function handleLogin() {
-  loading.value = true
-  try {
-    await auth.login(form)
-    ElMessage.success('登录成功')
-    router.push(route.query.redirect || auth.homePath)
-  } finally {
-    loading.value = false
+async function handleRegister() {
+  if (!form.username || !form.password) {
+    ElMessage.error('请填写用户名和密码')
+    return
   }
-}
-
-async function handleBootstrap() {
   loading.value = true
   try {
-    await auth.bootstrap(form)
-    ElMessage.success('管理员已初始化，请登录')
+    await auth.register(form)
+    ElMessage.success('注册成功，请登录')
+    router.push('/login')
   } finally {
     loading.value = false
   }
@@ -79,10 +68,5 @@ async function handleBootstrap() {
 .actions {
   display: flex;
   gap: 12px;
-}
-
-.auth-link {
-  margin-top: 16px !important;
-  font-size: 13px;
 }
 </style>

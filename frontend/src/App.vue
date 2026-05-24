@@ -1,6 +1,6 @@
 <template>
-  <div class="app-container">
-    <aside class="sidebar">
+  <div class="app-container" :class="{ 'plain-container': !showAdminShell }">
+    <aside v-if="showAdminShell" class="sidebar">
       <div class="logo">
         <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
           <rect x="2" y="2" width="28" height="28" rx="6" stroke="currentColor" stroke-width="2"/>
@@ -33,20 +33,17 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>业务任务</span>
         </router-link>
-        <router-link to="/intent-chat" class="nav-item">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>意图对话</span>
-        </router-link>
-        <router-link to="/login" class="nav-item">
-          <el-icon><User /></el-icon>
-          <span>登录</span>
-        </router-link>
       </nav>
       <div class="sidebar-footer">
+        <div class="account-row">
+          <el-icon><User /></el-icon>
+          <span>{{ auth.username || auth.role }}</span>
+        </div>
         <div class="status-indicator">
           <span class="dot"></span>
           <span class="text">系统就绪</span>
         </div>
+        <el-button size="small" text @click="logout">退出登录</el-button>
       </div>
     </aside>
     <main class="main-content">
@@ -58,6 +55,23 @@
     </main>
   </div>
 </template>
+
+<script setup>
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+
+const showAdminShell = computed(() => auth.isAuthenticated && auth.isAdmin && !route.meta.public)
+
+function logout() {
+  auth.logout()
+  router.push('/login')
+}
+</script>
 
 <style>
 :root {
@@ -114,6 +128,11 @@ body::-webkit-scrollbar-thumb:hover {
   display: flex;
   height: 100vh;
   background: var(--bg-primary);
+}
+
+.app-container.plain-container {
+  display: block;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -178,6 +197,15 @@ body::-webkit-scrollbar-thumb:hover {
   border-top: 1px solid var(--border-subtle);
 }
 
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .status-indicator {
   display: flex;
   align-items: center;
@@ -202,6 +230,11 @@ body::-webkit-scrollbar-thumb:hover {
   flex: 1;
   overflow-y: auto;
   padding: 32px;
+}
+
+.plain-container .main-content {
+  height: 100vh;
+  padding: 0;
 }
 
 .fade-enter-active,

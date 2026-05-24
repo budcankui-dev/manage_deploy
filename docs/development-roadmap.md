@@ -118,25 +118,44 @@ drafting
 - [x] 更新 AGENTS.md、CLAUDE.md、README、DEVELOPMENT_ACCEPTANCE
 - [x] 补充 `backend/.env.example`（SERVICE_API_TOKEN、AUTH_SECRET、MINIO_*）
 - [x] 新增 `backend/tests/test_business_tasks_api.py`（L1 集成测试）
-- [x] pytest 全绿（20 passed）
+- [x] pytest 全绿（36 passed，含 register / task_id / workflow）
 
 **验收：** Git 可用；文档与代码一致；L1 测试通过。
 
 ---
 
-### P1 部署接入
+### P1 部署系统收敛（当前重点）
 
-- [x] 新增 `backend/scripts/seed_demo_data.py`
-- [x] 新增 `scripts/e2e_business_task.sh`
-- [x] 种子数据：worker 节点、三节点模板、catalog 映射
-- [x] `POST /api/business-tasks` 可物化 instance（L1 测试覆盖）
-- [ ] 手工跑一轮 L2 E2E，结果写入 DEVELOPMENT_ACCEPTANCE §9
+**目标：** 模板/实例 宏与命名端口、IPv6 PEER、实例详情与编辑、批量任务与业务订单衔接可验收。
 
-**验收：** 标准 JSON → instance_id；不依赖真实 GPU。
+| 项 | 状态 | 说明 |
+|----|------|------|
+| 模板 `macro_defs` / `port_defs` | 已实现 | API + 前端模板详情页 |
+| 实例 `macro_values` / `port_values` | 已实现 | 创建 时必须填运行参数 |
+| `business_ipv6` + PEER URL | 已实现 | 需 `verify_macro_port_e2e.py` 脚本验收 |
+| 模板名称去重 | 已实现 | API 409 |
+| 实例详情抽屉 编辑 | 已实现 | InstanceDetailView |
+| seed 含 macro/port | 待做 | 更新 `seed_demo_data.py` |
+| L2 `e2e_business_task.sh` | 待做 | 手工 + 脚本 |
+| 批量任务 ↔ 待部署任务 | 部分 | `task_orders` + conversations 已有关联字段 |
+
+**验收：**
+- `cd backend && ./venv/bin/python -m pytest tests/ -q`
+- `python scripts/verify_macro_port_e2e.py`（需本机 alpine + agent）
+- 手工：模板 创建实例 → preflight → start → 检查 compute 容器 env
 
 ---
 
-### P2 业务容器
+### P1b 部署接入（业务任务基础）
+
+- [x] `backend/scripts/seed_demo_data.py`
+- [x] `scripts/e2e_business_task.sh`
+- [x] `POST /api/business-tasks` 可物化 instance（L1）
+- [ ] L2 手工验收写入 DEVELOPMENT_ACCEPTANCE §11
+
+---
+
+### P2 业务容器（后续）
 
 - [ ] A/B/C mock 业务容器（单镜像多 ROLE 或三个 demo 镜像）
 - [ ] 容器上报 metric 到 `POST /api/instances/{id}/metrics`

@@ -69,12 +69,14 @@ class ConversationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    task_id: str
     user_id: str
     status: ConversationStatus
     title: Optional[str] = None
     materialized_order_id: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    workflow_trace: Optional[dict[str, Any]] = None
     messages: list[ConversationMessageResponse] = Field(default_factory=list)
     latest_draft: Optional[IntentDraftResponse] = None
     latest_routing_request: Optional[RoutingRequestResponse] = None
@@ -84,6 +86,7 @@ class ConversationSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    task_id: str
     status: ConversationStatus
     title: Optional[str] = None
     created_at: datetime

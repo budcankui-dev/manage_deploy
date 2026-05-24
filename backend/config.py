@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     service_api_token: str = "change-me-service-token"
     auth_secret: str = "change-me-auth-secret"
     access_token_expire_hours: int = 24
+    auth_bypass: bool = False
+    auth_bypass_role: str = "admin"
+    auth_bypass_username: str = "dev"
 
     prefer_business_ipv6: bool = True
 
