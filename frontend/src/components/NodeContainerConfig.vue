@@ -92,9 +92,37 @@
             <el-button :disabled="disabled" link type="primary" @click="addPortRow">+ 添加端口映射</el-button>
             <p class="field-hint">{{ docs.ports.hint }}</p>
           </div>
-          <el-alert v-else type="info" :closable="false" show-icon class="inline-alert">
-            host 模式下端口映射不生效，容器直接使用宿主机端口。
-          </el-alert>
+          <div v-else class="field-block">
+            <div class="field-label">
+              {{ docs.host_ports.label }}
+              <code class="docker-tag">{{ docs.host_ports.dockerApi }}</code>
+            </div>
+            <template v-if="node.port_defs?.length">
+              <div v-for="def in node.port_defs" :key="def.name" class="named-port-row">
+                <code class="port-var">{{ def.name }}</code>
+                <span class="port-label">{{ def.label || def.name }}</span>
+                <el-input-number
+                  :model-value="node.port_values?.[def.name] ?? def.default ?? null"
+                  :disabled="disabled"
+                  :min="1"
+                  :max="65535"
+                  controls-position="right"
+                  @update:model-value="(v) => setNamedPort(def.name, v)"
+                />
+              </div>
+              <p class="field-hint">本节点注入 <code>PORT_&lt;变量大写&gt;</code>；互访 URL 为 <code>PEER_&lt;角色&gt;_URL_&lt;变量大写&gt;</code>（业务 IPv6 优先）。</p>
+            </template>
+            <template v-else>
+              <div v-for="(row, idx) in portRows" :key="idx" class="mapping-row">
+                <el-input v-model="row.left" :disabled="disabled" placeholder="9000" />
+                <el-button :disabled="disabled" type="danger" text @click="removePortRow(idx)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+              <el-button :disabled="disabled" link type="primary" @click="addPortRow">+ 添加监听端口</el-button>
+              <p class="field-hint">{{ docs.host_ports.hint }}</p>
+            </template>
+          </div>
         </el-tab-pane>
 
         <!-- Env -->
@@ -121,19 +149,22 @@
         <el-tab-pane label="挂载" name="volumes">
           <div class="field-block">
             <div class="field-label">
-              {{ docs.volumes.label }}
-              <code class="docker-tag">{{ docs.volumes.dockerApi }}</code>
+              {{ docs.volume_mount.label }}
+              <code class="docker-tag">{{ docs.volume_mount.dockerApi }}</code>
             </div>
-            <div v-for="(row, idx) in volumeRows" :key="idx" class="mapping-row">
-              <el-input v-model="row.left" :disabled="disabled" placeholder="/data/host" />
-              <span class="arrow">→</span>
-              <el-input v-model="row.right" :disabled="disabled" placeholder="/app/data" />
-              <el-button :disabled="disabled" type="danger" text @click="removeVolumeRow(idx)">
+            <p class="field-hint">{{ docs.volume_mount.hint }}</p>
+            <div v-for="(row, idx) in mountRows" :key="idx" class="mount-row">
+              <el-select v-model="row.type" :disabled="disabled" style="width: 120px">
+                <el-option v-for="t in MOUNT_TYPES" :key="t.value" :value="t.value" :label="t.value" />
+              </el-select>
+              <el-input v-model="row.target" :disabled="disabled" placeholder="容器路径 /app/data" />
+              <el-input v-model="row.source" :disabled="disabled" :placeholder="mountSourcePlaceholder(row.type)" />
+              <el-checkbox v-model="row.auto_create" :disabled="disabled">自动创建</el-checkbox>
+              <el-button :disabled="disabled" type="danger" text @click="removeMountRow(idx)">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>
-            <el-button :disabled="disabled" link type="primary" @click="addVolumeRow">+ 添加挂载</el-button>
-            <p class="field-hint">{{ docs.volumes.hint }}</p>
+            <el-button :disabled="disabled" link type="primary" @click="addMountRow">+ 添加挂载</el-button>
           </div>
         </el-tab-pane>
 
@@ -159,11 +190,68 @@
               style="width: 100%"
               @update:model-value="(v) => (node.cpu_limit = v ?? null)"
             />
-            <p class="field-hint">
-              示例：<code>{{ docs.cpu_limit.example }}</code> 表示最多 {{ docs.cpu_limit.example }} 核
-              → NanoCPUs = {{ cpuNanoExample }}
-            </p>
-            <p class="unsupported-hint">{{ docs.cpu_limit.unsupported }}</p>
+            <p class="field-hint">{{ docs.cpu_limit.hint }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">
+              {{ docs.cpu_reservation.label }}
+              <code class="docker-tag">{{ docs.cpu_reservation.dockerApi }}</code>
+            </div>
+            <el-input-number
+              :model-value="node.cpu_reservation"
+              :disabled="disabled"
+              :min="0"
+              :step="0.5"
+              :precision="2"
+              controls-position="right"
+              style="width: 100%"
+              @update:model-value="(v) => (node.cpu_reservation = v ?? null)"
+            />
+            <p class="field-hint">{{ docs.cpu_reservation.hint }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">{{ docs.cpu_shares.label }}</div>
+            <el-input-number
+              :model-value="node.cpu_shares"
+              :disabled="disabled"
+              :min="2"
+              :step="128"
+              controls-position="right"
+              style="width: 100%"
+              @update:model-value="(v) => (node.cpu_shares = v ?? null)"
+            />
+            <p class="field-hint">{{ docs.cpu_shares.hint }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">{{ docs.cpuset_cpus.label }}</div>
+            <el-input v-model="node.cpuset_cpus" :disabled="disabled" :placeholder="docs.cpuset_cpus.example" />
+            <p class="field-hint">{{ docs.cpuset_cpus.hint }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">{{ docs.cpu_quota.label }} / {{ docs.cpu_period.label }}</div>
+            <div class="mapping-row">
+              <el-input-number
+                :model-value="node.cpu_quota"
+                :disabled="disabled"
+                :min="0"
+                controls-position="right"
+                style="width: 100%"
+                @update:model-value="(v) => (node.cpu_quota = v ?? null)"
+              />
+              <el-input-number
+                :model-value="node.cpu_period"
+                :disabled="disabled"
+                :min="0"
+                controls-position="right"
+                style="width: 100%"
+                @update:model-value="(v) => (node.cpu_period = v ?? null)"
+              />
+            </div>
+            <p class="field-hint">{{ docs.cpu_quota.hint }}</p>
           </div>
 
           <div class="field-block">
@@ -178,7 +266,26 @@
               :placeholder="docs.memory_limit.example"
             />
             <p class="field-hint">{{ docs.memory_limit.hint }}</p>
-            <p class="unsupported-hint">{{ docs.memory_limit.unsupported }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">{{ docs.memory_reservation.label }}</div>
+            <el-input
+              v-model="node.memory_reservation"
+              :disabled="disabled"
+              :placeholder="docs.memory_reservation.example"
+            />
+            <p class="field-hint">{{ docs.memory_reservation.hint }}</p>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label">{{ docs.memory_swap_limit.label }}</div>
+            <el-input
+              v-model="node.memory_swap_limit"
+              :disabled="disabled"
+              :placeholder="docs.memory_swap_limit.example"
+            />
+            <p class="field-hint">{{ docs.memory_swap_limit.hint }}</p>
           </div>
 
           <div class="field-block">
@@ -190,11 +297,11 @@
             <el-input
               v-model="node.gpu_id"
               :disabled="disabled"
-              :placeholder="docs.gpu_id.example"
+              placeholder="all | 0 | 0,1,2"
             />
             <p class="field-hint">{{ docs.gpu_id.hint }}</p>
-            <p class="unsupported-hint">{{ docs.gpu_id.unsupported }}</p>
           </div>
+
         </el-tab-pane>
 
         <!-- Restart -->
@@ -218,16 +325,19 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import {
   DOCKER_PARAM_DOCS,
   RUNTIME_TAB_NOTE,
+  MOUNT_TYPES,
   parsePortLines,
   formatPortLines,
   parseEnvLines,
   formatEnvLines,
-  parseVolumeLines,
-  formatVolumeLines,
+  parseHostPortLines,
+  formatHostPortLines,
+  defaultMountRow,
+  serializeVolumeMounts,
 } from '@/utils/dockerFieldHints'
 
 const props = defineProps({
@@ -243,61 +353,69 @@ const activeTab = ref('command')
 
 const portRows = ref([])
 const envRows = ref([])
-const volumeRows = ref([])
+const mountRows = ref([])
 
-const cpuNanoExample = computed(() => {
-  const v = parseFloat(docs.cpu_limit.example)
-  if (!v || Number.isNaN(v)) return '-'
-  return `${Math.round(v * 1_000_000_000)}`
-})
+function mountSourcePlaceholder(type) {
+  if (type === 'managed') return '逻辑名 input'
+  if (type === 'volume') return '卷名 my-vol'
+  return '/data/host/path'
+}
+
+function syncPortRowsFromNode(n) {
+  portRows.value =
+    n.network_mode === 'host'
+      ? parseHostPortLines(n.ports_text || '')
+      : parsePortLines(n.ports_text || '')
+  if (!portRows.value.length) portRows.value = [{ left: '', right: '' }]
+}
 
 function syncRowsFromNode() {
   const n = props.node
-  portRows.value = parsePortLines(n.ports_text || '')
+  syncPortRowsFromNode(n)
+  if (!n.port_values) n.port_values = {}
+  for (const def of n.port_defs || []) {
+    if (n.port_values[def.name] == null && def.default != null) {
+      n.port_values[def.name] = def.default
+    }
+  }
   envRows.value = parseEnvLines(n.env_text || '')
-  volumeRows.value = parseVolumeLines(n.volumes_text || '')
-  if (!portRows.value.length && n.network_mode === 'bridge') portRows.value = [{ left: '', right: '' }]
+  mountRows.value = (n.volume_mounts?.length ? [...n.volume_mounts] : [defaultMountRow()])
   if (!envRows.value.length) envRows.value = [{ left: '', right: '' }]
-  if (!volumeRows.value.length) volumeRows.value = [{ left: '', right: '' }]
+  ;['cpu_reservation', 'cpu_shares', 'cpu_quota', 'cpu_period', 'memory_reservation', 'memory_swap_limit'].forEach((k) => {
+    if (n[k] === undefined) n[k] = null
+  })
+  if (n.cpuset_cpus === undefined) n.cpuset_cpus = ''
 }
 
 function syncNodeFromRows() {
-  props.node.ports_text = formatPortLines(portRows.value)
+  props.node.ports_text =
+    props.node.network_mode === 'host'
+      ? formatHostPortLines(portRows.value)
+      : formatPortLines(portRows.value)
   props.node.env_text = formatEnvLines(envRows.value)
-  props.node.volumes_text = formatVolumeLines(volumeRows.value)
+  props.node.volume_mounts = serializeVolumeMounts(mountRows.value)
 }
 
-function addPortRow() {
-  portRows.value.push({ left: '', right: '' })
-}
-function removePortRow(idx) {
-  portRows.value.splice(idx, 1)
-  syncNodeFromRows()
-}
-function addEnvRow() {
-  envRows.value.push({ left: '', right: '' })
-}
-function removeEnvRow(idx) {
-  envRows.value.splice(idx, 1)
-  syncNodeFromRows()
-}
-function addVolumeRow() {
-  volumeRows.value.push({ left: '', right: '' })
-}
-function removeVolumeRow(idx) {
-  volumeRows.value.splice(idx, 1)
-  syncNodeFromRows()
+function setNamedPort(name, value) {
+  if (!props.node.port_values) props.node.port_values = {}
+  if (value == null || value === '') {
+    delete props.node.port_values[name]
+  } else {
+    props.node.port_values[name] = value
+  }
 }
 
-watch([portRows, envRows, volumeRows], syncNodeFromRows, { deep: true })
+function addPortRow() { portRows.value.push({ left: '', right: '' }) }
+function removePortRow(idx) { portRows.value.splice(idx, 1); syncNodeFromRows() }
+function addEnvRow() { envRows.value.push({ left: '', right: '' }) }
+function removeEnvRow(idx) { envRows.value.splice(idx, 1); syncNodeFromRows() }
+function addMountRow() { mountRows.value.push(defaultMountRow()) }
+function removeMountRow(idx) { mountRows.value.splice(idx, 1); syncNodeFromRows() }
 
-watch(
-  () => props.node.template_node_id,
-  () => syncRowsFromNode(),
-)
-
+watch([portRows, envRows, mountRows], syncNodeFromRows, { deep: true })
+watch(() => props.node.template_node_id, syncRowsFromNode)
+watch(() => props.node.network_mode, syncRowsFromNode)
 onMounted(syncRowsFromNode)
-
 defineExpose({ syncNodeFromRows })
 </script>
 
@@ -417,6 +535,17 @@ defineExpose({ syncNodeFromRows })
   gap: 8px;
   margin-bottom: 8px;
 }
+.mount-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mount-row .el-input {
+  flex: 1;
+  min-width: 120px;
+}
 .mapping-row .el-input {
   flex: 1;
 }
@@ -430,5 +559,24 @@ defineExpose({ syncNodeFromRows })
 }
 .inline-alert {
   margin-bottom: 12px;
+}
+.named-port-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.port-var {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  min-width: 48px;
+}
+.port-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 </style>

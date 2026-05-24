@@ -29,14 +29,24 @@
     </header>
 
     <div v-if="viewMode === 'card'" class="instances-grid">
-      <div v-for="instance in paginatedInstances" :key="instance.id" class="instance-card" :class="instance.status">
+      <div
+        v-for="instance in paginatedInstances"
+        :key="instance.id"
+        class="instance-card"
+        :class="instance.status"
+        @click="viewInstance(instance.id)"
+      >
         <div class="instance-header">
           <div>
-            <el-checkbox :model-value="selectedIds.includes(instance.id)" @change="toggleSelected(instance.id)" />
+            <el-checkbox
+              :model-value="selectedIds.includes(instance.id)"
+              @click.stop
+              @change="toggleSelected(instance.id)"
+            />
             <h3>{{ instance.name }}</h3>
             <el-tag size="small" :type="statusTag(instance.status)">{{ formatStatus(instance.status) }}</el-tag>
           </div>
-          <el-dropdown trigger="click">
+          <el-dropdown trigger="click" @click.stop>
             <el-button text circle>···</el-button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -106,10 +116,9 @@
       <el-tabs v-model="createMode">
         <el-tab-pane label="JSON 粘贴" name="json">
           <p class="json-hint">
-            支持 template_name、node_overrides。资源字段：
-            <code>cpu_limit</code>（核数 → NanoCPUs）、
-            <code>memory_limit</code>（如 512m）、
-            <code>gpu_id</code>（如 "0"）。
+            支持 template_name、macro_values、node_overrides.port_values。
+            host 模式命名端口在模板 port_defs 中定义；启动时注入
+            <code>PEER_&lt;角色&gt;_URL_&lt;端口变量&gt;</code>（业务 IPv6 优先）。
           </p>
           <el-input v-model="createJsonText" type="textarea" :rows="18" placeholder="粘贴实例 JSON..." />
           <div class="json-actions">
@@ -140,6 +149,17 @@
         <el-form-item label="创建后自动启动">
           <el-switch v-model="createForm.auto_start" />
         </el-form-item>
+
+        <div class="divider">模板宏变量</div>
+        <div v-if="!macroDefs.length" class="empty-overrides">当前模板未定义宏变量</div>
+        <div v-else class="macro-form">
+          <div v-for="def in macroDefs" :key="def.name" class="macro-row">
+            <code class="macro-name">{{ def.name }}</code>
+            <span class="macro-label">{{ def.label || def.name }}</span>
+            <el-input v-model="macroValues[def.name]" :placeholder="String(def.default || '')" />
+          </div>
+          <p class="json-hint">宏变量注入所有节点环境，可在 command/env 中用 <code>${'${VAR}'}</code> 引用。</p>
+        </div>
 
         <div class="divider">节点运行参数</div>
         <div v-if="!nodeOverrides.length" class="empty-overrides">选择模板后，为每个节点配置容器参数</div>
@@ -176,6 +196,15 @@
         <el-form-item label="计划停止时间 (UTC+8)">
           <el-date-picker v-model="editForm.scheduled_end_time" :disabled="editLocked" type="datetime" style="width: 100%" />
         </el-form-item>
+        <div class="divider">模板宏变量</div>
+        <div v-if="!editMacroDefs.length" class="empty-overrides">当前模板未定义宏变量</div>
+        <div v-else class="macro-form">
+          <div v-for="def in editMacroDefs" :key="def.name" class="macro-row">
+            <code class="macro-name">{{ def.name }}</code>
+            <span class="macro-label">{{ def.label || def.name }}</span>
+            <el-input v-model="editMacroValues[def.name]" :disabled="editLocked" :placeholder="String(def.default || '')" />
+          </div>
+        </div>
         <div class="divider">节点容器配置</div>
         <NodeContainerConfig
           v-for="(node, idx) in editNodeOverrides"
@@ -206,9 +235,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import utc from 'dayjs/plugin/utc'
@@ -216,12 +245,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useInstancesStore } from '@/stores/instances'
 import { instancesApi, nodesApi, templatesApi } from '@/api'
 import { useTemplatesStore } from '@/stores/templates'
-import { buildInstancePayload, INSTANCE_JSON_EXAMPLE } from '@/utils/deployJson'
+import { buildInstancePayload, INSTANCE_JSON_EXAMPLE, mapApiNodeToForm, mapApiNodeToOverride, mapFormNodeToOverride } from '@/utils/deployJson'
 import NodeContainerConfig from '@/components/NodeContainerConfig.vue'
 
 dayjs.extend(relativeTime)
 dayjs.extend(utc)
 const router = useRouter()
+const route = useRoute()
 const viewMode = ref('card')
 const statusFilter = ref('')
 const showCreateDialog = ref(false)
@@ -233,6 +263,10 @@ const editing = ref(false)
 const showChangeSummaryDialog = ref(false)
 const nodeOverrides = ref([])
 const editNodeOverrides = ref([])
+const macroDefs = ref([])
+const macroValues = ref({})
+const editMacroDefs = ref([])
+const editMacroValues = ref({})
 const nodes = ref([])
 const editingInstanceId = ref('')
 const editingInstanceStatus = ref('')
@@ -304,7 +338,41 @@ onMounted(async () => {
   await Promise.all([fetchInstances(), fetchTemplates()])
   const { data } = await nodesApi.list()
   nodes.value = data
+  await openCreateFromQuery()
+  await openEditFromQuery()
 })
+
+watch(
+  () => route.query,
+  async () => {
+    await openCreateFromQuery()
+    await openEditFromQuery()
+  }
+)
+
+async function openCreateFromQuery() {
+  const templateId = route.query.template_id
+  if (route.query.create !== '1' || !templateId || typeof templateId !== 'string') return
+  createMode.value = 'form'
+  createForm.value = {
+    name: '',
+    template_id: templateId,
+    mode: 'immediate',
+    scheduled_start_time: null,
+    scheduled_end_time: null,
+    auto_start: false,
+  }
+  await onTemplateChange(templateId)
+  showCreateDialog.value = true
+  router.replace({ path: '/instances' })
+}
+
+async function openEditFromQuery() {
+  const instanceId = route.query.edit
+  if (!instanceId || typeof instanceId !== 'string') return
+  await openEditDialog(instanceId)
+  router.replace({ path: '/instances' })
+}
 
 function formatObjectLines(obj, sep = '=') {
   if (!obj || typeof obj !== 'object') return ''
@@ -333,26 +401,38 @@ function clearSelection() {
   selectedIds.value = []
 }
 
+function initMacroValues(defs, existing = {}) {
+  const out = {}
+  for (const def of defs || []) {
+    const name = def.name
+    if (!name) continue
+    out[name] = existing[name] ?? def.default ?? ''
+  }
+  return out
+}
+
+function initNodeOverridesFromTemplate(templateNodes) {
+  return (templateNodes || []).map((n) => {
+    const form = mapApiNodeToForm(n, { formatObjectLines })
+    for (const def of form.port_defs || []) {
+      if (form.port_values[def.name] == null && def.default != null) {
+        form.port_values[def.name] = def.default
+      }
+    }
+    return form
+  })
+}
+
 async function onTemplateChange(templateId) {
   nodeOverrides.value = []
+  macroDefs.value = []
+  macroValues.value = {}
   configRefs.value = []
   if (!templateId) return
   const { data } = await templatesApi.get(templateId)
-  nodeOverrides.value = (data.nodes || []).map((n) => ({
-    template_node_id: n.id,
-    template_node_name: n.name,
-    image: n.image || '',
-    command: n.command || '',
-    env_text: formatObjectLines(n.env, '='),
-    volumes_text: formatObjectLines(n.volumes, ':'),
-    ports_text: formatObjectLines(n.ports, ':'),
-    gpu_id: n.gpu_id || '',
-    cpu_limit: n.cpu_limit ?? null,
-    memory_limit: n.memory_limit || '',
-    network_mode: n.network_mode || 'host',
-    restart_policy: n.restart_policy || 'on-failure',
-    node_id: n.node_id || '',
-  }))
+  macroDefs.value = data.macro_defs || []
+  macroValues.value = initMacroValues(macroDefs.value)
+  nodeOverrides.value = initNodeOverridesFromTemplate(data.nodes)
 }
 
 function templateName(templateId) {
@@ -377,20 +457,8 @@ function buildCreatePayloadFromForm() {
     scheduled_start_time: createForm.value.mode === 'scheduled' ? createForm.value.scheduled_start_time : null,
     scheduled_end_time: createForm.value.mode === 'scheduled' ? createForm.value.scheduled_end_time : null,
     auto_start: createForm.value.auto_start,
-    node_overrides: nodeOverrides.value.map((n) => ({
-      template_node_id: n.template_node_id,
-      image: n.image || null,
-      command: n.command || null,
-      env: parseLines(n.env_text, '='),
-      volumes: parseLines(n.volumes_text, ':'),
-      ports: parseLines(n.ports_text, ':'),
-      gpu_id: n.gpu_id || null,
-      cpu_limit: n.cpu_limit ?? null,
-      memory_limit: n.memory_limit || null,
-      network_mode: n.network_mode || null,
-      restart_policy: n.restart_policy || null,
-      node_id: n.node_id || null,
-    })),
+    macro_values: Object.keys(macroValues.value).length ? { ...macroValues.value } : null,
+    node_overrides: nodeOverrides.value.map((n) => mapFormNodeToOverride(n, { parseLines })),
   }
 }
 
@@ -426,6 +494,8 @@ async function finalizeCreate(payload) {
   }
   createJsonText.value = ''
   nodeOverrides.value = []
+  macroDefs.value = []
+  macroValues.value = {}
   configRefs.value = []
   await fetchInstances()
   return created
@@ -487,40 +557,27 @@ async function openEditDialog(instanceId) {
     scheduled_start_time: target.scheduled_start_time || null,
     scheduled_end_time: target.scheduled_end_time || null,
   }
-  editNodeOverrides.value = (target.nodes || []).map((n) => ({
-    template_node_id: n.template_node_id,
-    template_node_name: n.name,
-    image: n.image || '',
-    command: n.command || '',
-    env_text: formatObjectLines(n.env, '='),
-    volumes_text: formatObjectLines(n.volumes, ':'),
-    ports_text: formatObjectLines(n.ports, ':'),
-    gpu_id: n.gpu_id || '',
-    cpu_limit: n.cpu_limit ?? null,
-    memory_limit: n.memory_limit || '',
-    network_mode: n.network_mode || '',
-    restart_policy: n.restart_policy || '',
-    node_id: n.node_id || '',
-  }))
+  const { data: templateDetail } = await templatesApi.get(target.template_id)
+  editMacroDefs.value = templateDetail.macro_defs || []
+  editMacroValues.value = initMacroValues(editMacroDefs.value, target.macro_values || {})
+  editNodeOverrides.value = (target.nodes || []).map((n) => {
+    const form = mapApiNodeToForm(
+      { ...n, port_defs: n.port_defs || templateDetail.nodes?.find((t) => t.id === n.template_node_id)?.port_defs },
+      { formatObjectLines }
+    )
+    for (const def of form.port_defs || []) {
+      if (form.port_values[def.name] == null && def.default != null) {
+        form.port_values[def.name] = def.default
+      }
+    }
+    return form
+  })
   originalEditSnapshot.value = {
     name: target.name || '',
     scheduled_start_time: target.scheduled_start_time || null,
     scheduled_end_time: target.scheduled_end_time || null,
-    nodes: (target.nodes || []).map((n) => ({
-      template_node_id: n.template_node_id,
-      template_node_name: n.name,
-      image: n.image || null,
-      command: n.command || null,
-      env: n.env || {},
-      volumes: n.volumes || {},
-      ports: n.ports || {},
-      gpu_id: n.gpu_id || null,
-      cpu_limit: n.cpu_limit ?? null,
-      memory_limit: n.memory_limit || null,
-      network_mode: n.network_mode || null,
-      restart_policy: n.restart_policy || null,
-      node_id: n.node_id || null,
-    })),
+    macro_values: target.macro_values || null,
+    nodes: (target.nodes || []).map((n) => mapApiNodeToOverride(n)),
   }
   showEditDialog.value = true
 }
@@ -530,21 +587,8 @@ function buildEditPayload() {
     name: editForm.value.name,
     scheduled_start_time: editForm.value.scheduled_start_time,
     scheduled_end_time: editForm.value.scheduled_end_time,
-    node_overrides: editNodeOverrides.value.map((n) => ({
-      template_node_id: n.template_node_id,
-      template_node_name: n.template_node_name,
-      image: n.image || null,
-      command: n.command || null,
-      env: parseLines(n.env_text, '='),
-      volumes: parseLines(n.volumes_text, ':'),
-      ports: parseLines(n.ports_text, ':'),
-      gpu_id: n.gpu_id || null,
-      cpu_limit: n.cpu_limit ?? null,
-      memory_limit: n.memory_limit || null,
-      network_mode: n.network_mode || null,
-      restart_policy: n.restart_policy || null,
-      node_id: n.node_id || null,
-    })),
+    macro_values: Object.keys(editMacroValues.value).length ? { ...editMacroValues.value } : null,
+    node_overrides: editNodeOverrides.value.map((n) => mapFormNodeToOverride(n, { parseLines })),
   }
 }
 
@@ -562,15 +606,21 @@ function buildChangeSummary(original, payload) {
   if (!deepEqual(original.scheduled_end_time, payload.scheduled_end_time)) {
     lines.push(`计划停止时间：${original.scheduled_end_time || '-'} -> ${payload.scheduled_end_time || '-'}`)
   }
+  if (!deepEqual(original.macro_values, payload.macro_values)) {
+    lines.push('模板宏变量已修改')
+  }
   const keys = [
     ['image', '镜像'],
     ['command', '命令'],
     ['env', '环境变量'],
-    ['volumes', '挂载'],
+    ['volume_mounts', '挂载'],
     ['ports', '端口'],
+    ['port_values', '命名端口'],
     ['gpu_id', 'GPU'],
-    ['cpu_limit', 'CPU'],
-    ['memory_limit', '内存'],
+    ['cpu_limit', 'CPU 上限'],
+    ['cpu_reservation', 'CPU 预留'],
+    ['memory_limit', '内存上限'],
+    ['memory_reservation', '内存预留'],
     ['network_mode', '网络'],
     ['restart_policy', '重启策略'],
     ['node_id', '部署节点'],
@@ -693,9 +743,17 @@ function formatUtc8Time(t) {
 .subtitle { color: var(--text-secondary); margin-top: 4px; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .instances-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-.instance-card { background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 14px; }
+.instance-card { background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 14px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s; }
+.instance-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.12); border-color: var(--accent-primary); transform: translateY(-2px); }
+.instance-card:active { transform: translateY(0); }
 .instance-header { display: flex; justify-content: space-between; align-items: flex-start; }
 .instance-meta { margin-top: 10px; display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 12px; }
+/* Status-tinted left border */
+.instance-card.running { border-left: 3px solid var(--success); }
+.instance-card.failed { border-left: 3px solid var(--danger); }
+.instance-card.scheduled { border-left: 3px solid var(--warning); }
+.instance-card.stopped { border-left: 3px solid var(--text-muted); }
+.instance-card.pending { border-left: 3px solid var(--info); }
 .card-actions { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
 .selection-summary { color: var(--text-secondary); font-size: 13px; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
@@ -707,4 +765,26 @@ function formatUtc8Time(t) {
 .summary-line { padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); margin-bottom: 8px; }
 .json-hint { color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; }
 .json-actions { margin-top: 12px; display: flex; gap: 12px; }
+.macro-form { margin-bottom: 12px; }
+.macro-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.macro-name {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  min-width: 80px;
+}
+.macro-label {
+  width: 120px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.macro-row .el-input { flex: 1; }
 </style>
