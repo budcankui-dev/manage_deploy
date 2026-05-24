@@ -8,6 +8,7 @@ class NodeBase(BaseModel):
     agent_address: str
     management_ip: str
     business_ip: str
+    business_ipv6: Optional[str] = None
 
 
 class NodeCreate(NodeBase):
@@ -19,6 +20,7 @@ class NodeUpdate(BaseModel):
     agent_address: Optional[str] = None
     management_ip: Optional[str] = None
     business_ip: Optional[str] = None
+    business_ipv6: Optional[str] = None
 
 
 class NodeResponse(NodeBase):
@@ -37,6 +39,7 @@ class NodeSimple(BaseModel):
     agent_address: str
     management_ip: str
     business_ip: str
+    business_ipv6: Optional[str] = None
 
 
 class OrphanContainerResponse(BaseModel):

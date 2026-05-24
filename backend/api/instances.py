@@ -35,7 +35,10 @@ from schemas import (
     TemplateMetricSummary,
 )
 from services.dag_executor import DAGExecutor
+from services.runtime_fields import apply_runtime_overrides, build_container_start_request, pick_override
 from services.scheduler import TaskScheduler
+from services.port_plan import extract_host_ports, find_running_port_conflicts
+from services.instance_builder import resolve_port_values
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
@@ -79,6 +82,7 @@ async def _cleanup_instance_runtime(db: AsyncSession, instance: TaskInstance) ->
 async def _preflight_instance_plan(
     db: AsyncSession,
     node_plans: list[dict],
+    exclude_instance_id: str | None = None,
 ) -> InstancePreflightResponse:
     executor = DAGExecutor(db)
     conflicts: list[InstancePreflightIssue] = []
@@ -112,19 +116,18 @@ async def _preflight_instance_plan(
             continue
 
         ports = plan.get("ports") or {}
-        for container_port, host_port in ports.items():
-            host_port_text = str(host_port).strip()
-            if not host_port_text:
-                continue
+        network_mode = plan.get("network_mode") or "host"
+        for host_port in extract_host_ports(ports, network_mode):
+            host_port_text = str(host_port)
             key = (node_id, host_port_text)
             requested_ports_by_node.setdefault(key, []).append(
-                (plan.get("template_node_id") or "", plan.get("name") or str(container_port))
+                (plan.get("template_node_id") or "", plan.get("name") or host_port_text)
             )
 
         success, result = await executor.agent_client.preflight_ports(
             management_ip=executor._get_agent_endpoint(machine),
             ports=ports,
-            network_mode=plan.get("network_mode") or "bridge",
+            network_mode=network_mode,
             exclude_container_name=plan.get("container_name"),
         )
         if not success:
@@ -177,6 +180,14 @@ async def _preflight_instance_plan(
             )
         )
 
+    for message in await find_running_port_conflicts(db, node_plans, exclude_instance_id=exclude_instance_id):
+        conflicts.append(
+            InstancePreflightIssue(
+                level="conflict",
+                message=message,
+            )
+        )
+
     return InstancePreflightResponse(
         ok=not conflicts,
         conflicts=conflicts,
@@ -203,11 +214,17 @@ async def _build_preflight_plan_from_create(
     plan: list[dict] = []
     for t_node in template_nodes:
         override = _find_override(t_node, payload.node_overrides)
+        legacy_ports = override.ports if override and override.ports is not None else t_node.ports
+        resolved_ports, _ = resolve_port_values(
+            t_node.port_defs,
+            override.port_values if override else None,
+            legacy_ports,
+        )
         plan.append(
             {
                 "template_node_id": t_node.id,
                 "name": override.name if override and override.name else t_node.name,
-                "ports": override.ports if override and override.ports is not None else t_node.ports,
+                "ports": resolved_ports or legacy_ports,
                 "network_mode": override.network_mode if override and override.network_mode else t_node.network_mode,
                 "node_id": override.node_id if override and override.node_id else t_node.node_id,
                 "container_name": None,
@@ -250,6 +267,7 @@ async def _create_instance_from_template(
         scheduled_start_time=instance.scheduled_start_time,
         scheduled_end_time=instance.scheduled_end_time,
         source_order_id=source_order_id,
+        macro_values=instance.macro_values,
     )
     db.add(db_instance)
     await db.flush()
@@ -267,6 +285,12 @@ async def _create_instance_from_template(
     instance_node_map: dict[str, str] = {}
     for t_node in template_nodes:
         override = _find_override(t_node, instance.node_overrides)
+        legacy_ports = pick_override(t_node, override, "ports")
+        resolved_ports, normalized_port_values = resolve_port_values(
+            t_node.port_defs,
+            override.port_values if override else None,
+            legacy_ports,
+        )
         db_node = TaskInstanceNode(
             instance_id=db_instance.id,
             template_node_id=t_node.id,
@@ -274,11 +298,21 @@ async def _create_instance_from_template(
             image=override.image if override and override.image else t_node.image,
             command=override.command if override and override.command is not None else t_node.command,
             env=override.env if override and override.env is not None else t_node.env,
-            volumes=override.volumes if override and override.volumes is not None else t_node.volumes,
-            ports=override.ports if override and override.ports is not None else t_node.ports,
-            gpu_id=override.gpu_id if override and override.gpu_id is not None else t_node.gpu_id,
-            cpu_limit=override.cpu_limit if override and override.cpu_limit is not None else t_node.cpu_limit,
-            memory_limit=override.memory_limit if override and override.memory_limit is not None else t_node.memory_limit,
+            volumes=pick_override(t_node, override, "volumes"),
+            volume_mounts=pick_override(t_node, override, "volume_mounts"),
+            port_defs=t_node.port_defs,
+            port_values=normalized_port_values or None,
+            ports=resolved_ports or legacy_ports,
+            gpu_id=pick_override(t_node, override, "gpu_id"),
+            cpu_limit=pick_override(t_node, override, "cpu_limit"),
+            cpu_reservation=pick_override(t_node, override, "cpu_reservation"),
+            cpu_shares=pick_override(t_node, override, "cpu_shares"),
+            cpuset_cpus=pick_override(t_node, override, "cpuset_cpus"),
+            cpu_quota=pick_override(t_node, override, "cpu_quota"),
+            cpu_period=pick_override(t_node, override, "cpu_period"),
+            memory_limit=pick_override(t_node, override, "memory_limit"),
+            memory_reservation=pick_override(t_node, override, "memory_reservation"),
+            memory_swap_limit=pick_override(t_node, override, "memory_swap_limit"),
             network_mode=override.network_mode if override and override.network_mode else t_node.network_mode,
             restart_policy=override.restart_policy if override and override.restart_policy else t_node.restart_policy,
             health_check=override.health_check if override and override.health_check is not None else t_node.health_check,
@@ -403,6 +437,13 @@ async def update_instance(
     if not is_runtime_locked:
         instance.scheduled_start_time = payload.scheduled_start_time
         instance.scheduled_end_time = payload.scheduled_end_time
+        if payload.macro_values is not None:
+            instance.macro_values = payload.macro_values
+
+    template_nodes_result = await db.execute(
+        select(TaskTemplateNode).where(TaskTemplateNode.template_id == instance.template_id)
+    )
+    template_nodes_by_id = {n.id: n for n in template_nodes_result.scalars().all()}
 
     if (
         not is_runtime_locked
@@ -427,24 +468,18 @@ async def update_instance(
             node.command = override.command
         if override.env is not None:
             node.env = override.env
-        if override.volumes is not None:
-            node.volumes = override.volumes
-        if override.ports is not None:
-            node.ports = override.ports
-        if override.gpu_id is not None:
-            node.gpu_id = override.gpu_id
-        if override.cpu_limit is not None:
-            node.cpu_limit = override.cpu_limit
-        if override.memory_limit is not None:
-            node.memory_limit = override.memory_limit
-        if override.network_mode is not None:
-            node.network_mode = override.network_mode
-        if override.restart_policy is not None:
-            node.restart_policy = override.restart_policy
-        if override.health_check is not None:
-            node.health_check = override.health_check
-        if override.node_id is not None:
-            node.node_id = override.node_id
+        apply_runtime_overrides(node, override)
+        if override.port_values is not None:
+            t_node = template_nodes_by_id.get(node.template_node_id)
+            port_defs = node.port_defs or (t_node.port_defs if t_node else None)
+            resolved_ports, normalized_port_values = resolve_port_values(
+                port_defs,
+                override.port_values,
+                override.ports if override.ports is not None else node.ports,
+            )
+            node.port_values = normalized_port_values or None
+            if resolved_ports:
+                node.ports = resolved_ports
 
     await db.commit()
     await db.refresh(instance)
@@ -493,7 +528,11 @@ async def start_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
         return {"message": "Instance already running"}
     if instance.status not in (TaskStatus.PENDING, TaskStatus.STOPPED, TaskStatus.FAILED):
         raise HTTPException(status_code=400, detail=f"Cannot start instance in status: {instance.status}")
-    preflight = await _preflight_instance_plan(db, await _build_preflight_plan_from_instance(instance))
+    preflight = await _preflight_instance_plan(
+        db,
+        await _build_preflight_plan_from_instance(instance),
+        exclude_instance_id=instance_id,
+    )
     if not preflight.ok:
         messages = "; ".join(issue.message for issue in preflight.conflicts)
         raise HTTPException(status_code=400, detail=f"启动前预检查失败: {messages}")

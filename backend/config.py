@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     auth_secret: str = "change-me-auth-secret"
     access_token_expire_hours: int = 24
 
+    prefer_business_ipv6: bool = True
+
     minio_endpoint: str = "http://localhost:9000"
     minio_bucket: str = "task-results"
 

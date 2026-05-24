@@ -2,25 +2,43 @@
   "name": "task-001",
   "template_name": "abc-topology",
   "auto_start": true,
+  "macro_values": {
+    "DB_URL": "postgres://10.0.1.100:5432/tasks",
+    "MINIO_ENDPOINT": "http://10.0.1.100:9000"
+  },
   "node_overrides": [
     {
       "template_node_name": "source",
       "node_id": "demo-worker-a",
       "image": "busybox:latest",
       "command": "sleep 3600",
-      "network_mode": "host"
+      "network_mode": "host",
+      "port_values": { "api": 9000 },
+      "volume_mounts": [
+        { "type": "managed", "source": "input", "target": "/data/input", "auto_create": true }
+      ]
     },
     {
       "template_node_name": "compute",
       "node_id": "demo-worker-b",
       "image": "my-app:v1",
-      "command": "python run.py --batch 32",
+      "command": "python run.py --upstream ${PEER_SOURCE_URL_API}",
       "cpu_limit": 2,
+      "cpu_reservation": 1,
       "memory_limit": "4g",
-      "gpu_id": "0",
-      "network_mode": "bridge",
-      "ports": { "8080": "8080" },
-      "env": { "TASK_ROLE": "compute" }
+      "memory_reservation": "2g",
+      "gpu_id": "0,1",
+      "network_mode": "host",
+      "port_values": { "api": 8080 },
+      "env": {
+        "TASK_ROLE": "compute",
+        "DB_URL": "${DB_URL}",
+        "UPSTREAM_URL": "${PEER_SOURCE_URL_API}"
+      },
+      "volume_mounts": [
+        { "type": "managed", "source": "input", "target": "/data/input", "auto_create": true },
+        { "type": "volume", "source": "compute-cache", "target": "/cache", "auto_create": true }
+      ]
     },
     {
       "template_node_name": "sink",

@@ -47,6 +47,21 @@ async def init_db() -> None:
         await _ensure_column(conn, "task_template_nodes", "memory_limit", "VARCHAR(64)")
         await _ensure_column(conn, "task_instance_nodes", "cpu_limit", "FLOAT")
         await _ensure_column(conn, "task_instance_nodes", "memory_limit", "VARCHAR(64)")
+        for table in ("task_template_nodes", "task_instance_nodes"):
+            await _ensure_column(conn, table, "cpu_reservation", "FLOAT")
+            await _ensure_column(conn, table, "cpu_shares", "INTEGER")
+            await _ensure_column(conn, table, "cpuset_cpus", "VARCHAR(128)")
+            await _ensure_column(conn, table, "cpu_quota", "INTEGER")
+            await _ensure_column(conn, table, "cpu_period", "INTEGER")
+            await _ensure_column(conn, table, "memory_reservation", "VARCHAR(64)")
+            await _ensure_column(conn, table, "memory_swap_limit", "VARCHAR(64)")
+            await _ensure_column(conn, table, "volume_mounts", "JSON")
+        await _ensure_column(conn, "nodes", "business_ipv6", "VARCHAR(64)")
+        await _ensure_column(conn, "task_templates", "macro_defs", "JSON")
+        await _ensure_column(conn, "task_template_nodes", "port_defs", "JSON")
+        await _ensure_column(conn, "task_instances", "macro_values", "JSON")
+        await _ensure_column(conn, "task_instance_nodes", "port_defs", "JSON")
+        await _ensure_column(conn, "task_instance_nodes", "port_values", "JSON")
         await _ensure_column(conn, "task_instances", "source_order_id", "VARCHAR(36)")
 
 

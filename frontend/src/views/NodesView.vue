@@ -60,8 +60,12 @@
             <span class="value mono">{{ node.management_ip }}</span>
           </div>
           <div class="detail-row">
-            <span class="label">业务 IP</span>
+            <span class="label">业务 IPv4</span>
             <span class="value mono">{{ node.business_ip }}</span>
+          </div>
+          <div v-if="node.business_ipv6" class="detail-row">
+            <span class="label">业务 IPv6</span>
+            <span class="value mono">{{ node.business_ipv6 }}</span>
           </div>
           <div class="detail-row">
             <span class="label">Agent 地址</span>
@@ -107,8 +111,11 @@
         <el-form-item label="管理 IP" required>
           <el-input v-model="form.management_ip" placeholder="192.168.1.100" />
         </el-form-item>
-        <el-form-item label="业务 IP" required>
+        <el-form-item label="业务 IP (IPv4)" required>
           <el-input v-model="form.business_ip" placeholder="10.0.1.100" />
+        </el-form-item>
+        <el-form-item label="业务 IPv6（验收/生产互访）">
+          <el-input v-model="form.business_ipv6" placeholder="2001:db8:1::a" />
         </el-form-item>
         <el-form-item label="Agent 地址" required>
           <el-input v-model="form.agent_address" placeholder="http://192.168.1.100:8001" />
@@ -188,6 +195,7 @@ const form = ref({
   hostname: '',
   management_ip: '',
   business_ip: '',
+  business_ipv6: '',
   agent_address: ''
 })
 
@@ -226,7 +234,7 @@ async function submitForm() {
     }
     showDialog.value = false
     editingNode.value = null
-    form.value = { hostname: '', management_ip: '', business_ip: '', agent_address: '' }
+    form.value = { hostname: '', management_ip: '', business_ip: '', business_ipv6: '', agent_address: '' }
   } finally {
     submitting.value = false
   }

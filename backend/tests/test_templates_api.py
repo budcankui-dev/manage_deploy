@@ -51,7 +51,11 @@ async def test_update_template_rebuilds_nodes_and_edges(monkeypatch):
         captured["nodes"] = nodes_data
         captured["edges"] = edges_data
 
+    async def noop_unique(*args, **kwargs):
+        return None
+
     monkeypatch.setattr("api.templates._populate_template_graph", fake_populate)
+    monkeypatch.setattr("api.templates._ensure_unique_template_name", noop_unique)
 
     response = await update_template(
         "template-1",
@@ -82,4 +86,22 @@ async def test_update_template_rebuilds_nodes_and_edges(monkeypatch):
     assert template.edges == []
     assert len(captured["nodes"]) == 1
     assert len(captured["edges"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_template_rejects_duplicate_name(monkeypatch):
+    existing = TaskTemplate(name="dup-name", description="x")
+    existing.id = "existing-id"
+
+    async def fake_get_by_name(_db, name):
+        return existing if name == "dup-name" else None
+
+    monkeypatch.setattr("api.templates._get_template_by_name", fake_get_by_name)
+
+    from api.templates import _ensure_unique_template_name
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _ensure_unique_template_name(FakeSession(None), "dup-name")
+    assert exc.value.status_code == 409
 

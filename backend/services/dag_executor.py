@@ -11,9 +11,12 @@ from models import (
     TaskInstanceNode,
     TaskInstanceEdge,
     Node as NodeModel,
+    TaskTemplate,
 )
 from enums import TaskStatus, NodeStatus
 from schemas import ContainerStartRequest
+from services.runtime_fields import build_container_start_request
+from services.runtime_composer import compose_container_runtime
 from agents.agent_client import AgentClient
 
 logger = logging.getLogger(__name__)
@@ -107,6 +110,12 @@ class DAGExecutor:
     async def update_task_status(self, task: TaskInstance, status: TaskStatus) -> None:
         task.status = status
 
+    async def get_all_instance_nodes(self, instance_id: str) -> list[TaskInstanceNode]:
+        result = await self.db.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id)
+        )
+        return list(result.scalars().all())
+
     async def start_node(
         self, node: TaskInstanceNode, instance_id: str
     ) -> tuple[bool, Optional[str]]:
@@ -116,19 +125,30 @@ class DAGExecutor:
 
         container_name = f"{instance_id}_{node.id}"
 
-        request = ContainerStartRequest(
-            image=node.image,
-            command=node.command,
-            env=node.env or {},
-            volumes=node.volumes or {},
-            ports=node.ports or {},
-            gpu_id=node.gpu_id,
-            cpu_limit=node.cpu_limit,
-            memory_limit=node.memory_limit,
-            network_mode=node.network_mode,
-            restart_policy=node.restart_policy,
-            health_check=node.health_check,
+        instance = await self.get_instance_with_graph(instance_id)
+        if not instance:
+            return False, "Task instance not found"
+        template_result = await self.db.execute(
+            select(TaskTemplate).where(TaskTemplate.id == instance.template_id)
         )
+        template = template_result.scalar_one_or_none()
+        if not template:
+            return False, "Task template not found"
+
+        all_nodes = await self.get_all_instance_nodes(instance_id)
+        machines: dict[str, NodeModel] = {}
+        for peer in all_nodes:
+            if peer.node_id not in machines:
+                peer_machine = await self.get_node_machine(peer.node_id)
+                if peer_machine:
+                    machines[peer.node_id] = peer_machine
+
+        command, runtime_env = compose_container_runtime(
+            instance, template, node, all_nodes, machines
+        )
+        request = build_container_start_request(node)
+        request.command = command
+        request.env = runtime_env
 
         success, result = await self.agent_client.start_container(
             management_ip=self._get_agent_endpoint(machine),

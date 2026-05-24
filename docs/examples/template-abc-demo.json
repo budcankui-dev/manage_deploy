@@ -1,9 +1,25 @@
 {
   "name": "abc-topology",
   "description": "三节点随路计算拓扑 A→B→C",
+  "macro_defs": [
+    { "name": "DB_URL", "label": "上报数据库", "default": "postgres://db:5432/tasks" },
+    { "name": "MINIO_ENDPOINT", "label": "MinIO 地址", "default": "http://minio:9000" }
+  ],
   "nodes": [
-    { "client_id": "source", "name": "source" },
-    { "client_id": "compute", "name": "compute" },
+    {
+      "client_id": "source",
+      "name": "source",
+      "port_defs": [
+        { "name": "api", "label": "数据入口 HTTP", "default": 9000 }
+      ]
+    },
+    {
+      "client_id": "compute",
+      "name": "compute",
+      "port_defs": [
+        { "name": "api", "label": "计算服务", "default": 8080 }
+      ]
+    },
     { "client_id": "sink", "name": "sink" }
   ],
   "edges": [

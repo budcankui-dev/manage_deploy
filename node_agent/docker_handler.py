@@ -1,18 +1,17 @@
 import docker
-from typing import Optional
+from typing import Any, Optional
 import logging
 from collections import defaultdict
 import re
-
-from docker.types import DeviceRequest
 
 logger = logging.getLogger(__name__)
 MANAGED_CONTAINER_PATTERN = re.compile(r"^[0-9a-f-]{36}_[0-9a-f-]{36}$")
 
 
 class DockerHandler:
-    def __init__(self, socket_path: str = "unix:///var/run/docker.sock"):
+    def __init__(self, socket_path: str = "unix:///var/run/docker.sock", data_root: str = "/var/lib/manage_deploy/tasks"):
         self.client = docker.DockerClient(base_url=socket_path)
+        self.data_root = data_root
 
     def get_container(self, container_name: str) -> Optional[docker.models.containers.Container]:
         try:
@@ -27,67 +26,95 @@ class DockerHandler:
     def start_container(
         self,
         container_name: str,
+        task_id: str,
+        node_id: str,
         image: str,
         command: Optional[str] = None,
         env: Optional[dict] = None,
         volumes: Optional[dict] = None,
+        volume_mounts: Optional[list] = None,
         ports: Optional[dict] = None,
         gpu_id: Optional[str] = None,
         cpu_limit: Optional[float] = None,
+        cpu_reservation: Optional[float] = None,
+        cpu_shares: Optional[int] = None,
+        cpuset_cpus: Optional[str] = None,
+        cpu_quota: Optional[int] = None,
+        cpu_period: Optional[int] = None,
         memory_limit: Optional[str] = None,
+        memory_reservation: Optional[str] = None,
+        memory_swap_limit: Optional[str] = None,
         network_mode: str = "host",
         restart_policy: str = "on-failure",
     ) -> tuple[bool, Optional[str], Optional[str]]:
+        from runtime_resources import parse_gpu_spec, build_resource_kwargs, resolve_mounts
+        from port_utils import extract_host_ports, format_host_ports_label
+
         try:
             existing = self.get_container(container_name)
             if existing:
                 existing.reload()
                 if existing.status == "running":
                     return True, existing.id, None
-
-                # Recreate non-running containers so updated runtime parameters
-                # are applied on the next start instead of reusing stale config.
                 existing.remove(force=True)
 
             env_list = [f"{k}={v}" for k, v in (env or {}).items()]
 
-            binds = None
-            if volumes:
-                binds = {v: {"bind": k} for k, v in volumes.items()}
-
             port_bindings = None
-            if ports:
+            host_ports = extract_host_ports(ports, network_mode)
+            if ports and network_mode != "host":
                 port_bindings = {}
                 for container_port, host_port in ports.items():
                     port_bindings[f"{container_port}/tcp"] = host_port
 
-            device_requests = None
-            if gpu_id:
-                device_requests = [
-                    DeviceRequest(
-                        device_ids=[gpu_id],
-                        capabilities=[["gpu"]],
-                    )
-                ]
+            labels = {
+                "manage_deploy.task_id": task_id,
+                "manage_deploy.node_id": node_id,
+                "manage_deploy.network_mode": network_mode,
+            }
+            if host_ports:
+                labels["manage_deploy.host_ports"] = format_host_ports_label(host_ports)
 
-            nano_cpus = None
-            if cpu_limit and cpu_limit > 0:
-                nano_cpus = int(cpu_limit * 1_000_000_000)
-
-            self.client.containers.run(
-                image,
-                name=container_name,
-                command=command,
-                environment=env_list,
-                volumes=binds,
-                ports=port_bindings,
-                device_requests=device_requests,
-                nano_cpus=nano_cpus,
-                mem_limit=memory_limit or None,
-                network_mode=network_mode,
-                restart_policy={"Name": restart_policy},
-                detach=True,
+            device_requests = parse_gpu_spec(gpu_id)
+            resource_kw = build_resource_kwargs(
+                cpu_limit=cpu_limit,
+                cpu_reservation=cpu_reservation,
+                cpu_shares=cpu_shares,
+                cpuset_cpus=cpuset_cpus,
+                cpu_quota=cpu_quota,
+                cpu_period=cpu_period,
+                memory_limit=memory_limit,
+                memory_reservation=memory_reservation,
+                memory_swap_limit=memory_swap_limit,
             )
+
+            mounts = resolve_mounts(
+                task_id=task_id,
+                node_id=node_id,
+                volumes=volumes,
+                volume_mounts=volume_mounts,
+                data_root=self.data_root,
+                docker_client=self.client,
+            )
+
+            run_kwargs: dict[str, Any] = {
+                "image": image,
+                "name": container_name,
+                "command": command,
+                "environment": env_list,
+                "ports": port_bindings,
+                "network_mode": network_mode,
+                "restart_policy": {"Name": restart_policy},
+                "labels": labels,
+                "detach": True,
+                **resource_kw,
+            }
+            if device_requests:
+                run_kwargs["device_requests"] = device_requests
+            if mounts:
+                run_kwargs["mounts"] = mounts
+
+            self.client.containers.run(**run_kwargs)
 
             container = self.get_container(container_name)
             if container:
@@ -96,6 +123,8 @@ class DockerHandler:
         except docker.errors.ImageNotFound:
             return False, None, f"Image not found: {image}"
         except docker.errors.APIError as e:
+            return False, None, str(e)
+        except ValueError as e:
             return False, None, str(e)
 
     def stop_container(self, container_name: str) -> tuple[bool, Optional[str]]:
@@ -135,47 +164,74 @@ class DockerHandler:
         except docker.errors.APIError as e:
             return False, str(e)
 
-    def find_port_binding_conflicts(
+    def _collect_declared_host_ports(
         self,
-        ports: Optional[dict[str, str]],
         exclude_container_name: Optional[str] = None,
-        network_mode: str = "bridge",
-    ) -> tuple[list[str], list[str]]:
-        conflicts: list[str] = []
-        warnings: list[str] = []
-
-        if network_mode == "host":
-            warnings.append("host 网络模式下无法静态预检容器内部实际监听端口，请避免同节点部署会占用相同业务端口的镜像。")
-
-        if not ports:
-            return conflicts, warnings
-
-        requested_host_ports = {str(host_port).strip() for host_port in ports.values() if str(host_port).strip()}
-        if not requested_host_ports:
-            return conflicts, warnings
-
-        current_bindings: dict[str, list[str]] = defaultdict(list)
+    ) -> dict[str, list[str]]:
+        """已登记（label）的 host 端口占用。"""
+        claimed: dict[str, list[str]] = defaultdict(list)
         try:
             for container in self.client.containers.list(all=True):
                 if exclude_container_name and container.name == exclude_container_name:
                     continue
                 try:
                     container.reload()
-                    bindings = (container.attrs.get("HostConfig") or {}).get("PortBindings") or {}
-                    for host_bindings in bindings.values():
-                        for host_binding in host_bindings or []:
-                            host_port = str(host_binding.get("HostPort") or "").strip()
-                            if host_port:
-                                current_bindings[host_port].append(container.name)
                 except docker.errors.APIError:
                     continue
-        except docker.errors.APIError as e:
-            return [f"无法读取当前 Docker 端口绑定: {e}"], warnings
 
-        for host_port in sorted(requested_host_ports):
-            owners = current_bindings.get(host_port, [])
+                labels = (container.attrs.get("Config") or {}).get("Labels") or {}
+                label_ports = labels.get("manage_deploy.host_ports", "")
+                if label_ports:
+                    for port in label_ports.split(","):
+                        port_text = port.strip()
+                        if port_text:
+                            claimed[port_text].append(container.name)
+                    continue
+
+                host_config = container.attrs.get("HostConfig") or {}
+                if host_config.get("NetworkMode") == "host" and MANAGED_CONTAINER_PATTERN.match(container.name):
+                    # 兼容旧容器：无 label 时跳过，避免误报
+                    pass
+
+                bindings = host_config.get("PortBindings") or {}
+                for host_bindings in bindings.values():
+                    for host_binding in host_bindings or []:
+                        host_port = str(host_binding.get("HostPort") or "").strip()
+                        if host_port:
+                            claimed[host_port].append(container.name)
+        except docker.errors.APIError as e:
+            logger.error(f"Error collecting host ports: {e}")
+        return claimed
+
+    def find_port_binding_conflicts(
+        self,
+        ports: Optional[dict[str, str]],
+        exclude_container_name: Optional[str] = None,
+        network_mode: str = "bridge",
+    ) -> tuple[list[str], list[str]]:
+        from port_utils import extract_host_ports, is_host_port_in_use
+
+        conflicts: list[str] = []
+        warnings: list[str] = []
+
+        requested = extract_host_ports(ports, network_mode)
+        if network_mode == "host" and not requested:
+            warnings.append("host 模式建议填写宿主机监听端口，以便冲突检查并注入 PEER_* 变量供其他节点使用。")
+            return conflicts, warnings
+
+        if not requested:
+            return conflicts, warnings
+
+        declared = self._collect_declared_host_ports(exclude_container_name)
+
+        for host_port in requested:
+            port_text = str(host_port)
+            owners = declared.get(port_text, [])
             if owners:
-                conflicts.append(f"宿主机端口 {host_port} 已被容器占用: {', '.join(owners)}")
+                conflicts.append(f"宿主机端口 {port_text} 已被容器登记占用: {', '.join(owners)}")
+                continue
+            if is_host_port_in_use(host_port):
+                conflicts.append(f"宿主机端口 {port_text} 当前已被进程监听")
 
         return conflicts, warnings
 
@@ -226,14 +282,21 @@ class DockerHandler:
             return None, str(e)
 
     def is_port_open(self, container_name: str, port: int) -> bool:
+        from port_utils import is_host_port_in_use
+
         try:
             container = self.get_container(container_name)
             if not container or container.status != "running":
                 return False
 
+            host_config = container.attrs.get("HostConfig") or {}
+            if host_config.get("NetworkMode") == "host":
+                return is_host_port_in_use(port)
+
             container_port = f"{port}/tcp"
-            ports = container.ports.get(container_port, [])
-            return len(ports) > 0
+            port_map = container.ports or {}
+            bindings = port_map.get(container_port, [])
+            return len(bindings) > 0
         except Exception:
             return False
 

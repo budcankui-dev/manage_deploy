@@ -14,6 +14,21 @@ from schemas import (
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
 
+async def _get_template_by_name(db: AsyncSession, name: str) -> TaskTemplate | None:
+    result = await db.execute(select(TaskTemplate).where(TaskTemplate.name == name))
+    return result.scalar_one_or_none()
+
+
+async def _ensure_unique_template_name(
+    db: AsyncSession,
+    name: str,
+    exclude_id: str | None = None,
+) -> None:
+    existing = await _get_template_by_name(db, name)
+    if existing and existing.id != exclude_id:
+        raise HTTPException(status_code=409, detail=f"模板名称「{name}」已存在")
+
+
 async def _populate_template_graph(
     db: AsyncSession,
     db_template: TaskTemplate,
@@ -45,6 +60,8 @@ async def create_template(
     template: TaskTemplateCreate,
     db: AsyncSession = Depends(get_db),
 ):
+    await _ensure_unique_template_name(db, template.name)
+
     nodes_data = template.nodes
     edges_data = template.edges
     template_data = template.model_dump(exclude={"nodes", "edges"})
@@ -122,6 +139,10 @@ async def update_template(
         raise HTTPException(status_code=404, detail="Template not found")
 
     update_data = template.model_dump(exclude_unset=True, exclude={"nodes", "edges"})
+    new_name = update_data.get("name")
+    if new_name is not None:
+        await _ensure_unique_template_name(db, new_name, exclude_id=template_id)
+
     for field, value in update_data.items():
         setattr(db_template, field, value)
 

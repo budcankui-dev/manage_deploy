@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Any
+
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
+from schemas.runtime import MacroDefSpec, PortDefSpec
 
 
 class HealthCheckConfig(BaseModel):
@@ -20,11 +22,20 @@ class TaskTemplateNodeBase(BaseModel):
     image: str
     command: Optional[str] = None
     env: Optional[dict[str, str]] = None
-    volumes: Optional[dict[str, str]] = None
+    volumes: Optional[dict[str, Any]] = None
+    volume_mounts: Optional[list[dict[str, Any]]] = None
     ports: Optional[dict[str, str]] = None
+    port_defs: Optional[list[PortDefSpec]] = None
     gpu_id: Optional[str] = None
     cpu_limit: Optional[float] = None
+    cpu_reservation: Optional[float] = None
+    cpu_shares: Optional[int] = None
+    cpuset_cpus: Optional[str] = None
+    cpu_quota: Optional[int] = None
+    cpu_period: Optional[int] = None
     memory_limit: Optional[str] = None
+    memory_reservation: Optional[str] = None
+    memory_swap_limit: Optional[str] = None
     network_mode: str = "host"
     restart_policy: str = "on-failure"
     health_check: Optional[dict[str, Any]] = None
@@ -59,6 +70,7 @@ class TaskTemplateEdgeResponse(BaseModel):
 class TaskTemplateBase(BaseModel):
     name: str
     description: Optional[str] = None
+    macro_defs: Optional[list[MacroDefSpec]] = None
 
 
 class TaskTemplateCreate(TaskTemplateBase):
@@ -69,6 +81,7 @@ class TaskTemplateCreate(TaskTemplateBase):
 class TaskTemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    macro_defs: Optional[list[MacroDefSpec]] = None
     nodes: Optional[list[TaskTemplateNodeCreate]] = None
     edges: Optional[list[TaskTemplateEdgeCreate]] = None
 
@@ -94,10 +107,20 @@ class TaskInstanceNodeResponse(BaseModel):
     command: Optional[str] = None
     env: Optional[dict] = None
     volumes: Optional[dict] = None
+    volume_mounts: Optional[list] = None
     ports: Optional[dict] = None
+    port_defs: Optional[list] = None
+    port_values: Optional[dict] = None
     gpu_id: Optional[str] = None
     cpu_limit: Optional[float] = None
+    cpu_reservation: Optional[float] = None
+    cpu_shares: Optional[int] = None
+    cpuset_cpus: Optional[str] = None
+    cpu_quota: Optional[int] = None
+    cpu_period: Optional[int] = None
     memory_limit: Optional[str] = None
+    memory_reservation: Optional[str] = None
+    memory_swap_limit: Optional[str] = None
     network_mode: str
     restart_policy: str
     health_check: Optional[dict] = None
@@ -120,6 +143,7 @@ class TaskInstanceCreate(TaskInstanceBase):
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
     auto_start: bool = False
+    macro_values: Optional[dict[str, str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
 
 
@@ -127,6 +151,7 @@ class TaskInstanceUpdate(BaseModel):
     name: Optional[str] = None
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
+    macro_values: Optional[dict[str, str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
 
 
@@ -140,6 +165,7 @@ class TaskInstanceResponse(TaskInstanceBase):
 
     id: str
     template_id: str
+    macro_values: Optional[dict] = None
     status: TaskStatus
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -194,11 +220,20 @@ class TaskInstanceNodeOverride(BaseModel):
     image: Optional[str] = None
     command: Optional[str] = None
     env: Optional[dict[str, str]] = None
-    volumes: Optional[dict[str, str]] = None
+    volumes: Optional[dict[str, Any]] = None
+    volume_mounts: Optional[list[dict[str, Any]]] = None
     ports: Optional[dict[str, str]] = None
+    port_values: Optional[dict[str, int]] = None
     gpu_id: Optional[str] = None
     cpu_limit: Optional[float] = None
+    cpu_reservation: Optional[float] = None
+    cpu_shares: Optional[int] = None
+    cpuset_cpus: Optional[str] = None
+    cpu_quota: Optional[int] = None
+    cpu_period: Optional[int] = None
     memory_limit: Optional[str] = None
+    memory_reservation: Optional[str] = None
+    memory_swap_limit: Optional[str] = None
     network_mode: Optional[str] = None
     restart_policy: Optional[str] = None
     health_check: Optional[dict[str, Any]] = None
