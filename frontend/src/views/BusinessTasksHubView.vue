@@ -87,7 +87,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="目标 / 实际" min-width="150">
+        <el-table-column label="目标 / 实际" min-width="160">
           <template #default="{ row }">
             <span v-if="row.target_value != null">
               {{ formatMetric(row.actual_value) }} / {{ formatMetric(row.target_value) }} {{ row.unit || '' }}
@@ -99,6 +99,12 @@
           <template #default="{ row }">
             <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
             <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="业务指标" min-width="160">
+          <template #default="{ row }">
+            <span v-if="row.target_value != null">{{ metricMeaningLabel(row) }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -462,6 +468,14 @@ function successRateLabel(row) {
 
 function formatMetric(value) {
   return value == null ? '-' : Number(value)
+}
+
+function metricMeaningLabel(row) {
+  const METRIC_LABELS = {
+    compute_latency_ms: '计算耗时',
+    end_to_end_latency_ms: '端到端时延',
+  }
+  return METRIC_LABELS[row.metric_key] || row.metric_key || '指标'
 }
 
 function formatTime(value) {
