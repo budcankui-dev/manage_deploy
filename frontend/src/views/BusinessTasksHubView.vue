@@ -52,8 +52,8 @@
             <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
           <el-select v-model="filters.business_success" placeholder="业务结果" clearable style="width: 120px" @change="loadList">
-            <el-option label="成功" :value="true" />
-            <el-option label="失败" :value="false" />
+            <el-option label="达标" :value="true" />
+            <el-option label="超标" :value="false" />
           </el-select>
           <el-checkbox v-model="filters.include_cancelled" @change="loadList">显示已取消</el-checkbox>
         </div>
@@ -95,10 +95,10 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="业务成功" width="90">
+        <el-table-column label="耗时达标" width="90">
           <template #default="{ row }">
-            <el-tag v-if="row.business_success === true" type="success" size="small">成功</el-tag>
-            <el-tag v-else-if="row.business_success === false" type="danger" size="small">失败</el-tag>
+            <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
+            <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -237,29 +237,53 @@
         </el-tab-pane>
 
         <el-tab-pane label="结果" name="result">
-          <template v-if="detailComputeSummary.length">
-            <div class="result-verdict" :class="resultVerdictClass">
-              <strong>{{ resultVerdictTitle }}</strong>
-              <p>{{ resultVerdictSubtitle }}</p>
-            </div>
-            <el-descriptions :column="1" border class="detail-desc">
-              <el-descriptions-item v-for="row in detailComputeSummary" :key="row.label" :label="row.label">
-                <span :class="row.highlight ? `text-${row.highlight}` : ''">{{ row.value }}</span>
-                <p v-if="row.hint" class="field-hint">{{ row.hint }}</p>
+          <template v-if="isMatmulDetail">
+            <h3 class="section-title">本任务在做什么</h3>
+            <p class="task-summary">{{ detailTaskSummary }}</p>
+            <ol class="pipeline-steps">
+              <li v-for="step in matmulPipelineSteps" :key="step.role">
+                <strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}
+              </li>
+            </ol>
+
+            <h3 class="section-title">输入参数</h3>
+            <el-descriptions v-if="detailMatmulInputRows.length" :column="1" border class="detail-desc">
+              <el-descriptions-item v-for="row in detailMatmulInputRows" :key="row.label" :label="row.label">
+                {{ row.value }}
               </el-descriptions-item>
             </el-descriptions>
+
+            <h3 class="section-title">计算输出</h3>
+            <el-descriptions v-if="detailMatmulOutputRows.length" :column="1" border class="detail-desc">
+              <el-descriptions-item v-for="row in detailMatmulOutputRows" :key="row.label" :label="row.label">
+                {{ row.value }}
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <div v-if="detailMatmulConsistency" class="consistency-row">
+              <el-tag :type="detailMatmulConsistency.ok ? 'success' : 'warning'" size="small">
+                {{ detailMatmulConsistency.label }}
+              </el-tag>
+              <span class="consistency-detail">{{ detailMatmulConsistency.detail }}</span>
+            </div>
+
+            <h3 class="section-title">耗时验收</h3>
+            <div class="result-verdict" :class="detailMatmulVerdict.statusClass">
+              <strong>{{ detailMatmulVerdict.title }}</strong>
+              <p>{{ detailMatmulVerdict.subtitle }}</p>
+            </div>
           </template>
           <template v-else-if="orderDetail?.evaluation">
             <div class="result-verdict" :class="resultVerdictClass">
               <strong>{{ resultVerdictTitle }}</strong>
-              <p>{{ describeObjectiveMeaning(detailTaskType, orderDetail.business_task?.business_objective) }}</p>
+              <p>{{ resultVerdictSubtitle }}</p>
             </div>
             <el-descriptions :column="1" border class="detail-desc">
               <el-descriptions-item label="指标">{{ orderDetail.evaluation.metric_key }}</el-descriptions-item>
               <el-descriptions-item label="实际 / 目标">
                 {{ orderDetail.evaluation.actual_value }} / {{ orderDetail.evaluation.target_value }} {{ orderDetail.evaluation.unit || '' }}
               </el-descriptions-item>
-              <el-descriptions-item label="业务成功">
+              <el-descriptions-item label="耗时达标">
                 <el-tag :type="orderDetail.evaluation.business_success ? 'success' : 'danger'">
                   {{ orderDetail.evaluation.business_success ? '达标' : '未达标' }}
                 </el-tag>
@@ -270,11 +294,14 @@
             </el-descriptions>
           </template>
           <el-empty v-else description="任务尚未跑完或未上报业务指标" />
-          <h3 v-if="resultObjects.length" class="section-title">结果文件</h3>
-          <el-table v-if="resultObjects.length" :data="resultObjects" size="small">
-            <el-table-column prop="name" label="文件名" />
-            <el-table-column prop="uri" label="URI" min-width="260" />
-          </el-table>
+          <el-collapse v-if="resultObjects.length" class="raw-collapse">
+            <el-collapse-item title="结果文件 URI" name="result_files">
+              <el-table :data="resultObjects" size="small">
+                <el-table-column prop="name" label="文件名" />
+                <el-table-column prop="uri" label="URI" min-width="260" />
+              </el-table>
+            </el-collapse-item>
+          </el-collapse>
         </el-tab-pane>
       </el-tabs>
     </el-drawer>
@@ -294,7 +321,11 @@ import {
   routingPolicyLabel,
 } from '@/constants/routingPolicy'
 import {
-  buildComputeResultSummary,
+  MATMUL_PIPELINE_STEPS,
+  buildMatmulInputRows,
+  buildMatmulOutputRows,
+  buildMatmulParamConsistency,
+  buildMatmulVerdict,
   describeDataProfile,
   describeObjectiveMeaning,
   describeRuntimePlan,
@@ -360,14 +391,24 @@ const detailDataProfileRows = computed(() =>
 const detailRuntimePlanRows = computed(() =>
   describeRuntimePlan(detailTaskType.value, orderDetail.value?.business_task?.runtime_plan)
 )
-const detailComputeSummary = computed(() =>
-  buildComputeResultSummary(
-    detailTaskType.value,
-    orderDetail.value?.business_task,
-    orderDetail.value?.evaluation,
-    orderDetail.value?.evaluation?.result_metadata
-  ) || []
+const isMatmulDetail = computed(() => detailTaskType.value === 'high_throughput_matmul')
+const matmulPipelineSteps = MATMUL_PIPELINE_STEPS
+const detailMatmulInputRows = computed(() =>
+  buildMatmulInputRows(orderDetail.value?.business_task?.data_profile)
 )
+const detailMatmulOutputRows = computed(() =>
+  buildMatmulOutputRows(
+    orderDetail.value?.evaluation?.result_metadata,
+    orderDetail.value?.evaluation
+  )
+)
+const detailMatmulConsistency = computed(() =>
+  buildMatmulParamConsistency(
+    orderDetail.value?.business_task?.data_profile,
+    orderDetail.value?.evaluation?.result_metadata
+  )
+)
+const detailMatmulVerdict = computed(() => buildMatmulVerdict(orderDetail.value?.evaluation))
 const resultVerdictClass = computed(() => {
   const evaluation = orderDetail.value?.evaluation
   if (!evaluation) return 'pending'
@@ -376,15 +417,11 @@ const resultVerdictClass = computed(() => {
 const resultVerdictTitle = computed(() => {
   const evaluation = orderDetail.value?.evaluation
   if (!evaluation) return '等待计算结果'
-  return evaluation.business_success ? '业务目标已达成' : '业务目标未达成'
+  return evaluation.business_success ? '耗时已达标' : '耗时未达标'
 })
 const resultVerdictSubtitle = computed(() => {
   const evaluation = orderDetail.value?.evaluation
-  const taskType = detailTaskType.value
   if (!evaluation) {
-    if (taskType === 'high_throughput_matmul') {
-      return '启动实例并完成矩阵乘法后，sink 节点会上报 compute_latency_ms 与结果校验和。'
-    }
     return '任务跑完并上报指标后，将在此展示是否达标。'
   }
   if (evaluation.business_success) {
@@ -768,6 +805,33 @@ async function submitSample() {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.pipeline-steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.pipeline-steps strong {
+  color: var(--accent-secondary);
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.consistency-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+
+.consistency-detail {
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .text-success {

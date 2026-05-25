@@ -21,6 +21,12 @@ const OPERATOR_LABELS = {
   '==': '等于',
 }
 
+export const MATMUL_PIPELINE_STEPS = [
+  { role: 'source', title: '准备输入', detail: '根据 data_profile 写入 job.json（矩阵规模、批次数、随机种子）' },
+  { role: 'compute', title: '执行计算', detail: 'NumPy 执行 batched FP32 矩阵乘法，写出 result.json' },
+  { role: 'sink', title: '上报结果', detail: '读取 result.json，向 Manager 上报 compute_latency_ms' },
+]
+
 export function taskTypeLabel(taskType) {
   if (!taskType) return '-'
   return TASK_TYPE_LABELS[taskType] || taskType
@@ -43,7 +49,7 @@ export function describeObjectiveMeaning(taskType, objective) {
   if (!objective) return '-'
   const sentence = formatObjectiveSentence(objective)
   if (taskType === 'high_throughput_matmul') {
-    return `验收标准：${sentence}。数值越小表示计算越快；任务跑完后由 sink 上报实际耗时并与目标对比。`
+    return `验收标准：${sentence}。仅校验耗时是否达标，不验证矩阵乘法的数值正确性；计算跑通并上报指标后即可参与成功率统计。`
   }
   if (taskType === 'low_latency_video_pipeline') {
     return `验收标准：${sentence}。数值越小表示链路响应越快；从源到汇总的处理全链路时延需满足阈值。`
@@ -58,7 +64,8 @@ export function describeDataProfile(taskType, profile) {
     const batch = profile.batch_count ?? 1
     const seed = profile.seed ?? '?'
     return [
-      { label: '计算内容', value: `${batch} 批 ${size}×${size} 随机矩阵乘法（FP32）` },
+      { label: '矩阵规模', value: `${size} × ${size}` },
+      { label: '批次数', value: String(batch) },
       { label: '随机种子', value: String(seed) },
       { label: '画像 ID', value: profile.profile_id || '-' },
     ]
@@ -98,6 +105,84 @@ export function describeRuntimePlan(taskType, plan) {
   }))
 }
 
+export function buildMatmulInputRows(dataProfile) {
+  return describeDataProfile('high_throughput_matmul', dataProfile || {})
+}
+
+export function buildMatmulOutputRows(resultMetadata, evaluation) {
+  const rows = []
+  const meta = resultMetadata || {}
+  if (meta.matrix_size != null) {
+    rows.push({ label: '运行矩阵规模', value: `${meta.matrix_size} × ${meta.matrix_size}` })
+  }
+  if (meta.batch_count != null) {
+    rows.push({ label: '运行批次数', value: String(meta.batch_count) })
+  }
+  if (meta.compute_latency_ms != null) {
+    rows.push({ label: 'result.json 耗时', value: `${Number(meta.compute_latency_ms).toFixed(2)} ms` })
+  }
+  if (evaluation) {
+    const unit = evaluation.unit || 'ms'
+    rows.push({
+      label: '上报指标',
+      value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${unit}`,
+    })
+  }
+  if (!rows.length) {
+    rows.push({ label: '状态', value: '尚未收到计算输出' })
+  }
+  return rows
+}
+
+export function buildMatmulParamConsistency(dataProfile, resultMetadata) {
+  const profile = dataProfile || {}
+  const meta = resultMetadata || {}
+  const checks = []
+  if (profile.matrix_size != null && meta.matrix_size != null) {
+    checks.push(Number(profile.matrix_size) === Number(meta.matrix_size))
+  }
+  if (profile.batch_count != null && meta.batch_count != null) {
+    checks.push(Number(profile.batch_count) === Number(meta.batch_count))
+  }
+  if (!checks.length) {
+    return null
+  }
+  const ok = checks.every(Boolean)
+  return {
+    ok,
+    label: ok ? '输入与运行规模一致' : '输入与运行规模不一致',
+    detail: ok
+      ? '提交的 data_profile 与 compute 实际执行的规模一致。'
+      : '请检查 source/compute 是否使用了不同的 job 参数。',
+  }
+}
+
+export function buildMatmulVerdict(evaluation) {
+  if (!evaluation) {
+    return {
+      title: '等待计算完成',
+      subtitle: '启动实例并完成矩阵乘法后，sink 将上报 compute_latency_ms。',
+      statusClass: 'pending',
+    }
+  }
+  const unit = evaluation.unit || 'ms'
+  const actual = Number(evaluation.actual_value).toFixed(2)
+  const target = evaluation.target_value
+  if (evaluation.business_success) {
+    return {
+      title: '计算已完成，耗时达标',
+      subtitle: `实际 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: target, unit })}。`,
+      statusClass: 'success',
+    }
+  }
+  return {
+    title: '计算已完成，耗时未达标',
+    subtitle: evaluation.failure_reason || `实际 ${actual} ${unit} 超过目标 ${target} ${unit}。`,
+    statusClass: 'danger',
+  }
+}
+
+/** @deprecated 使用 buildMatmul* 分块展示；保留供非 matmul 或简易列表 */
 export function buildComputeResultSummary(taskType, businessTask, evaluation, resultMetadata) {
   if (taskType !== 'high_throughput_matmul') return null
   const profile = businessTask?.data_profile || {}
@@ -111,30 +196,13 @@ export function buildComputeResultSummary(taskType, businessTask, evaluation, re
         ? `执行 ${batch} 批 ${size}×${size} 矩阵乘法（seed=${seed ?? '?'})`
         : '矩阵乘法批处理（参数见数据画像）',
     },
+    ...buildMatmulOutputRows(resultMetadata, evaluation),
   ]
   if (evaluation) {
-    const unit = evaluation.unit || 'ms'
     lines.push({
-      label: '实际耗时',
-      value: `${Number(evaluation.actual_value).toFixed(2)} ${unit}`,
-    })
-    lines.push({
-      label: '目标阈值',
-      value: `${evaluation.target_value} ${unit}`,
-    })
-    lines.push({
-      label: '是否达标',
-      value: evaluation.business_success ? '达标' : '未达标',
+      label: '耗时达标',
+      value: evaluation.business_success ? '是' : '否',
       highlight: evaluation.business_success ? 'success' : 'danger',
-    })
-  } else {
-    lines.push({ label: '运行状态', value: '尚未上报计算结果' })
-  }
-  if (resultMetadata?.checksum) {
-    lines.push({
-      label: '结果校验和',
-      value: resultMetadata.checksum,
-      hint: '由 compute 节点对结果矩阵首元素取 6 位小数，用于核对计算已产出且可复现。',
     })
   }
   return lines

@@ -1,42 +1,58 @@
 import assert from 'node:assert/strict'
 import {
-  buildComputeResultSummary,
+  buildMatmulInputRows,
+  buildMatmulOutputRows,
+  buildMatmulParamConsistency,
+  buildMatmulVerdict,
   describeObjectiveMeaning,
   formatObjectiveSentence,
   taskTypeLabel,
 } from '../src/constants/businessTaskDisplay.js'
 
 assert.equal(taskTypeLabel('high_throughput_matmul'), '高通量矩阵乘法')
-assert.equal(
-  formatObjectiveSentence({
-    metric_key: 'compute_latency_ms',
-    operator: '<=',
-    target_value: 60000,
-    unit: 'ms',
-  }),
-  '计算耗时 不超过 60000 ms'
-)
 assert.ok(
   describeObjectiveMeaning('high_throughput_matmul', {
     metric_key: 'compute_latency_ms',
     operator: '<=',
     target_value: 60000,
     unit: 'ms',
-  }).includes('验收标准')
+  }).includes('不验证')
 )
 
-const summary = buildComputeResultSummary(
-  'high_throughput_matmul',
-  { data_profile: { matrix_size: 64, batch_count: 1, seed: 42 } },
-  {
-    actual_value: 12.5,
-    target_value: 60000,
-    unit: 'ms',
-    business_success: true,
-  },
-  { checksum: '0.123456' }
+const inputRows = buildMatmulInputRows({ matrix_size: 64, batch_count: 1, seed: 42 })
+assert.equal(inputRows.length, 4)
+
+const outputRows = buildMatmulOutputRows(
+  { matrix_size: 64, batch_count: 1, compute_latency_ms: 2.5 },
+  { metric_key: 'compute_latency_ms', actual_value: 2.5, unit: 'ms' }
 )
-assert.ok(summary.some((row) => row.label === '算了什么'))
-assert.ok(summary.some((row) => row.label === '是否达标' && row.value === '达标'))
+assert.ok(outputRows.some((r) => r.label === '运行矩阵规模'))
+
+const consistency = buildMatmulParamConsistency(
+  { matrix_size: 64, batch_count: 1 },
+  { matrix_size: 64, batch_count: 1 }
+)
+assert.equal(consistency.ok, true)
+
+const verdictOk = buildMatmulVerdict({
+  metric_key: 'compute_latency_ms',
+  actual_value: 2,
+  target_value: 60000,
+  unit: 'ms',
+  operator: '<=',
+  business_success: true,
+})
+assert.equal(verdictOk.statusClass, 'success')
+
+const verdictFail = buildMatmulVerdict({
+  metric_key: 'compute_latency_ms',
+  actual_value: 70000,
+  target_value: 60000,
+  unit: 'ms',
+  operator: '<=',
+  business_success: false,
+  failure_reason: '70000.0 > 60000.0',
+})
+assert.equal(verdictFail.statusClass, 'danger')
 
 console.log('businessTaskDisplay: ok')

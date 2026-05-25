@@ -1,6 +1,7 @@
 import pytest
 
 from api.auth import hash_password
+from api.business_tasks import _extract_result_metadata
 from enums import UserRole
 from models import User
 
@@ -415,3 +416,36 @@ async def test_business_task_list_api(client, db_session):
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
     assert detail["instance"]["id"] == instance_id
     assert detail["evaluation"]["business_success"] is True
+
+
+@pytest.mark.parametrize("tags,expected_keys", [
+    # New format: tags.result with full result.json
+    (
+        {"result": {"compute_latency_ms": 0.15, "matrix_size": 64, "batch_count": 1, "seed": 42, "checksum": "-5.328465"}},
+        {"compute_latency_ms": 0.15, "matrix_size": 64, "batch_count": 1, "seed": 42},
+    ),
+    # New format: tags.result with extra fields
+    (
+        {"result": {"compute_latency_ms": 0.20, "matrix_size": 128, "batch_count": 2, "seed": 99, "checksum": "-9.1", "extra_field": "prune_me"}},
+        {"compute_latency_ms": 0.20, "matrix_size": 128, "batch_count": 2, "seed": 99},
+    ),
+    # Old flat tags (backward compat)
+    (
+        {"compute_latency_ms": 0.18, "matrix_size": 64, "batch_count": 1, "seed": 7},
+        {"compute_latency_ms": 0.18, "matrix_size": 64, "batch_count": 1, "seed": 7},
+    ),
+    # Empty tags
+    (None, {}),
+    ({}, {}),
+    # No result key, no flat keys
+    ({"other_field": "ignore"}, {}),
+    # Mixed: result wins; flat fallbacks respected
+    (
+        {"result": {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3}, "compute_latency_ms": 0.99},
+        {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3},
+    ),
+])
+def test_extract_result_metadata(tags, expected_keys):
+    """_extract_result_metadata white-lists keys and ignores checksum / unknown fields."""
+    result = _extract_result_metadata(tags)
+    assert result == expected_keys

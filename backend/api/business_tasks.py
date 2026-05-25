@@ -354,8 +354,15 @@ def _extract_object_uris(tags: dict[str, Any] | None) -> list[str]:
 def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
     if not tags:
         return {}
+    raw = tags.get("result")
+    if isinstance(raw, dict):
+        return {
+            key: raw[key]
+            for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed")
+            if raw.get(key) is not None
+        }
     metadata: dict[str, Any] = {}
-    for key in ("checksum", "matrix_size", "batch_count"):
+    for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed"):
         if tags.get(key) is not None:
             metadata[key] = tags[key]
     return metadata

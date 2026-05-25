@@ -679,6 +679,34 @@ async def get_node_logs(instance_id: str, node_id: str, db: AsyncSession = Depen
     return {"logs": logs or ""}
 
 
+_ALLOWED_METRIC_TAGS = frozenset([
+    "result", "objects", "object_uris",
+    "compute_latency_ms", "matrix_size", "batch_count", "seed",
+    "end_to_end_latency_ms", "codec", "preset",
+])
+
+
+def _trim_metric_tags(tags: dict | None) -> dict | None:
+    """
+    在写入 TaskMetric 之前，从 tags 中移除敏感或过大字段（主要是 checksum）。
+    保留白名单 keys 和顶层结构；删除 result.checksum 等深层敏感字段。
+    """
+    if not tags:
+        return None
+    allowed = _ALLOWED_METRIC_TAGS
+    result: dict = {}
+    for key, val in tags.items():
+        if key not in allowed:
+            continue
+        if isinstance(val, dict):
+            filtered = {k: v for k, v in val.items() if k not in ("checksum", "result_json", "raw")}
+            if filtered:
+                result[key] = filtered
+        else:
+            result[key] = val
+    return result if result else None
+
+
 @router.post("/{instance_id}/metrics", response_model=TaskMetricResponse)
 async def report_metric(instance_id: str, payload: TaskMetricReport, db: AsyncSession = Depends(get_db)):
     instance_result = await db.execute(select(TaskInstance).where(TaskInstance.id == instance_id))
@@ -692,7 +720,7 @@ async def report_metric(instance_id: str, payload: TaskMetricReport, db: AsyncSe
         metric_key=payload.metric_key,
         metric_value=payload.metric_value,
         unit=payload.unit,
-        tags=payload.tags,
+        tags=_trim_metric_tags(payload.tags),
         reported_at=payload.reported_at or datetime.utcnow(),
     )
     db.add(metric)

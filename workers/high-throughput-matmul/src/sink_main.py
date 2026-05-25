@@ -83,9 +83,7 @@ def main() -> int:
                     "content_type": "application/json",
                 }
             ],
-            "checksum": str(result.get("checksum", "")),
-            "matrix_size": result.get("matrix_size"),
-            "batch_count": result.get("batch_count"),
+            "result": result,
         },
     )
     print(f"SINK_DONE metric={metric_key} value={latency_ms}", flush=True)
