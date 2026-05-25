@@ -389,8 +389,11 @@ async def test_business_task_list_api(client, db_session):
     assert item["task_type"] == "low_latency_video_pipeline"
     assert item["routing_policy"] == "completion_time_first"
     assert item["instance_id"] == instance_id
-    assert item["deployment_status"] == "pending"
-    assert item["target_value"] == 200
+    # Business tasks are always SCHEDULED mode (status = "scheduled")
+    assert item["deployment_status"] == "scheduled"
+    assert item["scheduled_start_time"] is not None
+    assert item["scheduled_end_time"] is not None
+    assert item["keep_after_stop"] is False
     assert item["business_success"] is None
 
     filtered = await client.get(

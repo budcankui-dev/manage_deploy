@@ -29,6 +29,24 @@ async def mark_orders_cancelled_for_instance(db: AsyncSession, instance_id: str)
     return len(orders)
 
 
+async def mark_orders_completed_for_instance(db: AsyncSession, instance_id: str) -> int:
+    """SCHEDULED 到期自然收尾：将 MATERIALIZED 状态的工单标 COMPLETED（区别于人工 CANCELLED）。
+
+    保留 materialized_instance_id；若实例随后被清理，前端依赖 instance_exists 字段呈现。
+    幂等：仅作用于 MATERIALIZED 工单，避免覆盖 FAILED / CANCELLED。
+    """
+    result = await db.execute(
+        select(TaskOrder).where(
+            TaskOrder.materialized_instance_id == instance_id,
+            TaskOrder.status == OrderStatus.MATERIALIZED,
+        )
+    )
+    orders = result.scalars().all()
+    for order in orders:
+        order.status = OrderStatus.COMPLETED
+    return len(orders)
+
+
 async def reconcile_orphan_orders(db: AsyncSession) -> int:
     """将 materialized 但实例已不存在的工单修正为 cancelled（历史脏数据）。"""
     result = await db.execute(

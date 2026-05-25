@@ -317,6 +317,7 @@ export function buildInstancePayload(raw, { nodes = [], templates = [], template
     scheduled_start_time: data.scheduled_start_time ?? null,
     scheduled_end_time: data.scheduled_end_time ?? null,
     auto_start: Boolean(data.auto_start),
+    keep_after_stop: Boolean(data.keep_after_stop),
     macro_values: data.macro_values ?? null,
     node_overrides: normalizeNodeOverrides(data.node_overrides || [], { nodes, templateNodes }),
   }

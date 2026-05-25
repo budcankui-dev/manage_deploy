@@ -128,6 +128,7 @@ class TaskInstance(Base):
     template_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_templates.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[TaskStatus] = mapped_column(String(50), default=TaskStatus.PENDING)
+    deployment_mode: Mapped[DeploymentMode] = mapped_column(String(50), default=DeploymentMode.IMMEDIATE)
     start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     scheduled_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -135,6 +136,7 @@ class TaskInstance(Base):
     error_message: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     source_order_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("task_orders.id"), nullable=True)
     macro_values: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    keep_after_stop: Mapped[bool] = mapped_column(default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, onupdate=func.now(), nullable=True
@@ -225,6 +227,7 @@ class TaskOrder(Base):
     scheduled_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     scheduled_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     auto_start: Mapped[bool] = mapped_column(default=False)
+    keep_after_stop: Mapped[bool] = mapped_column(default=False, server_default="0")
     runtime_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[OrderStatus] = mapped_column(String(50), default=OrderStatus.PENDING)
     materialized_instance_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)

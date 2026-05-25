@@ -1,9 +1,33 @@
 from typing import Optional, Any
 
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
-from datetime import datetime
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator, model_validator
+from datetime import datetime, timedelta
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
+
+
+def _apply_scheduled_defaults(values: dict) -> dict:
+    """SCHEDULED 模式默认填充 start_time=now、end_time=start+settings.default_scheduled_duration_hours。"""
+    if not isinstance(values, dict):
+        return values
+    mode = values.get("deployment_mode")
+    if mode is None:
+        mode = DeploymentMode.IMMEDIATE
+    if isinstance(mode, str):
+        try:
+            mode = DeploymentMode(mode)
+        except ValueError:
+            return values
+    if mode != DeploymentMode.SCHEDULED:
+        return values
+    from config import settings  # 延迟导入避免循环
+
+    start = values.get("scheduled_start_time") or datetime.utcnow()
+    values["scheduled_start_time"] = start
+    if values.get("scheduled_end_time") is None:
+        hours = max(1, int(settings.default_scheduled_duration_hours or 2))
+        values["scheduled_end_time"] = start + timedelta(hours=hours)
+    return values
 
 
 class HealthCheckConfig(BaseModel):
@@ -143,14 +167,21 @@ class TaskInstanceCreate(TaskInstanceBase):
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
     auto_start: bool = False
+    keep_after_stop: bool = False
     macro_values: Optional[dict[str, str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_scheduled_defaults(cls, values):
+        return _apply_scheduled_defaults(values)
 
 
 class TaskInstanceUpdate(BaseModel):
     name: Optional[str] = None
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: Optional[bool] = None
     macro_values: Optional[dict[str, str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
 
@@ -158,6 +189,7 @@ class TaskInstanceUpdate(BaseModel):
 class TaskInstanceSchedule(BaseModel):
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: Optional[bool] = None
 
 
 class TaskInstanceResponse(TaskInstanceBase):
@@ -167,10 +199,12 @@ class TaskInstanceResponse(TaskInstanceBase):
     template_id: str
     macro_values: Optional[dict] = None
     status: TaskStatus
+    deployment_mode: Optional[DeploymentMode] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: bool = False
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -183,9 +217,11 @@ class TaskInstanceSimple(TaskInstanceBase):
     id: str
     template_id: str
     status: TaskStatus
+    deployment_mode: Optional[DeploymentMode] = None
     start_time: Optional[datetime] = None
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: bool = False
     error_message: Optional[str] = None
     created_at: datetime
     nodes: list["TaskInstanceNodeResponse"] = Field(default_factory=list)
@@ -274,8 +310,14 @@ class TaskOrderCreate(BaseModel):
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
     auto_start: bool = False
+    keep_after_stop: bool = False
     node_overrides: list[TaskInstanceNodeOverride] = Field(default_factory=list)
     extra: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_scheduled_defaults(cls, values):
+        return _apply_scheduled_defaults(values)
 
 
 class TaskOrderResponse(BaseModel):
@@ -290,6 +332,7 @@ class TaskOrderResponse(BaseModel):
     scheduled_start_time: Optional[datetime] = None
     scheduled_end_time: Optional[datetime] = None
     auto_start: bool
+    keep_after_stop: bool = False
     runtime_config: Optional[dict] = None
     status: OrderStatus
     materialized_instance_id: Optional[str] = None
@@ -366,6 +409,8 @@ class BusinessTaskCreate(BaseModel):
     routing_result: RoutingResult
     result_storage: dict[str, Any] = Field(default_factory=dict)
     auto_start: bool = True
+    scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: bool = False
 
 
 class BusinessTaskResponse(BaseModel):
@@ -386,6 +431,9 @@ class BusinessTaskListItem(BaseModel):
     instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None
     deployment_status: Optional[TaskStatus] = None
+    scheduled_start_time: Optional[datetime] = None
+    scheduled_end_time: Optional[datetime] = None
+    keep_after_stop: bool = False
     metric_key: Optional[str] = None
     target_value: Optional[float] = None
     actual_value: Optional[float] = None

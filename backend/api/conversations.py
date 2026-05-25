@@ -181,9 +181,15 @@ async def confirm_intent(
 async def submit_conversation(
     conversation_id: str,
     auto_start: bool = False,
+    scheduled_end_time=None,
+    keep_after_stop: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """提交意图。后端会强制转换为 SCHEDULED 模式，并填充 end_time（默认 start + 2h）。
+
+    `auto_start` 字段保留接口兼容，目前在 SCHEDULED 路径下被忽略。
+    """
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
     if conversation.status != ConversationStatus.READY_TO_SUBMIT:
         raise HTTPException(status_code=400, detail="Conversation is not ready to submit")
@@ -212,6 +218,8 @@ async def submit_conversation(
         ),
         result_storage={"backend": "minio", "bucket": "task-results", "prefix": f"{conversation.id}/"},
         auto_start=auto_start,
+        scheduled_end_time=scheduled_end_time,
+        keep_after_stop=keep_after_stop,
     )
 
     result: BusinessTaskResponse = await create_business_task(business_payload, db)

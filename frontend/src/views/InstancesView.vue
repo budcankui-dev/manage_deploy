@@ -86,6 +86,12 @@
       <el-table-column label="计划启动(UTC+8)" min-width="190">
         <template #default="{ row }">{{ row.scheduled_start_time ? formatUtc8Time(row.scheduled_start_time) : '-' }}</template>
       </el-table-column>
+      <el-table-column label="计划停止(UTC+8)" min-width="190">
+        <template #default="{ row }">
+          <span v-if="row.scheduled_end_time">{{ formatUtc8Time(row.scheduled_end_time) }}</span>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
       <el-table-column label="创建时间" min-width="170">
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
@@ -149,6 +155,10 @@
         <el-form-item label="创建后自动启动">
           <el-switch v-model="createForm.auto_start" />
         </el-form-item>
+        <el-form-item v-if="createForm.mode === 'scheduled'" label="停止后保留实例">
+          <el-switch v-model="createForm.keep_after_stop" />
+          <span class="field-hint">启用后实例到期停止时不删除，方便后续查看</span>
+        </el-form-item>
 
         <div class="divider">模板宏变量</div>
         <div v-if="!macroDefs.length" class="empty-overrides">当前模板未定义宏变量</div>
@@ -195,6 +205,10 @@
         </el-form-item>
         <el-form-item label="计划停止时间 (UTC+8)">
           <el-date-picker v-model="editForm.scheduled_end_time" :disabled="editLocked" type="datetime" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="停止后保留实例">
+          <el-switch v-model="editForm.keep_after_stop" :disabled="editLocked" />
+          <span class="field-hint">启用后实例到期停止时不删除，方便后续查看</span>
         </el-form-item>
         <div class="divider">模板宏变量</div>
         <div v-if="!editMacroDefs.length" class="empty-overrides">当前模板未定义宏变量</div>
@@ -312,11 +326,13 @@ const createForm = ref({
   scheduled_start_time: null,
   scheduled_end_time: null,
   auto_start: false,
+  keep_after_stop: false,
 })
 const editForm = ref({
   name: '',
   scheduled_start_time: null,
   scheduled_end_time: null,
+  keep_after_stop: false,
 })
 
 const filteredInstances = computed(() => {
@@ -457,6 +473,7 @@ function buildCreatePayloadFromForm() {
     scheduled_start_time: createForm.value.mode === 'scheduled' ? createForm.value.scheduled_start_time : null,
     scheduled_end_time: createForm.value.mode === 'scheduled' ? createForm.value.scheduled_end_time : null,
     auto_start: createForm.value.auto_start,
+    keep_after_stop: createForm.value.keep_after_stop,
     macro_values: Object.keys(macroValues.value).length ? { ...macroValues.value } : null,
     node_overrides: nodeOverrides.value.map((n) => mapFormNodeToOverride(n, { parseLines })),
   }
@@ -491,6 +508,7 @@ async function finalizeCreate(payload) {
     scheduled_start_time: null,
     scheduled_end_time: null,
     auto_start: false,
+    keep_after_stop: false,
   }
   createJsonText.value = ''
   nodeOverrides.value = []
@@ -556,6 +574,7 @@ async function openEditDialog(instanceId) {
     name: target.name,
     scheduled_start_time: target.scheduled_start_time || null,
     scheduled_end_time: target.scheduled_end_time || null,
+    keep_after_stop: target.keep_after_stop ?? false,
   }
   const { data: templateDetail } = await templatesApi.get(target.template_id)
   editMacroDefs.value = templateDetail.macro_defs || []
@@ -587,6 +606,7 @@ function buildEditPayload() {
     name: editForm.value.name,
     scheduled_start_time: editForm.value.scheduled_start_time,
     scheduled_end_time: editForm.value.scheduled_end_time,
+    keep_after_stop: editForm.value.keep_after_stop,
     macro_values: Object.keys(editMacroValues.value).length ? { ...editMacroValues.value } : null,
     node_overrides: editNodeOverrides.value.map((n) => mapFormNodeToOverride(n, { parseLines })),
   }

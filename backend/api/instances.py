@@ -261,10 +261,12 @@ async def _create_instance_from_template(
         template_id=instance.template_id,
         name=instance.name,
         status=status,
+        deployment_mode=instance.deployment_mode,
         scheduled_start_time=instance.scheduled_start_time,
         scheduled_end_time=instance.scheduled_end_time,
         source_order_id=source_order_id,
         macro_values=instance.macro_values,
+        keep_after_stop=instance.keep_after_stop,
     )
     db.add(db_instance)
     await db.flush()
@@ -433,6 +435,8 @@ async def update_instance(
 
     if payload.name is not None:
         instance.name = payload.name
+    if payload.keep_after_stop is not None:
+        instance.keep_after_stop = payload.keep_after_stop
     if not is_runtime_locked:
         instance.scheduled_start_time = payload.scheduled_start_time
         instance.scheduled_end_time = payload.scheduled_end_time
@@ -529,7 +533,7 @@ async def start_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Instance not found")
     if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
         return {"message": "Instance already running"}
-    if instance.status not in (TaskStatus.PENDING, TaskStatus.STOPPED, TaskStatus.FAILED):
+    if instance.status not in (TaskStatus.PENDING, TaskStatus.SCHEDULED, TaskStatus.STOPPED, TaskStatus.FAILED):
         raise HTTPException(status_code=400, detail=f"Cannot start instance in status: {instance.status}")
     preflight = await _preflight_instance_plan(
         db,
@@ -639,6 +643,8 @@ async def schedule_instance(instance_id: str, schedule: TaskInstanceSchedule, db
         raise HTTPException(status_code=404, detail="Instance not found")
     instance.scheduled_start_time = schedule.scheduled_start_time
     instance.scheduled_end_time = schedule.scheduled_end_time
+    if schedule.keep_after_stop is not None:
+        instance.keep_after_stop = schedule.keep_after_stop
     if schedule.scheduled_start_time:
         instance.status = TaskStatus.SCHEDULED
         task_scheduler = TaskScheduler()

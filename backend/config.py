@@ -40,5 +40,8 @@ class Settings(BaseSettings):
     manager_public_url: str = "http://host.docker.internal:8000"
     platform_scratch_root: str = "/tmp/manage_deploy"
 
+    # SCHEDULED 模式默认运行时长（创建时未填 scheduled_end_time 则填 start+N 小时）
+    default_scheduled_duration_hours: int = 2
+
 
 settings = Settings()

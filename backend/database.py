@@ -63,6 +63,8 @@ async def init_db() -> None:
         await _ensure_column(conn, "task_instance_nodes", "port_defs", "JSON")
         await _ensure_column(conn, "task_instance_nodes", "port_values", "JSON")
         await _ensure_column(conn, "task_instances", "source_order_id", "VARCHAR(36)")
+        await _ensure_column(conn, "task_instances", "keep_after_stop", "BOOLEAN NOT NULL DEFAULT 0")
+        await _ensure_column(conn, "task_orders", "keep_after_stop", "BOOLEAN NOT NULL DEFAULT 0")
     await _ensure_default_users()
 
 

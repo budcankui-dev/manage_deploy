@@ -1,12 +1,14 @@
 import json
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database import get_db
-from enums import OrderStatus, TaskStatus
+from enums import DeploymentMode, OrderStatus, TaskStatus
 from models import (
     BusinessObjectiveEvaluation,
     BusinessTemplateCatalog,
@@ -61,7 +63,6 @@ def build_instance_create_from_business_task(
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
         env = dict(shared_env)
         env["TASK_ROLE"] = role
-        env["PLATFORM_SCRATCH"] = "1"
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
@@ -70,10 +71,20 @@ def build_instance_create_from_business_task(
             )
         )
 
+    # 业务任务一律 SCHEDULED + 强制 end_time（未传则取 now + default_scheduled_duration_hours）。
+    # scheduled_start_time = now() 既保留"立即跑"的体验，又借用现成的 schedule_task_start。
+    now = datetime.utcnow()
+    hours = max(1, int(settings.default_scheduled_duration_hours or 2))
+    end_time = payload.scheduled_end_time or (now + timedelta(hours=hours))
+
     return TaskInstanceCreate(
         template_id=template_id,
         name=payload.name or f"{payload.task_type}-{payload.external_task_id}",
-        auto_start=payload.auto_start,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=now,
+        scheduled_end_time=end_time,
+        auto_start=False,
+        keep_after_stop=payload.keep_after_stop,
         node_overrides=overrides,
     )
 
@@ -150,7 +161,11 @@ async def create_business_task(payload: BusinessTaskCreate, db: AsyncSession = D
         template_id=catalog.template_id,
         name=instance_create.name,
         description=payload.description,
-        auto_start=payload.auto_start,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=instance_create.scheduled_start_time,
+        scheduled_end_time=instance_create.scheduled_end_time,
+        auto_start=False,
+        keep_after_stop=payload.keep_after_stop,
         runtime_config={
             "business_task": payload.model_dump(mode="json"),
             "node_overrides": [item.model_dump() for item in instance_create.node_overrides],

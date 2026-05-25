@@ -15,7 +15,7 @@ from api import (
     routing_router,
     templates_router,
 )
-from services.scheduler import TaskScheduler
+from services.scheduler import TaskScheduler, restore_pending_jobs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,6 +26,10 @@ async def lifespan(app: FastAPI):
     logger.info("Starting application...")
     await init_db()
     TaskScheduler.start()
+    try:
+        await restore_pending_jobs()
+    except Exception:
+        logger.exception("Failed to restore scheduled jobs on startup")
     yield
     logger.info("Shutting down application...")
     TaskScheduler.shutdown()

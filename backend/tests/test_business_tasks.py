@@ -4,6 +4,7 @@ from api.business_tasks import (
     build_instance_create_from_business_task,
     evaluate_business_objective,
 )
+from enums import DeploymentMode
 from schemas import BusinessObjective, BusinessTaskCreate, RoutingResult
 
 
@@ -53,7 +54,12 @@ def test_build_instance_create_maps_routing_and_runtime_env():
 
     assert instance.template_id == "template-video"
     assert instance.name == "低时延视频转发"
-    assert instance.auto_start is True
+    # Business tasks always use SCHEDULED mode with APScheduler (auto_start=False)
+    assert instance.deployment_mode == DeploymentMode.SCHEDULED
+    assert instance.auto_start is False
+    assert instance.scheduled_start_time is not None
+    assert instance.scheduled_end_time is not None
+    assert instance.keep_after_stop is False
     overrides = {item.template_node_name: item for item in instance.node_overrides}
     assert overrides["source"].node_id == "node-a"
     assert overrides["compute"].node_id == "node-b"
