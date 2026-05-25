@@ -41,6 +41,10 @@ LOG_HC_SINK = {
 }
 
 
+PORT_HC_SOURCE = {"type": "port", "port": 18801, "timeout": 120, "interval": 2, "retry": 30}
+PORT_HC_COMPUTE = {"type": "port", "port": 18802, "timeout": 300, "interval": 3, "retry": 40}
+PORT_HC_SINK = {"type": "port", "port": 18803, "timeout": 300, "interval": 3, "retry": 40}
+
 # 开发：三台逻辑 worker 同机，业务 IPv4 与管理面一致（host 网络下容器互访本机）
 DEV_BUSINESS_IP = os.environ.get("DEV_BUSINESS_IP", "127.0.0.1")
 
