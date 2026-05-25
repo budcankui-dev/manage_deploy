@@ -2,8 +2,8 @@
   <div class="instances-view">
     <header class="page-header">
       <div class="title-section">
-        <h1>运维 / 手动部署</h1>
-        <p class="subtitle">从拓扑模板手动创建实例，用于调试与验收；正式业务任务请使用业务任务中心。</p>
+        <h1>运维实例管理</h1>
+        <p class="subtitle">手动部署、查看和控制任务实例（Docker 容器）。</p>
       </div>
       <div class="header-actions">
         <el-radio-group v-model="viewMode" size="small">
@@ -89,6 +89,16 @@
       <el-table-column label="计划停止(UTC+8)" min-width="190">
         <template #default="{ row }">
           <span v-if="row.scheduled_end_time">{{ formatUtc8Time(row.scheduled_end_time) }}</span>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="关联工单" min-width="140">
+        <template #default="{ row }">
+          <template v-if="row.source_order_id">
+            <el-button link type="primary" @click="$router.push(`/business-tasks?orderId=${row.source_order_id}`)">
+              查看工单
+            </el-button>
+          </template>
           <span v-else>-</span>
         </template>
       </el-table-column>

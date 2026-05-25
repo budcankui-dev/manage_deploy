@@ -75,10 +75,6 @@ const routes = [
     redirect: (to) => `/dev/instances/${to.params.id}`,
   },
   {
-    path: '/batch',
-    redirect: '/business-tasks',
-  },
-  {
     path: '/business-tasks',
     name: 'BusinessTasksHub',
     component: () => import('@/views/BusinessTasksHubView.vue'),

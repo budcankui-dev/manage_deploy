@@ -2,8 +2,8 @@
   <div class="hub-view">
     <header class="page-header">
       <div>
-        <h1>业务任务中心</h1>
-        <p class="subtitle">统一管理意图接入、路由放置、部署运行与业务目标评估。</p>
+        <h1>业务工单中心</h1>
+        <p class="subtitle">管理业务部署请求、工单状态与业务目标评估。</p>
       </div>
       <div class="actions">
         <el-button @click="refreshAll">刷新</el-button>
@@ -36,7 +36,7 @@
 
     <section class="card">
       <div class="card-header">
-        <h2>业务任务列表</h2>
+        <h2>工单列表</h2>
         <div class="filters">
           <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="loadList" />
           <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="loadList">
@@ -51,7 +51,7 @@
           <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="loadList">
             <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.business_success" placeholder="业务结果" clearable style="width: 120px" @change="loadList">
+          <el-select v-model="filters.business_success" placeholder="耗时验收" clearable style="width: 120px" @change="loadList">
             <el-option label="达标" :value="true" />
             <el-option label="超标" :value="false" />
           </el-select>
@@ -111,6 +111,19 @@
         <el-table-column label="创建时间" min-width="160">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
+        <el-table-column label="关联实例" width="120">
+          <template #default="{ row }">
+            <template v-if="row.instance_id && row.instance_exists !== false">
+              <el-button link type="primary" @click="$router.push(`/dev/instances/${row.instance_id}`)">
+                查看实例
+              </el-button>
+            </template>
+            <el-tag v-else-if="row.instance_id && row.instance_exists === false" size="small" type="warning">
+              实例已删除
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row.order_id)">详情</el-button>
@@ -126,7 +139,7 @@
               type="warning"
               @click="stopInstance(row.instance_id)"
             >停止</el-button>
-            <el-button link type="danger" @click="deleteOrder(row.order_id)">删除</el-button>
+            <el-button link type="danger" @click="deleteOrder(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -318,7 +331,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
 import {
   DEPLOYMENT_STATUS_LABELS,
@@ -592,8 +605,20 @@ async function stopInstance(instanceId) {
   }
 }
 
-async function deleteOrder(orderId) {
-  await ordersApi.delete(orderId)
+async function deleteOrder(row) {
+  const { order_id, instance_id, instance_exists } = row
+  if (instance_id && instance_exists !== false) {
+    try {
+      await ElMessageBox.confirm(
+        '删除工单的同时会删除对应的部署实例，继续吗？',
+        '确认删除',
+        { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+  await ordersApi.delete(order_id)
   ElMessage.success('工单已删除')
   drawerOpen.value = false
   await refreshAll()
