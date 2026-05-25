@@ -27,20 +27,39 @@ def get_listen_port(role: str) -> int:
     return int(os.environ.get(f"PORT_{role.upper()}", 8801))
 
 
-def poll_url(url: str, timeout_sec: float = 120.0, interval_sec: float = 0.5) -> Any:
-    """Poll a URL until it returns 200, then return parsed JSON. Raises TimeoutError on timeout."""
+def get_peer_url(role: str) -> str | None:
+    """Get the peer's base URL for push mode.
+
+    Role maps to where THIS node pushes TO (the downstream node).
+    - source pushes TO compute -> PEER_COMPUTE_URL
+    - compute pushes TO sink   -> PEER_SINK_URL
+    - sink is terminal, no downstream
+    """
+    env_map = {
+        "source": "PEER_COMPUTE_URL",   # source pushes job to compute
+        "compute": "PEER_SINK_URL",     # compute pushes result to sink
+        "sink": None,                   # sink is terminal
+    }
+    key = env_map.get(role)
+    if key is None:
+        return None
+    val = os.environ.get(key, "")
+    if val:
+        return val.rstrip("/")
+    return None
+
+
+def post_json_to_peer(role: str, path: str, data: dict, timeout_sec: float = 120.0) -> None:
+    """Push JSON data to the next node in the pipeline."""
     import httpx
 
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        try:
-            resp = httpx.get(url, timeout=10.0)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-        time.sleep(interval_sec)
-    raise TimeoutError(f"Timed out polling {url} after {timeout_sec}s")
+    peer_url = get_peer_url(role)
+    if not peer_url:
+        raise RuntimeError(f"No peer URL configured for role={role}")
+
+    url = f"{peer_url}{path}"
+    resp = httpx.post(url, json=data, timeout=timeout_sec)
+    resp.raise_for_status()
 
 
 def poll_and_post_json(
@@ -56,6 +75,32 @@ def poll_and_post_json(
     resp = httpx.post(post_url, json=data, timeout=30.0)
     resp.raise_for_status()
     return data
+
+
+class PostDataHandler(BaseHTTPRequestHandler):
+    """Accepts POST /data and stores the JSON payload."""
+
+    received_data: dict | None = None
+
+    def do_POST(self):
+        if self.path == "/data":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                PostDataHandler.received_data = json.loads(body.decode("utf-8"))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # quiet
 
 
 class JobDataHandler(BaseHTTPRequestHandler):
@@ -94,6 +139,18 @@ class ResultDataHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass  # quiet
+
+
+def wait_for_data_handler(port: int, timeout_sec: float = 120.0, interval_sec: float = 0.5) -> dict:
+    """Wait for POST /data to be received by the handler. Returns the received data."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if PostDataHandler.received_data is not None:
+            data = PostDataHandler.received_data
+            PostDataHandler.received_data = None  # clear for next use
+            return data
+        time.sleep(interval_sec)
+    raise TimeoutError(f"Timed out waiting for data after {timeout_sec}s")
 
 
 def start_server(port: int, handler_class: type[BaseHTTPRequestHandler]) -> Thread:

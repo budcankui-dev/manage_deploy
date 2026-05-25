@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Matmul pipeline sink: read result.json, report metric, optional MinIO upload."""
+"""Matmul pipeline sink: wait for result from compute via POST, then report metric."""
 
 from __future__ import annotations
 
@@ -9,24 +9,19 @@ import sys
 import time
 from pathlib import Path
 
-SCRATCH = Path("/scratch")
-RESULT_FILE = SCRATCH / "result.json"
-
-# 便于从 workers/ 目录直接 python 调试
 if "/app" not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, "/app")
 
-from _common.reporter import report_metric  # noqa: E402
-
-
-def _wait_for_result(timeout_sec: int = 180) -> dict:
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        if RESULT_FILE.is_file():
-            return json.loads(RESULT_FILE.read_text(encoding="utf-8"))
-        time.sleep(0.5)
-    raise TimeoutError(f"result.json not found under {SCRATCH}")
+from _common.http_server import (
+    get_listen_port,
+    get_peer_url,
+    post_json_to_peer,
+    PostDataHandler,
+    start_server,
+    wait_for_data_handler,
+)
+from _common.reporter import report_metric
 
 
 def _parse_objective() -> dict:
@@ -62,8 +57,16 @@ def _maybe_upload_minio(instance_id: str, body: dict) -> str:
 
 
 def main() -> int:
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    result = _wait_for_result()
+    port = get_listen_port("sink")
+    print(f"SINK_STARTING port={port}", flush=True)
+
+    # 启动 HTTP server 等待 compute 发来 result
+    start_server(port, PostDataHandler)
+
+    # 等待 compute POST result
+    result = wait_for_data_handler(port, timeout_sec=180.0)
+    print(f"SINK_GOT_RESULT latency_ms={result.get('compute_latency_ms')}", flush=True)
+
     objective = _parse_objective()
     metric_key = objective.get("metric_key") or "compute_latency_ms"
     latency_ms = float(result["compute_latency_ms"])
@@ -71,7 +74,6 @@ def main() -> int:
 
     # 先上报指标（业务验收关键路径），MinIO 上传失败不阻塞
     placeholder_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/result.json"
-    # 只上报白名单字段，避免 checksum 等敏感数据进入 TaskMetric.tags
     METRIC_METADATA_KEYS = ("compute_latency_ms", "matrix_size", "batch_count", "seed")
     result_meta = {k: result[k] for k in METRIC_METADATA_KEYS if k in result}
     report_metric(
@@ -90,11 +92,13 @@ def main() -> int:
         },
     )
     print(f"SINK_DONE metric={metric_key} value={latency_ms}", flush=True)
+
     try:
         uri = _maybe_upload_minio(instance_id, result)
         print(f"SINK_MINIO uri={uri}", flush=True)
     except Exception as exc:
         print(f"SINK_MINIO_SKIP {exc}", flush=True)
+
     while True:
         time.sleep(3600)
     return 0
