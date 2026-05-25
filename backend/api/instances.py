@@ -337,6 +337,8 @@ async def _create_instance_from_template(
             await task_scheduler.schedule_task_end(db_instance.id, instance.scheduled_end_time)
 
     if instance.auto_start and instance.deployment_mode == DeploymentMode.IMMEDIATE:
+        # Commit instance so sink's metric-report API calls (from containers) can query it
+        await db.commit()
         preflight = await _preflight_instance_plan(db, await _build_preflight_plan_from_create(db, instance))
         if not preflight.ok:
             messages = "; ".join(issue.message for issue in preflight.conflicts)
