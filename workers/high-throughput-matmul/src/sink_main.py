@@ -71,6 +71,9 @@ def main() -> int:
 
     # 先上报指标（业务验收关键路径），MinIO 上传失败不阻塞
     placeholder_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/result.json"
+    # 只上报白名单字段，避免 checksum 等敏感数据进入 TaskMetric.tags
+    METRIC_METADATA_KEYS = ("compute_latency_ms", "matrix_size", "batch_count", "seed")
+    result_meta = {k: result[k] for k in METRIC_METADATA_KEYS if k in result}
     report_metric(
         metric_key,
         latency_ms,
@@ -83,7 +86,7 @@ def main() -> int:
                     "content_type": "application/json",
                 }
             ],
-            "result": result,
+            "result": result_meta,
         },
     )
     print(f"SINK_DONE metric={metric_key} value={latency_ms}", flush=True)
