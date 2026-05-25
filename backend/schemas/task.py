@@ -1,6 +1,6 @@
 from typing import Optional, Any
 
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
@@ -205,7 +205,17 @@ class TaskEventResponse(BaseModel):
 
 
 class BatchOperationRequest(BaseModel):
-    instance_ids: list[str]
+    order_ids: list[str] = Field(default_factory=list, description="要删除的工单 ID 列表")
+    instance_ids: list[str] = Field(default_factory=list, description="废弃字段，请使用 order_ids（兼容旧调用方）")
+
+    @field_validator('order_ids', mode='before')
+    @classmethod
+    def promote_instance_ids_to_order_ids(cls, v, info):
+        # 如果 order_ids 为空但 instance_ids 有值，沿用 instance_ids（兼容旧调用方）
+        values = info.data
+        if not v and values.get('instance_ids'):
+            return values['instance_ids']
+        return v if v is not None else []
 
 
 class BatchOperationResponse(BaseModel):

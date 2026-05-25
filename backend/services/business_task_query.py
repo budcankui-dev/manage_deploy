@@ -136,32 +136,50 @@ async def list_business_tasks(
     db: AsyncSession,
     filters: BusinessTaskListFilters,
 ) -> BusinessTaskListResponse:
-    rows = await db.execute(
+    """
+    列出业务工单。
+
+    SQL WHERE 层：order_status、include_cancelled、runtime_config IS NOT NULL。
+    Python 内存过滤：task_type、routing_policy、deployment_status、
+    business_success、q（这些需要 JSON 解析或跨表数据）。
+    分页：先全量过滤再 offset/limit，保证 total 准确。
+    """
+    # Base query — SQL-level filters applied here
+    query = (
         select(TaskOrder)
         .where(TaskOrder.runtime_config.isnot(None))
         .order_by(TaskOrder.created_at.desc())
     )
-    business_orders: list[tuple[TaskOrder, dict[str, Any]]] = []
+    if filters.order_status:
+        query = query.where(TaskOrder.status == filters.order_status)
+    elif not filters.include_cancelled:
+        query = query.where(TaskOrder.status != OrderStatus.CANCELLED)
+
+    rows = await db.execute(query)
+    candidate_orders: list[tuple[TaskOrder, dict[str, Any]]] = []
     for order in rows.scalars():
         business_task = _extract_business_task(order)
         if business_task:
-            business_orders.append((order, business_task))
+            candidate_orders.append((order, business_task))
 
+    # Eager-load all needed instances and evaluations in 2 queries
     instance_ids = [
         order.materialized_instance_id
-        for order, _ in business_orders
+        for order, _ in candidate_orders
         if order.materialized_instance_id
     ]
     instance_map = await _instances_by_ids(db, instance_ids)
     eval_map = await _latest_evaluations(db, instance_ids)
 
+    # Python-level filters (JSON extraction / cross-table)
     filtered: list[tuple[TaskOrder, dict[str, Any]]] = []
-    for order, business_task in business_orders:
+    for order, business_task in candidate_orders:
         instance = instance_map.get(order.materialized_instance_id or "")
         evaluation = eval_map.get(order.materialized_instance_id or "")
         if _matches_filters(order, business_task, instance, evaluation, filters):
             filtered.append((order, business_task))
 
+    # Pagination
     total = len(filtered)
     page = max(filters.page, 1)
     page_size = min(max(filters.page_size, 1), 100)
@@ -186,9 +204,10 @@ async def summarize_business_tasks(
     db: AsyncSession,
     include_cancelled: bool = False,
 ) -> list[dict[str, Any]]:
-    rows = await db.execute(
-        select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
-    )
+    query = select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
+    if not include_cancelled:
+        query = query.where(TaskOrder.status != OrderStatus.CANCELLED)
+    rows = await db.execute(query)
     business_orders: list[tuple[TaskOrder, dict[str, Any]]] = []
     for order in rows.scalars():
         if not include_cancelled and order.status == OrderStatus.CANCELLED:

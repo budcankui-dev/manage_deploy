@@ -153,7 +153,7 @@ async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
 async def batch_delete_orders(request: BatchOperationRequest, db: AsyncSession = Depends(get_db)):
     succeeded: list[str] = []
     failed: dict[str, str] = {}
-    for order_id in request.instance_ids:
+    for order_id in request.order_ids:
         try:
             row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
             order = row.scalar_one_or_none()
