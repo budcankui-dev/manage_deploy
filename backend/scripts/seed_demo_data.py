@@ -118,33 +118,35 @@ async def seed(base_url: str | None = None) -> dict:
         matmul_template = {
             "name": "demo-matmul-pipeline-v2",
             "description": "Scientific computing: matmul source/compute/sink workers",
+            "port_defs": [
+                {"name": "source", "port": 18801},
+                {"name": "compute", "port": 18802},
+                {"name": "sink", "port": 18803},
+            ],
             "nodes": [
                 {
                     "client_id": "source",
                     "name": "source",
                     "image": MATMUL_SOURCE,
                     "node_id": node_ids[0],
-                    "env": dict(SCRATCH_ENV),
                     "restart_policy": "no",
-                    "health_check": LOG_HC_SOURCE,
+                    "health_check": PORT_HC_SOURCE,
                 },
                 {
                     "client_id": "compute",
                     "name": "compute",
                     "image": MATMUL_COMPUTE,
                     "node_id": node_ids[1],
-                    "env": dict(SCRATCH_ENV),
                     "restart_policy": "no",
-                    "health_check": LOG_HC_COMPUTE,
+                    "health_check": PORT_HC_COMPUTE,
                 },
                 {
                     "client_id": "sink",
                     "name": "sink",
                     "image": MATMUL_SINK,
                     "node_id": node_ids[2],
-                    "env": dict(SCRATCH_ENV),
                     "restart_policy": "no",
-                    "health_check": LOG_HC_SINK,
+                    "health_check": PORT_HC_SINK,
                 },
             ],
             "edges": [
