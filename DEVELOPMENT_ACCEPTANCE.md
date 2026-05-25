@@ -22,6 +22,12 @@
 - 本地开发时 `agent_address` 推荐配置成 `http://127.0.0.1:8001`。
 - 不要让宿主机上的 Manager 去访问 Docker bridge 内部地址如 `172.20.x.x`，这会导致 UI 看起来正常，但实际启动/停止/日志都失败。
 
+### 1.2.1 开发期数据面（当前）
+
+- **控制面**：MySQL、MinIO、Manager、Agent 均走 IPv4（如 `127.0.0.1`）。
+- **数据面（开发）**：`business_ip` 与管理面同源（seed 默认 `127.0.0.1`），可不填 `business_ipv6`；`.env` 设 `PREFER_BUSINESS_IPV6=false`。
+- **数据面（验收）**：节点配置 `business_ipv6`（如 `2001:db8:1::/64`），`PREFER_BUSINESS_IPV6=true`，跑 `scripts/verify_macro_port_e2e.py`。
+
 ### 1.3 数据库
 
 - 功能联调默认可继续使用开发 MySQL。
@@ -30,6 +36,13 @@
   - 请求是否打到了当前这套后端
   - 当前后端是否连的是正确数据库
   - 表结构是否已同步到最新版本
+
+### 1.4 默认账号
+
+- 后端 `init_db()` 启动时自动确保存在：
+  - `admin` / `admin`（管理员）
+  - `user` / `user`（普通用户）
+- 已存在的用户名不会重复创建；无需再点前端 bootstrap。
 
 ## 2. 已踩过的坑与处理经验
 
@@ -163,6 +176,98 @@
 
 - 新功能如果涉及资源抢占，优先做“提交前预检查 + 执行前兜底校验”的双层校验。
 
+### 2.7 DAG 失败回滚只 stop 不 delete，导致 Exited 容器堆积
+
+现象：
+
+- Docker Desktop 里出现大量已停止的 `manage-deploy/matmul-*` 容器。
+- 容器命名形如 `{instance_id}_{node_id}`，同一前缀（instance_id）下往往有 1～3 个 Exited 记录。
+- 反复跑 E2E 或调试失败后，容器数量线性增长，但实例列表里多为 `failed` 状态。
+
+根因：
+
+- 旧版 `_rollback_started_nodes` 只对 `started_nodes` 中标记为已启动、且状态为 `READY` 的节点调用 `stop_node`。
+- **失败节点**在 `failed_nodes` 集合中，但不在回滚范围。
+- 更关键的是：若**首节点**（如 source）在健康检查阶段失败，容器已创建但尚未进入 `READY`，此时 `started_nodes` 可能为空——旧逻辑**完全不会清理**任何容器。
+- 配合 `restart_policy: no`，容器 stop 后停留在 `Exited`，不会自动消失。
+
+修复（`backend/services/dag_executor.py`）：
+
+- 失败回滚改为对「已启动节点 ∪ 失败节点」统一调用 `remove_node`（经 node agent delete 容器）。
+- 单元测试：`test_rollback_removes_started_and_failed_nodes`。
+- 联调脚本：`scripts/verify_rollback_cleanup.sh`（故意配置不可能通过的健康检查，断言实例 `failed` 且 Docker 无 `{instance_id}_*` 残留）。
+
+规范：
+
+- **`stop` ≠ `delete`**：编排系统的「回滚 / 清理」语义应是 remove，而不是仅 stop 留 Exited。
+- 回滚集合必须显式包含 `failed_nodes`，不能只看 `started_nodes`。
+- 任何 Docker 生命周期变更的验收，都要在 Docker Desktop / `docker ps -a` 侧确认，不能只看 DB 或 API 状态。
+- E2E 脚本反复跑之前，应清理旧测试实例；历史 Exited 容器可一次性 `docker rm` 或走工作节点页「孤儿容器」巡检。
+
+一次性清理历史 matmul 残留示例：
+
+```bash
+docker ps -a --filter "ancestor=manage-deploy/matmul-source:dev" -q | xargs docker rm
+docker ps -a --filter "ancestor=manage-deploy/matmul-compute:dev" -q | xargs docker rm
+docker ps -a --filter "ancestor=manage-deploy/matmul-sink:dev" -q | xargs docker rm
+```
+
+验证回滚清理：
+
+```bash
+# 需 backend :8000 + node agent :8001 已启动
+./scripts/verify_rollback_cleanup.sh
+```
+
+### 2.8 high_throughput_matmul 业务 E2E 联调经验
+
+现象与坑：
+
+| 问题 | 表现 | 处理 |
+|------|------|------|
+| Seed 与线后端不一致 | seed 后 API 查不到节点/模板 | seed 默认 HTTP 调 `SEED_BASE_URL`（如 `http://127.0.0.1:8000`），避免 ASGI 直连另一套库 |
+| `auto_start: true` 阻塞创建接口 | curl 创建 business-task 长时间无响应 | E2E 改为 `auto_start: false`，创建后再 `POST .../start` |
+| 容器内访问 Manager | sink 上报 metrics 失败 | macOS Docker Desktop 用 `host.docker.internal:8000`，配置 `MANAGER_PUBLIC_URL` |
+| `PLATFORM_SCRATCH` 被覆盖 | scratch 目录无 `job.json` | business-task 创建路径显式注入 `PLATFORM_SCRATCH=1` |
+| 开发期 IPv6 未就绪 | PEER URL 不可达 | 开发默认 `PREFER_BUSINESS_IPV6=false`，节点 `business_ip` 与管理面同源 |
+| sink metrics 偶发 500 | 健康检查失败 → 实例 failed | reporter 对 500 重试；根因仍待查（可能与 DAG 并发写库有关） |
+| 三节点 ≠ 一个长期运行容器 | Docker 里多个 matmul 镜像 | 一个 Dockerfile 三个 target（source/compute/sink），每实例各起 3 个容器，属正常 |
+
+Worker 构建与 E2E：
+
+```bash
+./scripts/build_workers.sh
+SEED_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
+WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+```
+
+规范：
+
+- 业务容器开发在本仓 `workers/` 下，平台只负责 env 注入、DAG、metrics 评估；**不要**期望跨任务共享同一业务镜像。
+- Live E2E 应用较小矩阵（如 64×1）缩短等待；完整性能验收另开 profile。
+- 成功跑完的实例在 `restart_policy: no` 下仍可能留下 Exited 容器——**正常 stop / 成功完成路径**的容器清理尚未统一，删除实例 API 会删容器；失败路径已由 §2.7 修复。
+- **2026-05-24**：`e2e_matmul_live.sh` 连续 3 次通过；默认矩阵 64×1；metrics 上报增加 evaluation 幂等，reporter 对 5xx 重试。
+
+### 2.9 批量删除/停止前端超时，删除接口 500
+
+现象：
+
+- 多个 **running** 的 matmul 实例在前端批量删除、停止时 **30s 超时**。
+- 后端 DELETE 曾返回 **500**（`Session is already flushing`）。
+
+根因：
+
+1. node agent `get_container()` 全量 `list` 容器，慢。
+2. `remove_container` 对 running 容器 `stop(timeout=30)`，sink 长期运行，批量操作累计超时。
+3. 并行 `asyncio.gather` + 同一 AsyncSession 并发 flush 导致 500。
+
+修复：
+
+- `containers.get(name)`；删除用 **kill + remove**；停止 **5s 后 kill**。
+- 清理顺序执行；删库不因单容器失败而整体失败。
+- 前端批量/启停/删除 timeout **180s**。
+- 验收：`./scripts/test_instance_lifecycle_api.sh`
+
 ## 3. 以后开发新功能的推荐流程
 
 ### 3.1 设计阶段
@@ -239,6 +344,7 @@
    - 不存在节点
    - 运行态误编辑
    - 批量操作部分失败
+   - **DAG 失败回滚**（`./scripts/verify_rollback_cleanup.sh`）
 5. 最后再次确认：
    - 数据库无脏数据
    - Docker 无残留测试容器
@@ -254,6 +360,7 @@
 - 失败实例删除后，残留 `Created` 容器也会被清理。
 - 运行中实例停止后，容器退出，实例状态正确更新。
 - 时间展示按 `UTC+8` 正确显示，不再出现“刚创建却显示 8 小时前”。
+- **DAG 失败回滚**：故意健康检查失败后，Docker 无 `{instance_id}_*` 残留（`verify_rollback_cleanup.sh` 通过）。
 
 ## 7. 后续仍建议继续增强的点
 
@@ -261,6 +368,8 @@
 - 统一的事件日志与错误码体系，便于 UI 精准提示。
 - 服务端分页/筛选，避免列表全量加载。
 - 更完整的自动化 E2E 用例，把当前手工验收流程固化下来。
+- **任务正常完成 / 手动 stop 路径**：统一 remove 或提供「清理 Exited 容器」策略，避免成功 run 也堆积 Exited。
+- **sink metrics 500**：查明并发上报时的后端异常并稳定 E2E。
 
 ## 8. 孤儿容器巡检约定
 
@@ -271,6 +380,7 @@
   - 手工删库或异常并发导致容器残留
   - 旧版本只删数据库未删 Docker 的历史遗留
   - 调试阶段中断流程后留下的脏容器
+  - **旧版 DAG 失败回滚只 stop 不 delete** 的历史遗留（见 §2.7）
 
 ## 9. 运行时能力验收（macro / port / IPv6）
 
@@ -281,7 +391,7 @@ cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 cd frontend && npm run build
 ```
 
-当前基线（2026-05-24）：**36 passed**（含 `test_auth_register_creates_regular_user`、`test_conversations_api` 的 `task_id` / `workflow_trace`）。
+当前基线（2026-05-24）：**41 passed**（含 DAG 回滚、init_db 默认用户、metrics 幂等、matmul E2E 联调相关测试）。
 
 脚本：`python scripts/verify_macro_port_e2e.py`（需 backend + agent + `alpine:latest`）。
 
@@ -333,16 +443,33 @@ cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 
 前置：backend + node_agent 已启动，已执行 seed 脚本。
 
-1. [ ] `seed_demo_data.py` 创建节点、模板、catalog
-2. [ ] `e2e_business_task.sh` 返回 instance_id
-3. [ ] metric 上报后 evaluation 中 `business_success` 正确
-4. [ ] Admin 页 `/business-tasks` 可查看 summary
+1. [x] `seed_demo_data.py` 创建节点、模板、catalog
+2. [x] `e2e_matmul_live.sh` / 业务任务 API 返回 instance_id
+3. [x] metric 上报后 evaluation 中 `business_success` 正确
+4. [x] Admin 页 `/business-tasks` 可查看 summary 与详情「结果」Tab
+
+### 11.2.1 L2 matmul 实容器 E2E
+
+前置：worker 镜像已 build（`./scripts/build_workers.sh`），MinIO 可选（`127.0.0.1:9000`）。
+
+```bash
+WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+./scripts/verify_rollback_cleanup.sh   # 失败回滚无容器残留
+```
+
+详见 §2.7、§2.8。`e2e_matmul_live.sh` 已稳定跑通（默认 64×1 矩阵，约 7s）。
+
+```bash
+WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+E2E_DELETE_INSTANCE=1 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh   # 跑完删实例
+MATMUL_MATRIX_SIZE=256 MATMUL_BATCH_COUNT=2 ./scripts/e2e_matmul_live.sh  # 大矩阵
+```
 
 ### 11.3 意图对话链路（下阶段，与路由守卫一并启用）
 
 1. [ ] 路由守卫 + 角色分流后，user 进入 `/intent-chat`
 2. [x] 发送自然语言，右侧展示解析 draft（API + 页面原型已有）
 3. [ ] 确认意图 → 请求路由 → `mock_router_callback.sh` 回调
-4. [ ] 确认提交后产生 TaskOrder + instance
+4. [x] 确认提交后产生 TaskOrder + instance；Admin 提交后跳转 `/business-tasks?orderId=`
 
 说明：MinIO 当前为 URI 入库，实际上传由 C 节点负责。

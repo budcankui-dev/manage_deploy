@@ -12,12 +12,11 @@
 - **Node Agent** (node_agent/) = 部署在每个 worker 机器上，接收 HTTP 命令控制本地 Docker
 
 ### 网络架构
-- **管理网络**：Task Manager ↔ Node Agents 使用独立的管理接口通信（**IPv4 only**）
-  - 每个 Node Agent 注册时携带其 IPv4 管理地址
-  - Manager 通过 `http://{management_ip}:{agent_port}` 调用 agents
-- **业务网络**：容器间通过 Docker host 网络模式通信（**IPv6 + IPv4 双栈**）
-  - IPv6：2001:db8:1::/64（可配置）
-  - IPv4：10.0.1.0/24（可配置）
+- **控制面（IPv4）**：Manager、MySQL、MinIO、Node Agent API（如 `127.0.0.1:8000/8001`）
+- **数据面（开发）**：`business_ip` 与管理面同源（seed 默认 `127.0.0.1`），`PREFER_BUSINESS_IPV6=false`
+- **数据面（验收）**：节点配置 `business_ipv6`，`PREFER_BUSINESS_IPV6=true`，跑 `scripts/verify_macro_port_e2e.py`
+- **macOS Docker Desktop**：Worker 回调 Manager/MinIO 用 `MANAGER_PUBLIC_URL=http://host.docker.internal:8000`（见 `backend/.env.example`）
+- **业务 Worker**：`workers/high-throughput-matmul/` 三镜像；`./scripts/build_workers.sh` + `scripts/e2e_matmul_live.sh`
 
 ## 技术栈
 - 后端：FastAPI + SQLAlchemy（异步）+ APScheduler + Docker SDK
@@ -104,7 +103,9 @@ docker compose -f docker-compose.agents.yml up -d
 
 ### 业务任务与认证
 - `POST /api/business-tasks` - 标准业务任务接入（含路由 placements）
+- `GET /api/business-tasks` - 业务任务分页列表（含部署状态与评估摘要）
 - `GET /api/business-tasks/summary` - 业务目标成功率统计
+- `GET /api/orders/{id}` - 工单详情（含 business_task / instance / evaluation）
 - `POST /api/auth/login|bootstrap` - 登录与初始化管理员
 
 ### 意图对话与路由（同仓）
@@ -123,4 +124,6 @@ docker compose -f docker-compose.agents.yml up -d
 ### 前端入口
 - `/login` - 登录
 - `/intent-chat` - 普通用户对话入口
-- `/business-tasks` - Admin 业务指标与结果
+- `/business-tasks` - Admin 业务任务中心（默认首页）
+- `/dev/instances` - Admin 运维 / 手动部署
+- `/nodes`、`/templates` - Admin 基础设施

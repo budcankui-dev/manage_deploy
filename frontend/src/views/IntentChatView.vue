@@ -52,7 +52,7 @@
           v-model="utterance"
           type="textarea"
           :rows="4"
-          placeholder="例如：部署低时延视频转发，720p H264，端到端时延低于 200ms"
+          placeholder="例如：跑 64×64 矩阵乘法批处理，计算耗时不超过 60 秒"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -66,10 +66,10 @@
       <el-card class="panel-card">
         <template #header>实时意图参数</template>
         <el-descriptions v-if="draft" :column="1" border size="small">
-          <el-descriptions-item label="任务类型">{{ draft.task_type || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
           <el-descriptions-item label="模态">{{ draft.modality || '-' }}</el-descriptions-item>
           <el-descriptions-item label="解析状态">{{ draft.parse_status }}</el-descriptions-item>
-          <el-descriptions-item label="业务目标">{{ formatObjective(draft.business_objective) }}</el-descriptions-item>
+          <el-descriptions-item label="业务目标">{{ formatObjectiveSentence(draft.business_objective) }}</el-descriptions-item>
           <el-descriptions-item label="Workflow">{{ conversation?.workflow_trace?.engine || '-' }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" />
@@ -123,6 +123,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { conversationApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import { formatObjectiveSentence, taskTypeLabel } from '@/constants/businessTaskDisplay'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -138,11 +139,6 @@ const routing = computed(() => conversation.value?.latest_routing_request || nul
 const canConfirm = computed(() => draft.value && ['incomplete', 'valid'].includes(draft.value.parse_status))
 const canRequestRouting = computed(() => conversation.value?.status === 'awaiting_routing')
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
-
-function formatObjective(objective) {
-  if (!objective?.metric_key) return '-'
-  return `${objective.metric_key} ${objective.operator || '<='} ${objective.target_value}${objective.unit || ''}`
-}
 
 function formatJson(value) {
   return JSON.stringify(value || {}, null, 2)
@@ -234,7 +230,12 @@ async function requestRouting() {
 async function submitTask() {
   const { data: result } = await conversationApi.submit(conversation.value.id, { auto_start: false })
   await refreshConversation()
-  ElMessage.success(`任务已提交，instance_id=${result.instance_id}`)
+  if (auth.isAdmin && result.order_id) {
+    ElMessage.success('任务已提交，正在打开业务任务中心…')
+    await router.push({ path: '/business-tasks', query: { orderId: result.order_id } })
+    return
+  }
+  ElMessage.success(`任务已提交（order=${result.order_id || '-'}，instance=${result.instance_id || '-'}）`)
 }
 
 function updateRoutingPolling() {

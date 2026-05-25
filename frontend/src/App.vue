@@ -13,25 +13,21 @@
         <span>任务编排</span>
       </div>
       <nav class="nav-menu">
+        <router-link to="/business-tasks" class="nav-item">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>业务任务中心</span>
+        </router-link>
         <router-link to="/nodes" class="nav-item">
           <el-icon><Monitor /></el-icon>
-          <span>节点管理</span>
+          <span>工作节点</span>
         </router-link>
         <router-link to="/templates" class="nav-item">
           <el-icon><Document /></el-icon>
           <span>任务模板</span>
         </router-link>
-        <router-link to="/instances" class="nav-item">
+        <router-link to="/dev/instances" class="nav-item">
           <el-icon><List /></el-icon>
-          <span>任务实例</span>
-        </router-link>
-        <router-link to="/batch" class="nav-item">
-          <el-icon><Grid /></el-icon>
-          <span>批量任务</span>
-        </router-link>
-        <router-link to="/business-tasks" class="nav-item">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>业务任务</span>
+          <span>运维 / 手动部署</span>
         </router-link>
       </nav>
       <div class="sidebar-footer">

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # For SQLite during development:
     # database_url: str = "sqlite+aiosqlite:///./task_manager.db"
 
-    agent_request_timeout: int = 30
+    agent_request_timeout: int = 60
     health_check_interval: int = 5
     health_check_timeout: int = 30
     health_check_max_retries: int = 3
@@ -28,10 +28,17 @@ class Settings(BaseSettings):
     auth_bypass_role: str = "admin"
     auth_bypass_username: str = "dev"
 
-    prefer_business_ipv6: bool = True
+    # 开发默认 IPv4（业务面借用管理面）；验收环境在 .env 设为 true 并配置节点 business_ipv6
+    prefer_business_ipv6: bool = False
 
-    minio_endpoint: str = "http://localhost:9000"
+    minio_endpoint: str = "http://host.docker.internal:9000"
     minio_bucket: str = "task-results"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+
+    # Worker 回调 Manager（Docker Desktop 下 host 网络需 host.docker.internal）
+    manager_public_url: str = "http://host.docker.internal:8000"
+    platform_scratch_root: str = "/tmp/manage_deploy"
 
 
 settings = Settings()

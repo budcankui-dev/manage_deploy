@@ -157,20 +157,20 @@ drafting
 
 ### P2 业务容器（后续）
 
-- [ ] A/B/C mock 业务容器（单镜像多 ROLE 或三个 demo 镜像）
-- [ ] 容器上报 metric 到 `POST /api/instances/{id}/metrics`
-- [ ] 触发 `BusinessObjectiveEvaluation` 入库
-- [ ] `GET /api/business-tasks/summary` 成功率正确
+- [x] matmul 三节点 Worker（`workers/high-throughput-matmul/`，替代早期 A/B/C mock 规划）
+- [x] 容器上报 metric 到 `POST /api/instances/{id}/metrics`
+- [x] 触发 `BusinessObjectiveEvaluation` 入库
+- [x] `GET /api/business-tasks/summary` 按工单 + 已评估成功率
 
-**验收：** metric 上报 → business_success 判定 → summary 统计。
+**验收：** metric 上报 → business_success 判定 → summary 统计（`scripts/e2e_matmul_live.sh`）。
 
 ---
 
 ### P3 结果展示
 
 - [ ] docker-compose 增加 MinIO
-- [ ] C 节点上传结果 URI 入库
-- [ ] Admin 页 `/business-tasks` 展示 evaluation 与 results
+- [x] sink 节点结果 URI / checksum 入库（`TaskResultObject` + evaluation `result_metadata`）
+- [x] Admin 页 `/business-tasks` 展示 evaluation 与可读结果摘要
 - [ ] （可选）结果文件预览
 
 **验收：** 完整闭环可演示（mock 容器 + MinIO URI）。

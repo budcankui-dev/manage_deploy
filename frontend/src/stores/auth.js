@@ -14,7 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isBypass = computed(() => BYPASS)
   const isAuthenticated = computed(() => Boolean(token.value) || isBypass.value)
   const isAdmin = computed(() => role.value === 'admin')
-  const homePath = computed(() => (isAdmin.value ? '/instances' : '/intent-chat'))
+  const homePath = computed(() => (isAdmin.value ? '/business-tasks' : '/intent-chat'))
 
   function persist(auth) {
     token.value = auth.access_token || ''

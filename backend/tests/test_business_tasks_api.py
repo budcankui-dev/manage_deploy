@@ -180,6 +180,17 @@ async def test_business_task_create_and_metric_evaluation(client, db_session):
     )
     assert metric_response.status_code == 200
 
+    # reporter 重试或重复上报时不应产生多条 evaluation
+    duplicate_response = await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={
+            "metric_key": "end_to_end_latency_ms",
+            "metric_value": 186.4,
+            "unit": "ms",
+        },
+    )
+    assert duplicate_response.status_code == 200
+
     evaluation_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
     assert evaluation_response.status_code == 200
     evaluation = evaluation_response.json()
@@ -190,5 +201,217 @@ async def test_business_task_create_and_metric_evaluation(client, db_session):
     assert summary_response.status_code == 200
     summary = summary_response.json()
     assert len(summary) == 1
+    assert summary[0]["count"] == 1
+    assert summary[0]["evaluated_count"] == 1
     assert summary[0]["success_count"] == 1
     assert summary[0]["business_success_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_business_task_summary_success_rate_excludes_unevaluated_orders(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+
+    async def create_order(external_id: str):
+        payload = {
+            "external_task_id": external_id,
+            "task_type": "low_latency_video_pipeline",
+            "modality": "low_latency_forwarding",
+            "name": "成功率分母测试",
+            "data_profile": {"profile_id": "video_720p_frame_stream"},
+            "business_objective": {
+                "metric_key": "end_to_end_latency_ms",
+                "operator": "<=",
+                "target_value": 200,
+                "unit": "ms",
+            },
+            "routing_result": {
+                "strategy": "completion_time_first",
+                "placements": {
+                    "source": node_ids[0],
+                    "compute": node_ids[1],
+                    "sink": node_ids[2],
+                },
+            },
+            "auto_start": False,
+        }
+        response = await client.post("/api/business-tasks", json=payload)
+        assert response.status_code == 200
+        return response.json()
+
+    evaluated = await create_order("intent-summary-evaluated")
+    await create_order("intent-summary-pending")
+
+    metric_response = await client.post(
+        f"/api/instances/{evaluated['instance_id']}/metrics",
+        json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
+    )
+    assert metric_response.status_code == 200
+
+    summary_response = await client.get("/api/business-tasks/summary")
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert len(summary) == 1
+    assert summary[0]["count"] == 2
+    assert summary[0]["evaluated_count"] == 1
+    assert summary[0]["success_count"] == 1
+    assert summary[0]["business_success_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_business_task_summary_ignores_orphan_evaluations(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+
+    payload = {
+        "external_task_id": "intent-summary-orphan",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "统计孤儿评估测试",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": {
+                "source": node_ids[0],
+                "compute": node_ids[1],
+                "sink": node_ids[2],
+            },
+        },
+        "auto_start": False,
+    }
+    create_response = await client.post("/api/business-tasks", json=payload)
+    assert create_response.status_code == 200
+    body = create_response.json()
+    order_id = body["order_id"]
+    instance_id = body["instance_id"]
+
+    metric_response = await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
+    )
+    assert metric_response.status_code == 200
+
+    delete_response = await client.delete(f"/api/orders/{order_id}")
+    assert delete_response.status_code == 200
+
+    summary_response = await client.get("/api/business-tasks/summary")
+    assert summary_response.status_code == 200
+    assert summary_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_order_purges_evaluation(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+
+    payload = {
+        "external_task_id": "intent-purge-eval",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "删除级联测试",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": {
+                "source": node_ids[0],
+                "compute": node_ids[1],
+                "sink": node_ids[2],
+            },
+        },
+        "auto_start": False,
+    }
+    create_response = await client.post("/api/business-tasks", json=payload)
+    assert create_response.status_code == 200
+    body = create_response.json()
+    order_id = body["order_id"]
+    instance_id = body["instance_id"]
+
+    await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
+    )
+
+    delete_response = await client.delete(f"/api/orders/{order_id}")
+    assert delete_response.status_code == 200
+
+    eval_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
+    assert eval_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_business_task_list_api(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+
+    payload = {
+        "external_task_id": "intent-list-001",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "列表测试任务",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": {
+                "source": node_ids[0],
+                "compute": node_ids[1],
+                "sink": node_ids[2],
+            },
+        },
+        "auto_start": False,
+    }
+    create_response = await client.post("/api/business-tasks", json=payload)
+    assert create_response.status_code == 200
+    body = create_response.json()
+    order_id = body["order_id"]
+    instance_id = body["instance_id"]
+
+    list_response = await client.get("/api/business-tasks")
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert listed["total"] >= 1
+    assert listed["page"] == 1
+    item = next(row for row in listed["items"] if row["order_id"] == order_id)
+    assert item["task_type"] == "low_latency_video_pipeline"
+    assert item["routing_policy"] == "completion_time_first"
+    assert item["instance_id"] == instance_id
+    assert item["deployment_status"] == "pending"
+    assert item["target_value"] == 200
+    assert item["business_success"] is None
+
+    filtered = await client.get(
+        "/api/business-tasks",
+        params={"task_type": "low_latency_video_pipeline", "routing_policy": "completion_time_first"},
+    )
+    assert filtered.status_code == 200
+    assert any(row["order_id"] == order_id for row in filtered.json()["items"])
+
+    await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
+    )
+    after_metric = await client.get("/api/business-tasks", params={"business_success": True})
+    assert after_metric.status_code == 200
+    success_item = next(row for row in after_metric.json()["items"] if row["order_id"] == order_id)
+    assert success_item["actual_value"] == 150
+    assert success_item["business_success"] is True
+
+    detail_response = await client.get(f"/api/orders/{order_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
+    assert detail["instance"]["id"] == instance_id
+    assert detail["evaluation"]["business_success"] is True

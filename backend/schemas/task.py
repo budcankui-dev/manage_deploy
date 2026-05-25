@@ -1,6 +1,6 @@
 from typing import Optional, Any
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 from datetime import datetime
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
@@ -283,6 +283,7 @@ class TaskOrderResponse(BaseModel):
     runtime_config: Optional[dict] = None
     status: OrderStatus
     materialized_instance_id: Optional[str] = None
+    instance_exists: Optional[bool] = None
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -328,9 +329,18 @@ class BusinessObjective(BaseModel):
 
 
 class RoutingResult(BaseModel):
-    strategy: str = "resource_guarantee"
+    strategy: str = Field(
+        default="resource_guarantee",
+        validation_alias=AliasChoices("strategy", "routing_policy"),
+    )
     placements: dict[str, str]
     estimated_metric: Optional[dict[str, Any]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @property
+    def routing_policy(self) -> str:
+        return self.strategy
 
 
 class BusinessTaskCreate(BaseModel):
@@ -353,6 +363,61 @@ class BusinessTaskResponse(BaseModel):
     instance_id: str
     task_type: str
     status: str
+
+
+class BusinessTaskListItem(BaseModel):
+    order_id: str
+    external_task_id: Optional[str] = None
+    name: str
+    task_type: Optional[str] = None
+    modality: Optional[str] = None
+    routing_policy: Optional[str] = None
+    order_status: OrderStatus
+    instance_id: Optional[str] = None
+    instance_exists: Optional[bool] = None
+    deployment_status: Optional[TaskStatus] = None
+    metric_key: Optional[str] = None
+    target_value: Optional[float] = None
+    actual_value: Optional[float] = None
+    unit: Optional[str] = None
+    business_success: Optional[bool] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class BusinessTaskListResponse(BaseModel):
+    items: list[BusinessTaskListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class TaskOrderInstanceSummary(BaseModel):
+    id: str
+    status: TaskStatus
+    node_count: int
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class TaskOrderEvaluationSummary(BaseModel):
+    metric_key: str
+    actual_value: float
+    target_value: float
+    unit: Optional[str] = None
+    business_success: bool
+    failure_reason: Optional[str] = None
+    estimated_value: Optional[float] = None
+    estimation_error_ratio: Optional[float] = None
+    result_metadata: Optional[dict[str, Any]] = None
+
+
+class TaskOrderDetailResponse(TaskOrderResponse):
+    business_task: Optional[dict[str, Any]] = None
+    routing_result: Optional[dict[str, Any]] = None
+    instance: Optional[TaskOrderInstanceSummary] = None
+    evaluation: Optional[TaskOrderEvaluationSummary] = None
 
 
 class BusinessTemplateCatalogCreate(BaseModel):

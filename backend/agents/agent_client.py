@@ -3,14 +3,15 @@ from typing import Optional
 
 import httpx
 
+from config import settings
 from schemas import ContainerStartRequest, ContainerStatus, ContainerLogsResponse
 
 logger = logging.getLogger(__name__)
 
 
 class AgentClient:
-    def __init__(self, timeout: int = 30, agent_port: int = 8001):
-        self.timeout = timeout
+    def __init__(self, timeout: int | None = None, agent_port: int = 8001):
+        self.timeout = timeout if timeout is not None else settings.agent_request_timeout
         self.agent_port = agent_port
 
     def _build_url(self, endpoint: str, path: str) -> str:

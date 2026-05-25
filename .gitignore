@@ -5,6 +5,9 @@ frontend/dist/
 frontend/.vite/
 .vite/
 backend/.env
+frontend/.env
+.cursor/
+.playwright-mcp/
 backend/task_manager.db
 backend/.pytest_cache/
 .playwright-cli/

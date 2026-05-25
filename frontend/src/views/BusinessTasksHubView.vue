@@ -1,0 +1,849 @@
+<template>
+  <div class="hub-view">
+    <header class="page-header">
+      <div>
+        <h1>业务任务中心</h1>
+        <p class="subtitle">统一管理意图接入、路由放置、部署运行与业务目标评估。</p>
+      </div>
+      <div class="actions">
+        <el-button @click="refreshAll">刷新</el-button>
+        <el-button type="primary" plain :loading="demoRunning" @click="submitSample">
+          一键演示矩阵乘法
+        </el-button>
+      </div>
+    </header>
+
+    <el-collapse v-model="summaryOpen">
+      <el-collapse-item title="按任务类型和路由策略统计" name="summary">
+        <el-table :data="summary" size="small" v-loading="summaryLoading">
+          <el-table-column prop="task_type" label="任务类型" min-width="180" />
+          <el-table-column label="路由策略" min-width="140">
+            <template #default="{ row }">{{ routingPolicyLabel(row.routing_strategy) }}</template>
+          </el-table-column>
+          <el-table-column prop="count" label="工单数" width="80" />
+          <el-table-column label="已评估" width="80">
+            <template #default="{ row }">{{ row.evaluated_count ?? 0 }}</template>
+          </el-table-column>
+          <el-table-column label="成功率" min-width="140">
+            <template #default="{ row }">
+              <span v-if="row.business_success_rate == null">-</span>
+              <span v-else>{{ successRateLabel(row) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-collapse-item>
+    </el-collapse>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>业务任务列表</h2>
+        <div class="filters">
+          <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="loadList" />
+          <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="loadList">
+            <el-option v-for="t in taskTypeOptions" :key="t" :label="t" :value="t" />
+          </el-select>
+          <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="loadList">
+            <el-option v-for="(label, key) in ROUTING_POLICY_LABELS" :key="key" :label="label" :value="key" />
+          </el-select>
+          <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="loadList">
+            <el-option v-for="(label, key) in ORDER_STATUS_LABELS" :key="key" :label="label" :value="key" />
+          </el-select>
+          <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="loadList">
+            <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
+          </el-select>
+          <el-select v-model="filters.business_success" placeholder="业务结果" clearable style="width: 120px" @change="loadList">
+            <el-option label="成功" :value="true" />
+            <el-option label="失败" :value="false" />
+          </el-select>
+          <el-checkbox v-model="filters.include_cancelled" @change="loadList">显示已取消</el-checkbox>
+        </div>
+      </div>
+
+      <el-table :data="items" size="small" v-loading="listLoading">
+        <el-table-column prop="name" label="名称" min-width="160" />
+        <el-table-column label="任务类型" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tooltip v-if="row.task_type" :content="row.task_type" placement="top">
+              <span class="task-type-cell">{{ taskTypeLabel(row.task_type) }}</span>
+            </el-tooltip>
+            <span v-else>-</span>
+            <small v-if="row.task_type && taskTypeLabel(row.task_type) !== row.task_type" class="task-type-code">{{ row.task_type }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="路由策略" min-width="130">
+          <template #default="{ row }">{{ routingPolicyLabel(row.routing_policy) }}</template>
+        </el-table-column>
+        <el-table-column label="工单状态" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="orderStatusTag(row.order_status)">{{ ORDER_STATUS_LABELS[row.order_status] || row.order_status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="部署状态" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.instance_exists === false" size="small" type="warning">实例已删除</el-tag>
+            <el-tag v-else-if="row.deployment_status" size="small" :type="deploymentStatusTag(row.deployment_status)">
+              {{ DEPLOYMENT_STATUS_LABELS[row.deployment_status] || row.deployment_status }}
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="目标 / 实际" min-width="150">
+          <template #default="{ row }">
+            <span v-if="row.target_value != null">
+              {{ formatMetric(row.actual_value) }} / {{ formatMetric(row.target_value) }} {{ row.unit || '' }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="业务成功" width="90">
+          <template #default="{ row }">
+            <el-tag v-if="row.business_success === true" type="success" size="small">成功</el-tag>
+            <el-tag v-else-if="row.business_success === false" type="danger" size="small">失败</el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" min-width="160">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openDetail(row.order_id)">详情</el-button>
+            <el-button
+              v-if="row.instance_id && row.instance_exists !== false && canStart(row.deployment_status)"
+              link
+              type="success"
+              @click="startInstance(row.instance_id)"
+            >启动</el-button>
+            <el-button
+              v-if="row.instance_id && row.instance_exists !== false && row.deployment_status === 'running'"
+              link
+              type="warning"
+              @click="stopInstance(row.instance_id)"
+            >停止</el-button>
+            <el-button link type="danger" @click="deleteOrder(row.order_id)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="total" class="pagination-wrap">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          background
+          layout="total, sizes, prev, pager, next"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          @current-change="loadList"
+          @size-change="loadList"
+        />
+      </div>
+    </section>
+
+    <el-drawer v-model="drawerOpen" :title="detailTitle" size="62%" destroy-on-close class="task-detail-drawer">
+      <el-tabs v-model="detailTab" v-loading="detailLoading" class="detail-tabs">
+        <el-tab-pane label="业务" name="business">
+          <template v-if="orderDetail?.business_task">
+            <p v-if="detailTaskSummary" class="task-summary">{{ detailTaskSummary }}</p>
+            <el-descriptions :column="1" border class="detail-desc">
+              <el-descriptions-item label="外部任务ID">{{ orderDetail.external_task_id || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="任务类型">{{ taskTypeLabel(orderDetail.business_task.task_type) }}</el-descriptions-item>
+              <el-descriptions-item label="模态">{{ orderDetail.business_task.modality || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="描述">{{ orderDetail.description || orderDetail.business_task.description || '-' }}</el-descriptions-item>
+            </el-descriptions>
+
+            <h3 class="section-title">数据画像</h3>
+            <el-descriptions v-if="detailDataProfileRows.length" :column="1" border class="detail-desc">
+              <el-descriptions-item v-for="row in detailDataProfileRows" :key="row.label" :label="row.label">
+                {{ row.value }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-collapse v-if="orderDetail.business_task.data_profile" class="raw-collapse">
+              <el-collapse-item title="原始 JSON" name="data_profile">
+                <pre class="json-block">{{ pretty(orderDetail.business_task.data_profile) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h3 class="section-title">业务目标</h3>
+            <div class="objective-card">
+              <p class="objective-headline">{{ detailObjectiveSentence }}</p>
+              <p class="objective-meaning">{{ detailObjectiveMeaning }}</p>
+            </div>
+            <el-collapse v-if="orderDetail.business_task.business_objective" class="raw-collapse">
+              <el-collapse-item title="原始 JSON" name="objective">
+                <pre class="json-block">{{ pretty(orderDetail.business_task.business_objective) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h3 class="section-title">运行计划</h3>
+            <el-descriptions v-if="detailRuntimePlanRows.length" :column="1" border class="detail-desc">
+              <el-descriptions-item v-for="row in detailRuntimePlanRows" :key="row.label" :label="row.label">
+                {{ row.value }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-collapse v-if="orderDetail.business_task.runtime_plan" class="raw-collapse">
+              <el-collapse-item title="原始 JSON" name="runtime_plan">
+                <pre class="json-block">{{ pretty(orderDetail.business_task.runtime_plan) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+          </template>
+          <el-empty v-else description="无业务任务数据" />
+        </el-tab-pane>
+
+        <el-tab-pane label="路由" name="routing">
+          <template v-if="orderDetail?.routing_result">
+            <el-descriptions :column="1" border class="detail-desc">
+              <el-descriptions-item label="路由策略">
+                {{ routingPolicyLabel(orderDetail.routing_result.strategy || orderDetail.routing_result.routing_policy) }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <h3 class="section-title">节点放置</h3>
+            <el-table :data="placementRows" size="small">
+              <el-table-column prop="role" label="角色" width="120" />
+              <el-table-column prop="node_id" label="节点 ID" min-width="220" />
+            </el-table>
+          </template>
+          <el-empty v-else description="无路由结果" />
+        </el-tab-pane>
+
+        <el-tab-pane label="部署" name="deployment">
+          <template v-if="orderDetail?.instance">
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="实例 ID">{{ orderDetail.instance.id }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <el-tag :type="deploymentStatusTag(orderDetail.instance.status)">
+                  {{ DEPLOYMENT_STATUS_LABELS[orderDetail.instance.status] || orderDetail.instance.status }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="节点数">{{ orderDetail.instance.node_count }}</el-descriptions-item>
+              <el-descriptions-item label="错误">{{ orderDetail.instance.error_message || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <div class="deploy-actions">
+              <el-button v-if="canStart(instanceDetail?.status)" type="primary" @click="startInstance(orderDetail.instance.id)">启动</el-button>
+              <el-button v-if="instanceDetail?.status === 'running'" type="warning" @click="stopInstance(orderDetail.instance.id)">停止</el-button>
+              <el-button
+                v-if="orderDetail.instance.id"
+                @click="$router.push(`/dev/instances/${orderDetail.instance.id}`)"
+              >完整实例页</el-button>
+            </div>
+            <h3 class="section-title">节点列表</h3>
+            <el-table v-if="instanceDetail?.nodes?.length" :data="instanceDetail.nodes" size="small">
+              <el-table-column prop="name" label="节点" width="120" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="image" label="镜像" min-width="180" />
+              <el-table-column prop="container_id" label="容器" min-width="160" />
+            </el-table>
+          </template>
+          <el-empty v-else description="尚未部署实例" />
+        </el-tab-pane>
+
+        <el-tab-pane label="结果" name="result">
+          <template v-if="detailComputeSummary.length">
+            <div class="result-verdict" :class="resultVerdictClass">
+              <strong>{{ resultVerdictTitle }}</strong>
+              <p>{{ resultVerdictSubtitle }}</p>
+            </div>
+            <el-descriptions :column="1" border class="detail-desc">
+              <el-descriptions-item v-for="row in detailComputeSummary" :key="row.label" :label="row.label">
+                <span :class="row.highlight ? `text-${row.highlight}` : ''">{{ row.value }}</span>
+                <p v-if="row.hint" class="field-hint">{{ row.hint }}</p>
+              </el-descriptions-item>
+            </el-descriptions>
+          </template>
+          <template v-else-if="orderDetail?.evaluation">
+            <div class="result-verdict" :class="resultVerdictClass">
+              <strong>{{ resultVerdictTitle }}</strong>
+              <p>{{ describeObjectiveMeaning(detailTaskType, orderDetail.business_task?.business_objective) }}</p>
+            </div>
+            <el-descriptions :column="1" border class="detail-desc">
+              <el-descriptions-item label="指标">{{ orderDetail.evaluation.metric_key }}</el-descriptions-item>
+              <el-descriptions-item label="实际 / 目标">
+                {{ orderDetail.evaluation.actual_value }} / {{ orderDetail.evaluation.target_value }} {{ orderDetail.evaluation.unit || '' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="业务成功">
+                <el-tag :type="orderDetail.evaluation.business_success ? 'success' : 'danger'">
+                  {{ orderDetail.evaluation.business_success ? '达标' : '未达标' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="orderDetail.evaluation.failure_reason" label="失败原因">
+                {{ orderDetail.evaluation.failure_reason }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </template>
+          <el-empty v-else description="任务尚未跑完或未上报业务指标" />
+          <h3 v-if="resultObjects.length" class="section-title">结果文件</h3>
+          <el-table v-if="resultObjects.length" :data="resultObjects" size="small">
+            <el-table-column prop="name" label="文件名" />
+            <el-table-column prop="uri" label="URI" min-width="260" />
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+    </el-drawer>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import dayjs from 'dayjs'
+import { ElMessage } from 'element-plus'
+import { businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
+import {
+  DEPLOYMENT_STATUS_LABELS,
+  ORDER_STATUS_LABELS,
+  ROUTING_POLICY_LABELS,
+  routingPolicyLabel,
+} from '@/constants/routingPolicy'
+import {
+  buildComputeResultSummary,
+  describeDataProfile,
+  describeObjectiveMeaning,
+  describeRuntimePlan,
+  formatObjectiveSentence,
+  taskTypeLabel,
+  taskTypeSummary,
+} from '@/constants/businessTaskDisplay'
+
+const route = useRoute()
+const router = useRouter()
+const demoRunning = ref(false)
+const summaryOpen = ref(['summary'])
+const summary = ref([])
+const summaryLoading = ref(false)
+const listLoading = ref(false)
+const detailLoading = ref(false)
+const items = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
+const nodes = ref([])
+
+const filters = reactive({
+  q: '',
+  task_type: '',
+  routing_policy: '',
+  order_status: '',
+  deployment_status: '',
+  business_success: '',
+  include_cancelled: false,
+})
+
+const drawerOpen = ref(false)
+const detailTab = ref('business')
+const orderDetail = ref(null)
+const instanceDetail = ref(null)
+const resultObjects = ref([])
+
+const taskTypeOptions = computed(() => {
+  const fromSummary = summary.value.map((row) => row.task_type).filter(Boolean)
+  const fromList = items.value.map((row) => row.task_type).filter(Boolean)
+  return [...new Set([...fromSummary, ...fromList])]
+})
+
+const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
+
+const placementRows = computed(() => {
+  const placements = orderDetail.value?.routing_result?.placements || {}
+  return Object.entries(placements).map(([role, node_id]) => ({ role, node_id }))
+})
+
+const detailTaskType = computed(() => orderDetail.value?.business_task?.task_type || '')
+const detailTaskSummary = computed(() => taskTypeSummary(detailTaskType.value))
+const detailObjectiveSentence = computed(() =>
+  formatObjectiveSentence(orderDetail.value?.business_task?.business_objective)
+)
+const detailObjectiveMeaning = computed(() =>
+  describeObjectiveMeaning(detailTaskType.value, orderDetail.value?.business_task?.business_objective)
+)
+const detailDataProfileRows = computed(() =>
+  describeDataProfile(detailTaskType.value, orderDetail.value?.business_task?.data_profile)
+)
+const detailRuntimePlanRows = computed(() =>
+  describeRuntimePlan(detailTaskType.value, orderDetail.value?.business_task?.runtime_plan)
+)
+const detailComputeSummary = computed(() =>
+  buildComputeResultSummary(
+    detailTaskType.value,
+    orderDetail.value?.business_task,
+    orderDetail.value?.evaluation,
+    orderDetail.value?.evaluation?.result_metadata
+  ) || []
+)
+const resultVerdictClass = computed(() => {
+  const evaluation = orderDetail.value?.evaluation
+  if (!evaluation) return 'pending'
+  return evaluation.business_success ? 'success' : 'danger'
+})
+const resultVerdictTitle = computed(() => {
+  const evaluation = orderDetail.value?.evaluation
+  if (!evaluation) return '等待计算结果'
+  return evaluation.business_success ? '业务目标已达成' : '业务目标未达成'
+})
+const resultVerdictSubtitle = computed(() => {
+  const evaluation = orderDetail.value?.evaluation
+  const taskType = detailTaskType.value
+  if (!evaluation) {
+    if (taskType === 'high_throughput_matmul') {
+      return '启动实例并完成矩阵乘法后，sink 节点会上报 compute_latency_ms 与结果校验和。'
+    }
+    return '任务跑完并上报指标后，将在此展示是否达标。'
+  }
+  if (evaluation.business_success) {
+    return `实际 ${evaluation.actual_value} ${evaluation.unit || ''}，满足目标 ${formatObjectiveSentence(orderDetail.value?.business_task?.business_objective)}。`
+  }
+  return evaluation.failure_reason || '未满足业务目标阈值。'
+})
+
+onMounted(async () => {
+  await refreshAll()
+  const orderId = route.query.orderId
+  if (typeof orderId === 'string' && orderId) {
+    await openDetail(orderId, 'result')
+    router.replace({ query: {} })
+  }
+})
+
+watch(
+  () => route.query.orderId,
+  async (orderId) => {
+    if (typeof orderId === 'string' && orderId) {
+      await openDetail(orderId, 'result')
+      router.replace({ query: {} })
+    }
+  }
+)
+
+function percent(value) {
+  return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`
+}
+
+function successRateLabel(row) {
+  const rate = percent(row.business_success_rate)
+  const evaluated = row.evaluated_count ?? 0
+  const success = row.success_count ?? 0
+  return `${rate}（${success}/${evaluated}）`
+}
+
+function formatMetric(value) {
+  return value == null ? '-' : Number(value)
+}
+
+function formatTime(value) {
+  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+}
+
+function pretty(value) {
+  if (value == null) return '-'
+  return JSON.stringify(value, null, 2)
+}
+
+function orderStatusTag(status) {
+  return { pending: 'info', materialized: 'success', failed: 'danger', cancelled: 'warning' }[status] || 'info'
+}
+
+function deploymentStatusTag(status) {
+  return {
+    pending: 'info',
+    scheduled: 'info',
+    starting: 'warning',
+    running: 'success',
+    stopping: 'warning',
+    stopped: 'info',
+    failed: 'danger',
+    expired: 'warning',
+  }[status] || 'info'
+}
+
+function canStart(status) {
+  return ['pending', 'stopped', 'failed'].includes(status)
+}
+
+async function refreshAll() {
+  await Promise.all([loadSummary(), loadList(), loadNodes()])
+}
+
+async function loadSummary() {
+  summaryLoading.value = true
+  try {
+    const { data } = await businessApi.summary()
+    summary.value = data
+  } finally {
+    summaryLoading.value = false
+  }
+}
+
+async function loadNodes() {
+  const { data } = await nodesApi.list()
+  nodes.value = data
+}
+
+async function loadList() {
+  listLoading.value = true
+  try {
+    const params = {
+      page: page.value,
+      page_size: pageSize.value,
+      include_cancelled: filters.include_cancelled,
+    }
+    if (filters.q) params.q = filters.q
+    if (filters.task_type) params.task_type = filters.task_type
+    if (filters.routing_policy) params.routing_policy = filters.routing_policy
+    if (filters.order_status) params.order_status = filters.order_status
+    if (filters.deployment_status) params.deployment_status = filters.deployment_status
+    if (filters.business_success !== '' && filters.business_success != null) {
+      params.business_success = filters.business_success
+    }
+    const { data } = await businessApi.list(params)
+    items.value = data.items
+    total.value = data.total
+  } finally {
+    listLoading.value = false
+  }
+}
+
+async function openDetail(orderId, tab = 'business') {
+  drawerOpen.value = true
+  detailTab.value = tab
+  detailLoading.value = true
+  orderDetail.value = null
+  instanceDetail.value = null
+  resultObjects.value = []
+  try {
+    const { data } = await ordersApi.get(orderId)
+    orderDetail.value = data
+    if (data.instance?.id) {
+      const [instResp, objectsResp] = await Promise.all([
+        instancesApi.get(data.instance.id),
+        businessApi.results(data.instance.id).catch(() => ({ data: [] })),
+      ])
+      instanceDetail.value = instResp.data
+      resultObjects.value = objectsResp.data
+    }
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function startInstance(instanceId) {
+  await instancesApi.start(instanceId)
+  ElMessage.success('实例已启动')
+  await refreshAll()
+  if (orderDetail.value?.instance?.id === instanceId) {
+    await openDetail(orderDetail.value.id)
+  }
+}
+
+async function stopInstance(instanceId) {
+  await instancesApi.stop(instanceId)
+  ElMessage.success('实例已停止')
+  await refreshAll()
+  if (orderDetail.value?.instance?.id === instanceId) {
+    await openDetail(orderDetail.value.id)
+  }
+}
+
+async function deleteOrder(orderId) {
+  await ordersApi.delete(orderId)
+  ElMessage.success('工单已删除')
+  drawerOpen.value = false
+  await refreshAll()
+}
+
+async function waitForEvaluation(instanceId, maxAttempts = 80, intervalMs = 3000) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const { data } = await businessApi.evaluation(instanceId)
+      if (data && data.actual_value != null) {
+        return data
+      }
+    } catch (error) {
+      if (error.response?.status !== 404) {
+        throw error
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  return null
+}
+
+async function submitSample() {
+  if (nodes.value.length < 3) {
+    ElMessage.error('至少需要 3 个工作节点才能提交示例任务')
+    return
+  }
+  demoRunning.value = true
+  const payload = {
+    external_task_id: `matmul-ui-${Date.now()}`,
+    task_type: 'high_throughput_matmul',
+    modality: 'high_throughput_compute',
+    name: '矩阵乘法示例任务',
+    description: '演示科学计算流水线：三节点 batched 矩阵乘法，以计算耗时验收是否达标。',
+    data_profile: {
+      profile_id: 'matmul_dev',
+      matrix_size: 64,
+      batch_count: 1,
+      seed: 42,
+    },
+    business_objective: {
+      metric_key: 'compute_latency_ms',
+      operator: '<=',
+      target_value: 60000,
+      unit: 'ms',
+    },
+    runtime_plan: {
+      algorithm: 'batched_matmul',
+      precision: 'fp32',
+      use_gpu: false,
+    },
+    routing_result: {
+      strategy: 'completion_time_first',
+      placements: {
+        source: nodes.value[0].id,
+        compute: nodes.value[1].id,
+        sink: nodes.value[2].id,
+      },
+      estimated_metric: { metric_key: 'compute_latency_ms', metric_value: 5000, unit: 'ms' },
+    },
+    result_storage: { backend: 'minio', bucket: 'task-results' },
+    auto_start: true,
+  }
+  try {
+    const { data } = await businessApi.submit(payload)
+    ElMessage.info('任务已提交并自动启动，等待计算完成…')
+    await refreshAll()
+    const evaluation = await waitForEvaluation(data.instance_id)
+    await refreshAll()
+    if (evaluation) {
+      ElMessage.success('演示完成，可在结果 Tab 查看计算内容与是否达标')
+      await openDetail(data.order_id, 'result')
+    } else {
+      ElMessage.warning('任务已启动，评估结果尚未就绪，请稍后刷新或打开详情')
+      await openDetail(data.order_id, 'deployment')
+    }
+  } finally {
+    demoRunning.value = false
+  }
+}
+</script>
+
+<style scoped>
+.hub-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+.card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--bg-secondary);
+}
+
+.card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-header h2 {
+  margin: 0;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.section-title {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.task-summary {
+  margin: 0 0 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.task-type-cell {
+  display: block;
+}
+
+.task-type-code {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.objective-card {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+}
+
+.objective-headline {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.objective-meaning {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.raw-collapse {
+  margin-top: 8px;
+}
+
+.result-verdict {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+}
+
+.result-verdict strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.result-verdict p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.result-verdict.success {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.result-verdict.danger {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.result-verdict.pending {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.text-success {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.text-danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.json-block {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+
+.deploy-actions {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0;
+}
+</style>
+
+<style>
+.task-detail-drawer.el-drawer {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.task-detail-drawer .el-drawer__header {
+  margin-bottom: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.task-detail-drawer .el-drawer__title {
+  color: var(--text-primary);
+}
+
+.task-detail-drawer .el-drawer__body {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.task-detail-drawer .el-tabs__item {
+  color: var(--text-secondary);
+}
+
+.task-detail-drawer .el-tabs__item.is-active {
+  color: var(--accent-secondary);
+}
+
+.task-detail-drawer .detail-desc .el-descriptions__label,
+.task-detail-drawer .detail-desc .el-descriptions__content {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-subtle) !important;
+}
+
+.task-detail-drawer .raw-collapse .el-collapse-item__header {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.task-detail-drawer .raw-collapse .el-collapse-item__wrap,
+.task-detail-drawer .raw-collapse .el-collapse-item__content {
+  background: transparent;
+  border-color: var(--border-subtle);
+}
+</style>

@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:display": "node scripts/test-businessTaskDisplay.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0",

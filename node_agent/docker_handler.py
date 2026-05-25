@@ -15,9 +15,8 @@ class DockerHandler:
 
     def get_container(self, container_name: str) -> Optional[docker.models.containers.Container]:
         try:
-            for container in self.client.containers.list(all=True):
-                if container.name == container_name:
-                    return container
+            return self.client.containers.get(container_name)
+        except docker.errors.NotFound:
             return None
         except docker.errors.APIError as e:
             logger.error(f"Error getting container {container_name}: {e}")
@@ -127,7 +126,7 @@ class DockerHandler:
         except ValueError as e:
             return False, None, str(e)
 
-    def stop_container(self, container_name: str) -> tuple[bool, Optional[str]]:
+    def stop_container(self, container_name: str, timeout: int = 5) -> tuple[bool, Optional[str]]:
         try:
             container = self.get_container(container_name)
             if not container:
@@ -137,9 +136,12 @@ class DockerHandler:
 
             if container.status in {"running", "restarting", "paused"}:
                 try:
-                    container.stop(timeout=30)
-                except docker.errors.APIError:
-                    container.kill()
+                    container.stop(timeout=timeout)
+                except (docker.errors.APIError, Exception):
+                    try:
+                        container.kill()
+                    except docker.errors.APIError as e:
+                        return False, str(e)
                 return True, None
 
             return True, None
@@ -155,9 +157,9 @@ class DockerHandler:
             container.reload()
             if container.status in {"running", "restarting", "paused"}:
                 try:
-                    container.stop(timeout=30)
-                except docker.errors.APIError:
                     container.kill()
+                except docker.errors.APIError:
+                    pass
 
             container.remove(force=True)
             return True, None

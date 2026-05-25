@@ -63,6 +63,37 @@ async def init_db() -> None:
         await _ensure_column(conn, "task_instance_nodes", "port_defs", "JSON")
         await _ensure_column(conn, "task_instance_nodes", "port_values", "JSON")
         await _ensure_column(conn, "task_instances", "source_order_id", "VARCHAR(36)")
+    await _ensure_default_users()
+
+
+async def _ensure_default_users() -> None:
+    """开发环境默认账号：admin/admin（管理员）、user/user（普通用户）。"""
+    from sqlalchemy import select
+
+    from enums import UserRole
+    from models import User
+
+    from api.auth import hash_password
+
+    defaults = [
+        ("admin", "admin", UserRole.ADMIN),
+        ("user", "user", UserRole.USER),
+    ]
+    async with async_session_maker() as session:
+        for username, password, role in defaults:
+            exists = (
+                await session.execute(select(User).where(User.username == username))
+            ).scalar_one_or_none()
+            if exists:
+                continue
+            session.add(
+                User(
+                    username=username,
+                    password_hash=hash_password(password),
+                    role=role,
+                )
+            )
+        await session.commit()
 
 
 async def _ensure_column(conn, table_name: str, column_name: str, column_type: str) -> None:

@@ -1,70 +1,114 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const ADMIN_ROUTES = new Set([
+  'Nodes',
+  'Templates',
+  'TemplateNew',
+  'TemplateDetail',
+  'DevInstances',
+  'InstanceDetail',
+  'BusinessTasksHub',
+])
 
 const routes = [
   {
     path: '/',
-    redirect: '/instances'
+    redirect: () => {
+      const auth = useAuthStore()
+      return auth.homePath
+    },
   },
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/LoginView.vue')
+    component: () => import('@/views/LoginView.vue'),
+    meta: { public: true },
   },
   {
     path: '/register',
     name: 'Register',
-    component: () => import('@/views/RegisterView.vue')
+    component: () => import('@/views/RegisterView.vue'),
+    meta: { public: true },
   },
   {
     path: '/intent-chat',
     name: 'IntentChat',
-    component: () => import('@/views/IntentChatView.vue')
+    component: () => import('@/views/IntentChatView.vue'),
   },
   {
     path: '/nodes',
     name: 'Nodes',
-    component: () => import('@/views/NodesView.vue')
+    component: () => import('@/views/NodesView.vue'),
   },
   {
     path: '/templates',
     name: 'Templates',
-    component: () => import('@/views/TemplatesView.vue')
+    component: () => import('@/views/TemplatesView.vue'),
   },
   {
     path: '/templates/new',
     name: 'TemplateNew',
-    component: () => import('@/views/TemplateDetailView.vue')
+    component: () => import('@/views/TemplateDetailView.vue'),
   },
   {
     path: '/templates/:id',
     name: 'TemplateDetail',
-    component: () => import('@/views/TemplateDetailView.vue')
+    component: () => import('@/views/TemplateDetailView.vue'),
+  },
+  {
+    path: '/dev/instances',
+    name: 'DevInstances',
+    component: () => import('@/views/InstancesView.vue'),
+  },
+  {
+    path: '/dev/instances/:id',
+    name: 'InstanceDetail',
+    component: () => import('@/views/InstanceDetailView.vue'),
   },
   {
     path: '/instances',
-    name: 'Instances',
-    component: () => import('@/views/InstancesView.vue')
+    redirect: '/dev/instances',
   },
   {
     path: '/instances/:id',
-    name: 'InstanceDetail',
-    component: () => import('@/views/InstanceDetailView.vue')
+    redirect: (to) => `/dev/instances/${to.params.id}`,
   },
   {
     path: '/batch',
-    name: 'Batch',
-    component: () => import('@/views/BatchView.vue')
+    redirect: '/business-tasks',
   },
   {
     path: '/business-tasks',
-    name: 'BusinessTasks',
-    component: () => import('@/views/BusinessTasksView.vue')
-  }
+    name: 'BusinessTasksHub',
+    component: () => import('@/views/BusinessTasksHubView.vue'),
+  },
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
+})
+
+router.beforeEach((to) => {
+  const auth = useAuthStore()
+
+  if (to.meta.public) {
+    if (auth.isAuthenticated && (to.name === 'Login' || to.name === 'Register')) {
+      return auth.homePath
+    }
+    return true
+  }
+
+  if (!auth.isAuthenticated) {
+    return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+
+  if (ADMIN_ROUTES.has(to.name) && !auth.isAdmin) {
+    return auth.homePath
+  }
+
+  return true
 })
 
 export default router

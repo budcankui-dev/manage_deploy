@@ -1,12 +1,12 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
-from enums import OrderStatus
+from enums import OrderStatus, TaskStatus
 from models import (
     BusinessObjectiveEvaluation,
     BusinessTemplateCatalog,
@@ -18,6 +18,7 @@ from schemas import (
     BusinessObjectiveEvaluationResponse,
     BusinessObjectiveEvaluationResult,
     BusinessTaskCreate,
+    BusinessTaskListResponse,
     BusinessTaskResponse,
     BusinessTemplateCatalogCreate,
     BusinessTemplateCatalogResponse,
@@ -26,6 +27,11 @@ from schemas import (
     TaskResultObjectResponse,
 )
 from services.business_evaluator import evaluate_business_objective
+from services.business_task_query import (
+    BusinessTaskListFilters,
+    list_business_tasks,
+    summarize_business_tasks,
+)
 
 from .instances import _create_instance_from_template
 
@@ -55,6 +61,7 @@ def build_instance_create_from_business_task(
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
         env = dict(shared_env)
         env["TASK_ROLE"] = role
+        env["PLATFORM_SCRATCH"] = "1"
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
@@ -93,6 +100,29 @@ async def create_business_template_catalog(
 async def list_business_template_catalog(db: AsyncSession = Depends(get_db)):
     rows = await db.execute(select(BusinessTemplateCatalog).order_by(BusinessTemplateCatalog.task_type.asc()))
     return rows.scalars().all()
+
+
+@router.put("/business-template-catalog/{task_type}", response_model=BusinessTemplateCatalogResponse)
+async def upsert_business_template_catalog(
+    task_type: str,
+    payload: BusinessTemplateCatalogCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.task_type != task_type:
+        raise HTTPException(status_code=400, detail="task_type in body must match path")
+    result = await db.execute(
+        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.task_type == task_type)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        for key, value in payload.model_dump().items():
+            setattr(row, key, value)
+    else:
+        row = BusinessTemplateCatalog(**payload.model_dump())
+        db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
 
 
 @router.post("/business-tasks", response_model=BusinessTaskResponse)
@@ -149,6 +179,33 @@ async def create_business_task(payload: BusinessTaskCreate, db: AsyncSession = D
         raise
 
 
+@router.get("/business-tasks", response_model=BusinessTaskListResponse)
+async def list_business_tasks_api(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    task_type: str | None = None,
+    routing_policy: str | None = None,
+    order_status: OrderStatus | None = None,
+    deployment_status: TaskStatus | None = None,
+    business_success: bool | None = None,
+    q: str | None = None,
+    include_cancelled: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    filters = BusinessTaskListFilters(
+        page=page,
+        page_size=page_size,
+        task_type=task_type,
+        routing_policy=routing_policy,
+        order_status=order_status,
+        deployment_status=deployment_status,
+        business_success=business_success,
+        q=q,
+        include_cancelled=include_cancelled,
+    )
+    return await list_business_tasks(db, filters)
+
+
 @router.get("/business-tasks/{instance_id}/evaluation", response_model=BusinessObjectiveEvaluationResponse)
 async def get_business_task_evaluation(instance_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -174,27 +231,7 @@ async def list_business_task_results(instance_id: str, db: AsyncSession = Depend
 
 @router.get("/business-tasks/summary")
 async def business_task_summary(db: AsyncSession = Depends(get_db)):
-    rows = await db.execute(
-        select(
-            BusinessObjectiveEvaluation.task_type,
-            BusinessObjectiveEvaluation.routing_strategy,
-            func.count(BusinessObjectiveEvaluation.id),
-            func.sum(BusinessObjectiveEvaluation.business_success),
-            func.avg(BusinessObjectiveEvaluation.estimation_error_ratio),
-        )
-        .group_by(BusinessObjectiveEvaluation.task_type, BusinessObjectiveEvaluation.routing_strategy)
-    )
-    return [
-        {
-            "task_type": row[0],
-            "routing_strategy": row[1],
-            "count": row[2],
-            "success_count": int(row[3] or 0),
-            "business_success_rate": float((row[3] or 0) / row[2]) if row[2] else 0.0,
-            "avg_estimation_error_ratio": float(row[4]) if row[4] is not None else None,
-        }
-        for row in rows.all()
-    ]
+    return await summarize_business_tasks(db)
 
 
 async def evaluate_and_store_business_metric(
@@ -221,6 +258,19 @@ async def evaluate_and_store_business_metric(
     estimated_metric = routing_result.get("estimated_metric") or {}
     estimated_value = estimated_metric.get("metric_value")
     object_uris = _extract_object_uris(tags)
+    result_metadata = _extract_result_metadata(tags)
+
+    existing = (
+        await db.execute(
+            select(BusinessObjectiveEvaluation).where(
+                BusinessObjectiveEvaluation.instance_id == instance_id,
+                BusinessObjectiveEvaluation.metric_key == metric_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+
     evaluation = evaluate_business_objective(
         objective,
         actual_metric_key=metric_key,
@@ -242,7 +292,7 @@ async def evaluate_and_store_business_metric(
         failure_reason=evaluation.failure_reason,
         estimated_value=evaluation.estimated_value,
         estimation_error_ratio=evaluation.estimation_error_ratio,
-        object_uris={"uris": evaluation.object_uris},
+        object_uris={"uris": evaluation.object_uris, "result_metadata": result_metadata},
     )
     db.add(row)
     for obj in _extract_objects(tags):
@@ -277,10 +327,6 @@ def _json_env(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _extract_object_uris(tags: dict[str, Any] | None) -> list[str]:
-    return [item["uri"] for item in _extract_objects(tags)]
-
-
 def _extract_objects(tags: dict[str, Any] | None) -> list[dict[str, str]]:
     if not tags:
         return []
@@ -299,6 +345,20 @@ def _extract_objects(tags: dict[str, Any] | None) -> list[dict[str, str]]:
             if isinstance(uri, str)
         ]
     return []
+
+
+def _extract_object_uris(tags: dict[str, Any] | None) -> list[str]:
+    return [item["uri"] for item in _extract_objects(tags)]
+
+
+def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
+    if not tags:
+        return {}
+    metadata: dict[str, Any] = {}
+    for key in ("checksum", "matrix_size", "batch_count"):
+        if tags.get(key) is not None:
+            metadata[key] = tags[key]
+    return metadata
 
 
 __all__ = ["build_instance_create_from_business_task", "evaluate_business_objective"]

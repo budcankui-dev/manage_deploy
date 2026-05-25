@@ -214,7 +214,7 @@ async function submitSave() {
 function goCreateInstance() {
   if (!template.value?.id) return
   router.push({
-    path: '/instances',
+    path: '/dev/instances',
     query: { create: '1', template_id: template.value.id },
   })
 }

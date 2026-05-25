@@ -9,6 +9,12 @@ const api = axios.create({
   }
 })
 
+const LONG_RUNNING_TIMEOUT = 180000
+
+function withTimeout(ms) {
+  return { timeout: ms }
+}
+
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('access_token')
   if (token) {
@@ -50,30 +56,34 @@ export const instancesApi = {
   preflight: (data) => api.post('/instances/preflight', data),
   create: (data) => api.post('/instances', data),
   update: (id, data) => api.put(`/instances/${id}`, data),
-  delete: (id) => api.delete(`/instances/${id}`),
-  start: (id) => api.post(`/instances/${id}/start`),
-  stop: (id) => api.post(`/instances/${id}/stop`),
-  restart: (id) => api.post(`/instances/${id}/restart`),
+  delete: (id) => api.delete(`/instances/${id}`, withTimeout(LONG_RUNNING_TIMEOUT)),
+  start: (id) => api.post(`/instances/${id}/start`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
+  stop: (id) => api.post(`/instances/${id}/stop`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
+  restart: (id) => api.post(`/instances/${id}/restart`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
   schedule: (id, data) => api.put(`/instances/${id}/schedule`, data),
   getEvents: (id) => api.get(`/instances/${id}/events`),
   getNodeLogs: (instanceId, nodeId) => api.get(`/instances/${instanceId}/nodes/${nodeId}/logs`),
-  batchStart: (ids) => api.post('/instances/batch/start', { instance_ids: ids }),
-  batchStop: (ids) => api.post('/instances/batch/stop', { instance_ids: ids }),
-  batchDelete: (ids) => api.post('/instances/batch/delete', { instance_ids: ids }),
+  batchStart: (ids) => api.post('/instances/batch/start', { instance_ids: ids }, withTimeout(LONG_RUNNING_TIMEOUT)),
+  batchStop: (ids) => api.post('/instances/batch/stop', { instance_ids: ids }, withTimeout(LONG_RUNNING_TIMEOUT)),
+  batchDelete: (ids) => api.post('/instances/batch/delete', { instance_ids: ids }, withTimeout(LONG_RUNNING_TIMEOUT)),
   reportMetric: (id, data) => api.post(`/instances/${id}/metrics`, data),
   templateMetricSummary: (templateId) =>
     api.get('/instances/metrics/template-summary', { params: templateId ? { template_id: templateId } : {} })
 }
 
 export const ordersApi = {
-  list: (status) => api.get('/orders', { params: status ? { status } : {} }),
+  list: (params = {}) => api.get('/orders', { params }),
+  get: (id) => api.get(`/orders/${id}`),
   create: (data) => api.post('/orders', data),
+  delete: (id) => api.delete(`/orders/${id}`),
+  batchDelete: (ids) => api.post('/orders/batch/delete', { instance_ids: ids }),
   materialize: (id) => api.post(`/orders/${id}/materialize`),
   materializePending: () => api.post('/orders/materialize/pending')
 }
 
 export const businessApi = {
   submit: (data) => api.post('/business-tasks', data),
+  list: (params = {}) => api.get('/business-tasks', { params }),
   summary: () => api.get('/business-tasks/summary'),
   evaluation: (instanceId) => api.get(`/business-tasks/${instanceId}/evaluation`),
   results: (instanceId) => api.get(`/business-tasks/${instanceId}/results`),

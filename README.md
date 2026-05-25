@@ -2,6 +2,36 @@
 
 通用多节点 Docker 任务编排系统（DAG 执行器）。
 
+## 业务任务中心演示
+
+```bash
+# 清理旧工单（可选）
+./scripts/cleanup_stale_business_orders.sh
+
+# 实容器 matmul E2E（生成可演示工单）
+WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+```
+
+前端 Admin → **业务任务中心** → **一键演示矩阵乘法**（自动启动并轮询评估）。
+
+## 科学计算 Worker（matmul）
+
+```bash
+./scripts/build_workers.sh
+SEED_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
+# 需 backend :8000 + node_agent :8001
+WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+# 可选：E2E_DELETE_INSTANCE=1 跑完删实例；MATMUL_MATRIX_SIZE=256 大矩阵
+```
+
+默认账号（`init_db` 自动创建）：`admin/admin`（管理员）、`user/user`（普通用户）。
+
+说明见 [`workers/high-throughput-matmul/README.md`](workers/high-throughput-matmul/README.md)。
+
+## 后续规划
+
+- 后台 UI 重组见 [`docs/planned-admin-ui-restructure.md`](docs/planned-admin-ui-restructure.md)（业务任务中心、侧边栏合并等，**待做**）。
+
 ## 前置要求
 
 - Python 3.11+

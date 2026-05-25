@@ -37,6 +37,7 @@ from schemas import (
 from services.dag_executor import DAGExecutor
 from services.runtime_fields import apply_runtime_overrides, build_container_start_request, pick_override
 from services.scheduler import TaskScheduler
+from services.order_sync import mark_orders_cancelled_for_instance
 from services.port_plan import extract_host_ports, find_running_port_conflicts
 from services.instance_builder import resolve_port_values
 
@@ -63,20 +64,16 @@ def _find_instance_node_override(
     return None
 
 
-async def _cleanup_instance_runtime(db: AsyncSession, instance: TaskInstance) -> None:
+async def _cleanup_instance_runtime(db: AsyncSession, instance: TaskInstance) -> list[str]:
+    """顺序删除各节点容器（AsyncSession 不支持并发 flush）。"""
     executor = DAGExecutor(db)
-    cleanup_errors: list[str] = []
+    errors: list[str] = []
 
     for node in instance.nodes:
         success, error = await executor.remove_node(node)
         if not success:
-            cleanup_errors.append(f"{node.name}: {error or 'Unknown error'}")
-
-    if cleanup_errors:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to clean up node containers: " + "; ".join(cleanup_errors),
-        )
+            errors.append(f"{node.name}: {error or 'Unknown error'}")
+    return errors
 
 
 async def _preflight_instance_plan(
@@ -507,11 +504,15 @@ async def delete_instance(
 
     task_scheduler = TaskScheduler()
     await task_scheduler.cancel_all_schedules(instance_id)
-    await _cleanup_instance_runtime(db, instance)
+    cleanup_warnings = await _cleanup_instance_runtime(db, instance)
+    await mark_orders_cancelled_for_instance(db, instance_id)
 
     await db.delete(instance)
     await db.commit()
-    return {"message": "Instance deleted"}
+    response = {"message": "Instance deleted"}
+    if cleanup_warnings:
+        response["warnings"] = cleanup_warnings
+    return response
 
 
 @router.post("/{instance_id}/start")
@@ -619,6 +620,7 @@ async def batch_delete_instances(request: BatchOperationRequest, db: AsyncSessio
 
             await task_scheduler.cancel_all_schedules(instance_id)
             await _cleanup_instance_runtime(db, instance)
+            await mark_orders_cancelled_for_instance(db, instance_id)
             await db.delete(instance)
             succeeded.append(instance_id)
         except Exception as exc:

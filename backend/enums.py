@@ -38,6 +38,7 @@ class OrderStatus(str, Enum):
     PENDING = "pending"
     MATERIALIZED = "materialized"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class UserRole(str, Enum):

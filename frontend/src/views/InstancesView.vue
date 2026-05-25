@@ -2,8 +2,8 @@
   <div class="instances-view">
     <header class="page-header">
       <div class="title-section">
-        <h1>任务实例</h1>
-        <p class="subtitle">选择拓扑模板，填写各节点的镜像、命令、端口等运行参数</p>
+        <h1>运维 / 手动部署</h1>
+        <p class="subtitle">从拓扑模板手动创建实例，用于调试与验收；正式业务任务请使用业务任务中心。</p>
       </div>
       <div class="header-actions">
         <el-radio-group v-model="viewMode" size="small">
@@ -364,14 +364,14 @@ async function openCreateFromQuery() {
   }
   await onTemplateChange(templateId)
   showCreateDialog.value = true
-  router.replace({ path: '/instances' })
+  router.replace({ path: '/dev/instances' })
 }
 
 async function openEditFromQuery() {
   const instanceId = route.query.edit
   if (!instanceId || typeof instanceId !== 'string') return
   await openEditDialog(instanceId)
-  router.replace({ path: '/instances' })
+  router.replace({ path: '/dev/instances' })
 }
 
 function formatObjectLines(obj, sep = '=') {
@@ -671,7 +671,7 @@ function canStart(status) {
 async function startInstance(id) { await storeStart(id); ElMessage.success('实例已启动') }
 async function stopInstance(id) { await storeStop(id); ElMessage.success('实例已停止') }
 async function restartInstance(id) { await storeRestart(id); ElMessage.success('实例已重启') }
-function viewInstance(id) { router.push(`/instances/${id}`) }
+function viewInstance(id) { router.push(`/dev/instances/${id}`) }
 function getErrorMessage(error, fallback) {
   return error?.response?.data?.detail || error?.message || fallback
 }
@@ -688,15 +688,31 @@ async function confirmDelete(instance) {
 }
 
 async function handleBatchStart() {
-  const result = await instancesStore.batchStart(selectedIds.value)
-  ElMessage.success(`批量启动完成，成功 ${result.succeeded.length} 个`)
-  clearSelection()
+  try {
+    const result = await instancesStore.batchStart(selectedIds.value)
+    if (Object.keys(result.failed || {}).length) {
+      ElMessage.warning(`批量启动部分完成，成功 ${result.succeeded.length} 个`)
+    } else {
+      ElMessage.success(`批量启动完成，成功 ${result.succeeded.length} 个`)
+    }
+    clearSelection()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '批量启动失败'))
+  }
 }
 
 async function handleBatchStop() {
-  const result = await instancesStore.batchStop(selectedIds.value)
-  ElMessage.success(`批量停止完成，成功 ${result.succeeded.length} 个`)
-  clearSelection()
+  try {
+    const result = await instancesStore.batchStop(selectedIds.value)
+    if (Object.keys(result.failed || {}).length) {
+      ElMessage.warning(`批量停止部分完成，成功 ${result.succeeded.length} 个`)
+    } else {
+      ElMessage.success(`批量停止完成，成功 ${result.succeeded.length} 个`)
+    }
+    clearSelection()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '批量停止失败'))
+  }
 }
 
 async function handleBatchDelete() {

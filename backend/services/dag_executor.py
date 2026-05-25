@@ -148,7 +148,16 @@ class DAGExecutor:
         )
         request = build_container_start_request(node)
         request.command = command
-        request.env = runtime_env
+        from services.platform_runtime import apply_platform_runtime
+
+        enable_scratch = bool((node.env or {}).get("PLATFORM_SCRATCH") == "1")
+        request.env = apply_platform_runtime(
+            request,
+            instance_id,
+            node.id,
+            runtime_env,
+            enable_scratch=enable_scratch,
+        )
 
         success, result = await self.agent_client.start_container(
             management_ip=self._get_agent_endpoint(machine),
@@ -306,7 +315,7 @@ class DAGExecutor:
             await asyncio.sleep(0.1)
 
         if failed_nodes:
-            await self._rollback_started_nodes(instance_id, started_nodes)
+            await self._rollback_started_nodes(instance_id, started_nodes, failed_nodes)
             instance.error_message = f"Node(s) failed: {', '.join(failed_nodes)}"
             await self.update_task_status(instance, TaskStatus.FAILED)
             await self.db.commit()
@@ -322,14 +331,20 @@ class DAGExecutor:
         return [n.id for n in upstream]
 
     async def _rollback_started_nodes(
-        self, instance_id: str, started_nodes: dict[str, bool]
+        self,
+        instance_id: str,
+        started_nodes: dict[str, bool],
+        failed_nodes: set[str] | None = None,
     ) -> None:
-        for node_id, started in started_nodes.items():
-            if started:
-                node = await self.get_node_by_id(node_id)
-                if node and node.status == NodeStatus.READY:
-                    await self.stop_node(node)
-                    await self.update_node_status(node, NodeStatus.STOPPED)
+        """失败回滚：删除已启动/失败节点的 Docker 容器，避免残留 Exited 容器。"""
+        failed_nodes = failed_nodes or set()
+        target_ids = {node_id for node_id, started in started_nodes.items() if started}
+        target_ids |= failed_nodes
+        for node_id in target_ids:
+            node = await self.get_node_by_id(node_id)
+            if not node:
+                continue
+            await self.remove_node(node)
 
     async def execute_dag_stop(self, instance_id: str) -> tuple[bool, Optional[str]]:
         instance = await self.get_instance_with_graph(instance_id)
