@@ -72,10 +72,19 @@ def main() -> int:
     latency_ms = float(result["compute_latency_ms"])
     instance_id = os.environ["TASK_INSTANCE_ID"]
 
-    # 先上报指标（业务验收关键路径），MinIO 上传失败不阻塞
-    placeholder_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/result.json"
-    METRIC_METADATA_KEYS = ("compute_latency_ms", "matrix_size", "batch_count", "seed")
+    # 上报 metric（业务验收关键路径），MinIO 上传失败不阻塞
+    # 白名单字段进入 metric.tags.result，用于前端展示
+    METRIC_METADATA_KEYS = ("compute_latency_ms", "matrix_size", "batch_count", "seed", "result_preview")
     result_meta = {k: result[k] for k in METRIC_METADATA_KEYS if k in result}
+
+    # MinIO 上传完整 result（用于前端展示），上传失败不阻塞
+    try:
+        upload_uri = _maybe_upload_minio(instance_id, result)
+        print(f"SINK_MINIO uri={upload_uri}", flush=True)
+    except Exception as exc:
+        upload_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/result.json"
+        print(f"SINK_MINIO_SKIP {exc}", flush=True)
+
     report_metric(
         metric_key,
         latency_ms,
@@ -84,7 +93,7 @@ def main() -> int:
             "objects": [
                 {
                     "name": "result.json",
-                    "uri": placeholder_uri,
+                    "uri": upload_uri,
                     "content_type": "application/json",
                 }
             ],
@@ -92,12 +101,6 @@ def main() -> int:
         },
     )
     print(f"SINK_DONE metric={metric_key} value={latency_ms}", flush=True)
-
-    try:
-        uri = _maybe_upload_minio(instance_id, result)
-        print(f"SINK_MINIO uri={uri}", flush=True)
-    except Exception as exc:
-        print(f"SINK_MINIO_SKIP {exc}", flush=True)
 
     while True:
         time.sleep(3600)
