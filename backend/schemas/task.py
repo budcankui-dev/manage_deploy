@@ -1,7 +1,7 @@
 from typing import Optional, Any
 
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator, model_validator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
 
@@ -22,7 +22,7 @@ def _apply_scheduled_defaults(values: dict) -> dict:
         return values
     from config import settings  # 延迟导入避免循环
 
-    start = values.get("scheduled_start_time") or datetime.utcnow()
+    start = values.get("scheduled_start_time") or datetime.now(UTC)
     values["scheduled_start_time"] = start
     if values.get("scheduled_end_time") is None:
         hours = max(1, int(settings.default_scheduled_duration_hours or 2))

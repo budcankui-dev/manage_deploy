@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -149,7 +149,7 @@ async def restore_pending_jobs(session_maker=None) -> None:
     from models import TaskInstance
     from sqlalchemy import select
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     scheduler_inst = TaskScheduler()
     restored_starts = 0
     restored_ends = 0

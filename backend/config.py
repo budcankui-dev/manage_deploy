@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Management network (Task Manager -> Node Agent) - IPv4 only
     # Agent URL is constructed as: http://{management_ip}:{agent_port}
 
-    apscheduler_timezone: str = "Asia/Shanghai"
+    apscheduler_timezone: str = "UTC"
     service_api_token: str = "change-me-service-token"
     auth_secret: str = "change-me-auth-secret"
     access_token_expire_hours: int = 24
