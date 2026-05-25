@@ -158,11 +158,44 @@ drafting
 ### P2 业务容器（后续）
 
 - [x] matmul 三节点 Worker（`workers/high-throughput-matmul/`，替代早期 A/B/C mock 规划）
+  - **当前为 `/scratch` 文件 IPC，节点间无网络通信、未声明 `ports`，不符合节点间网络通信设计原则，见 P2+**
 - [x] 容器上报 metric 到 `POST /api/instances/{id}/metrics`
 - [x] 触发 `BusinessObjectiveEvaluation` 入库
 - [x] `GET /api/business-tasks/summary` 按工单 + 已评估成功率
 
 **验收：** metric 上报 → business_success 判定 → summary 统计（`scripts/e2e_matmul_live.sh`）。
+
+---
+
+### P2+ 业务节点网络通信改造（强约束补齐）
+
+**设计原则（强约束）：**
+
+- 业务节点之间数据**必须通过网络通信**（host 网络模式 + IPv6/IPv4 PEER URL），不允许通过共享卷（`/scratch` bind mount、NFS）、宿主机文件、对象存储中转等方式传递**业务数据**（MinIO 仅用于 C Sink 归档结果文件）。
+- 每个业务节点**必须如实声明 `ports`**（监听端口），让 [`backend/api/instances.py`](../backend/api/instances.py) 的 preflight 与 [`node_agent/port_utils.py`](../node_agent/port_utils.py) 的端口占用检测覆盖到，防止同机重复部署或与其他业务发生端口冲突。
+- 平台通过模板 `port_defs` + 实例 `port_values` + 路由 placements 生成 PEER URL 宏（如 `PEER_SOURCE_URL_*`、`PEER_COMPUTE_URL_*`），注入下游容器环境变量。
+- 详细原则见 [`docs/business-task-design-summary.md`](business-task-design-summary.md) §4.4。
+
+**当前偏差：** `high_throughput_matmul` 三节点全部走 `/scratch` 共享卷做文件 IPC，模板未声明 `ports`，preflight 在 matmul 上完全不生效，仅能在单机演示（三节点必须落在同一台 Worker）。
+
+**matmul 重构子项：**
+
+- [ ] source / compute / sink 各自开 HTTP（或 gRPC）listen，分配各自端口（如 8801 / 8802 / 8803）
+  - source 提供 `GET /job` 返回 job.json；compute 拉取后计算
+  - compute 提供 `GET /result` 返回 result.json；sink 拉取后上报
+- [ ] [`backend/scripts/seed_demo_data.py`](../backend/scripts/seed_demo_data.py) matmul 模板节点补 `ports` 字段与 `port_defs`
+- [ ] 通过模板 `port_defs` + 实例 `port_values` + PEER URL 宏，让 compute 知道 source 地址、sink 知道 compute 地址
+- [ ] 移除 [`apply_scratch_bind_mount`](../backend/services/platform_runtime.py) 在业务路径上的注入，或将 `/scratch` 降级为仅本实例容器内可见的本地缓存
+- [ ] [`workers/contracts/worker-env.md`](../workers/contracts/worker-env.md) 删除或正式标 deprecated 的 `PLATFORM_SCRATCH=1` 契约项
+- [ ] 健康检查由 log 型改为 `port` 型（与 `port_utils.is_host_port_in_use` 对齐）
+
+**验收：**
+
+- 模板创建实例 → preflight → 返回各节点占用端口列表（不再为空）
+- 同机重复部署 matmul → preflight 检出端口冲突（与 §2.6 双层校验对齐）
+- 三节点跨机部署（不同 `agent_address`）也能跑通完整 source→compute→sink 数据流
+- sink 上报指标行为不变；`scripts/e2e_matmul_live.sh` 通过；`pytest tests/` 全绿
+- 偏差化文档（worker-env.md、workers/high-throughput-matmul/README、DEVELOPMENT_ACCEPTANCE §2.6/§2.8/§9.2、HANDOFF §7 P0）同步移除 deprecated 标记
 
 ---
 

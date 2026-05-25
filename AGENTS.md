@@ -17,6 +17,7 @@
 - **数据面（验收）**：节点配置 `business_ipv6`，`PREFER_BUSINESS_IPV6=true`，跑 `scripts/verify_macro_port_e2e.py`
 - **macOS Docker Desktop**：Worker 回调 Manager/MinIO 用 `MANAGER_PUBLIC_URL=http://host.docker.internal:8000`（见 `backend/.env.example`）
 - **业务 Worker**：`workers/high-throughput-matmul/` 三镜像；`./scripts/build_workers.sh` + `scripts/e2e_matmul_live.sh`
+- **节点间业务通信（强约束）**：业务节点之间必须通过网络通信（host 网络 + IPv6/IPv4 PEER URL），每节点必须如实声明 `ports`（监听端口），让 preflight（`backend/api/instances.py` + `node_agent/port_utils.py`）能检出冲突；不允许共享卷/宿主机文件做业务数据传递（MinIO 仅用于结果归档）。当前 matmul 演示走 `/scratch` 文件 IPC 是临时偏差，详 `docs/development-roadmap.md` P2+。
 
 ## 技术栈
 - 后端：FastAPI + SQLAlchemy（异步）+ APScheduler + Docker SDK

@@ -12,6 +12,10 @@
 
 模板节点 env 设 `PLATFORM_SCRATCH=1` 时，额外挂载实例级目录到容器 `/scratch`。
 
+> **DEPRECATED / 临时偏差**：`PLATFORM_SCRATCH=1` 与 `/scratch` 共享卷机制**仅用于 `high_throughput_matmul` 单机演示**，违反设计原则「业务节点间数据必须通过网络通信，每节点必须声明 `ports` 用于 preflight 防冲突」（详 [`docs/business-task-design-summary.md`](../../docs/business-task-design-summary.md) §4.4）。
+>
+> 新业务**不得依赖** `/scratch` 做业务数据传递，节点间数据必须经由业务网络 PEER URL（HTTP/gRPC）传输；MinIO 仅用于结果归档。matmul 重构计划见 [`docs/development-roadmap.md`](../../docs/development-roadmap.md) P2+。
+
 ## 业务任务注入（`POST /api/business-tasks`）
 
 | 变量 | 说明 |

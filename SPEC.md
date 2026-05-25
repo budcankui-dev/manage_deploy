@@ -44,6 +44,7 @@
 - **业务网络**：容器间通过 Docker host 网络模式通信
   - IPv6：2001:db8:1::/64（可配置）
   - IPv4：10.0.1.0/24（可配置）
+  - **业务节点间数据通信必须走网络**（host 网络 + IPv6/IPv4 PEER URL），不允许通过共享卷、宿主机文件等做业务数据传递（MinIO 仅用于结果归档）
 
 ---
 
@@ -54,6 +55,7 @@
 - [x] 任务模板的 CRUD 操作
 - [x] 模板包含：name, description, nodes（Docker 配置）, edges（依赖关系）
 - [x] 节点配置：image, command, env, volumes, ports, gpu_id, network_mode, restart_policy, health_check
+- [x] **业务节点必须如实声明 `ports`**（监听端口），用于 preflight 端口冲突检测与下游 PEER URL 宏注入
 - [x] 边配置：from_node_id → to_node_id（DAG 边）
 
 ### 3.2 任务实例

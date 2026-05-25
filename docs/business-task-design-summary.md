@@ -111,6 +111,19 @@ C 节点职责：
 - 计算该任务唯一业务指标
 - 上报指标到 Task Manager
 
+### 4.4 节点间通信约束（强约束）
+
+A→B→C 三节点是分布在不同 Worker 主机上的容器，节点间数据流必须按"分布式部署"的方式实现：
+
+1. **必须通过网络通信**：节点间业务数据必须经由业务网络（Docker host 网络模式 + IPv6/IPv4 PEER URL）传输。
+   - 上游节点作为服务端开放 listen 端口；下游节点通过平台注入的 PEER URL 主动拉取或被推送。
+   - 协议建议 HTTP/gRPC，明确单向 A→B→C，不允许反向调用业务接口。
+   - 不允许通过共享卷（NFS、`/scratch` bind mount 等）、宿主机文件、对象存储中转等方式传递**业务数据**。MinIO 仅用于 C Sink 归档结果文件。
+2. **必须如实声明 `ports`**：每个业务节点的模板节点配置必须显式声明监听端口，让 [`backend/api/instances.py`](../backend/api/instances.py) preflight 与 [`node_agent/port_utils.py`](../node_agent/port_utils.py) 的端口占用检测覆盖到，避免同机重复部署或与其他业务发生端口冲突。
+3. **平台职责**：Task Manager 在物化实例时根据模板 `port_defs` + 路由 placements 生成 PEER URL 宏（如 `PEER_SOURCE_URL_*`、`PEER_COMPUTE_URL_*`），注入下游容器的环境变量。
+
+> 临时偏差：当前 `high_throughput_matmul` 三节点演示走 `/scratch` 共享卷做文件 IPC，未声明 ports，**与本节约束不符**，仅作单机演示，改造计划见 [`docs/development-roadmap.md`](development-roadmap.md) P2+。
+
 ## 5. 数据画像设计原则
 
 数据画像由任务类型决定。
@@ -869,4 +882,4 @@ task-results/instance-003/outputs/generated_outputs.jsonl
 
 ## 14. 最终推荐表述
 
-本系统面向受控任务画像和已知硬件环境，完成自然语言任务解析后的自动部署与业务目标验证。每个任务被标准化为 A→B→C 三节点单向随路计算流水线。Source 根据数据画像准备输入，Compute 执行业务处理，Sink 汇聚结果、上传 MinIO 并上报唯一业务指标。业务目标成功率统计范围仅包含已通过意图解析和可行性校验、并提交部署系统的任务。系统通过实际业务指标是否满足目标值来判断任务是否成功。
+本系统面向受控任务画像和已知硬件环境，完成自然语言任务解析后的自动部署与业务目标验证。每个任务被标准化为 A→B→C 三节点单向随路计算流水线，**节点间业务数据通过业务网络（PEER URL）传输，每个节点必须如实声明监听端口供 preflight 防冲突**。Source 根据数据画像准备输入，Compute 执行业务处理，Sink 汇聚结果、上传 MinIO 并上报唯一业务指标。业务目标成功率统计范围仅包含已通过意图解析和可行性校验、并提交部署系统的任务。系统通过实际业务指标是否满足目标值来判断任务是否成功。

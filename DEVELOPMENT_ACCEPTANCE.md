@@ -171,10 +171,13 @@
 
 - 对 `bridge + 显式端口映射` 预检查较可靠。
 - 对 `host` 网络模式，无法完全静态判断镜像内部真实监听端口，只能给 warning，不能做到 100% 阻断。
+- **host 网络模式下，业务节点仍必须如实声明 `ports`**：preflight 依据 `node_agent/port_utils.py` 的 `extract_host_ports` 解析；未声明 ports 的节点完全不会进入冲突检测。
+- **已知偏差**：当前 `high_throughput_matmul` 三节点（source/compute/sink）模板均未声明 `ports`，preflight 在 matmul 业务上**完全不生效**。详 §2.8 与 [`docs/development-roadmap.md`](docs/development-roadmap.md) P2+。
 
 规范：
 
 - 新功能如果涉及资源抢占，优先做“提交前预检查 + 执行前兜底校验”的双层校验。
+- 业务节点（含 source/compute/sink 等业务 worker）必须在模板上声明监听 `ports`；零端口声明等价于绕过 preflight。
 
 ### 2.7 DAG 失败回滚只 stop 不 delete，导致 Exited 容器堆积
 
@@ -228,7 +231,7 @@ docker ps -a --filter "ancestor=manage-deploy/matmul-sink:dev" -q | xargs docker
 | Seed 与线后端不一致 | seed 后 API 查不到节点/模板 | seed 默认 HTTP 调 `SEED_BASE_URL`（如 `http://127.0.0.1:8000`），避免 ASGI 直连另一套库 |
 | `auto_start: true` 阻塞创建接口 | curl 创建 business-task 长时间无响应 | E2E 改为 `auto_start: false`，创建后再 `POST .../start` |
 | 容器内访问 Manager | sink 上报 metrics 失败 | macOS Docker Desktop 用 `host.docker.internal:8000`，配置 `MANAGER_PUBLIC_URL` |
-| `PLATFORM_SCRATCH` 被覆盖 | scratch 目录无 `job.json` | business-task 创建路径显式注入 `PLATFORM_SCRATCH=1` |
+| `PLATFORM_SCRATCH` 被覆盖（DEPRECATED） | scratch 目录无 `job.json` | business-task 创建路径显式注入 `PLATFORM_SCRATCH=1`；该机制本身违反节点间网络通信原则，详 P2+ |
 | 开发期 IPv6 未就绪 | PEER URL 不可达 | 开发默认 `PREFER_BUSINESS_IPV6=false`，节点 `business_ip` 与管理面同源 |
 | sink metrics 偶发 500 | 健康检查失败 → 实例 failed | reporter 对 500 重试；根因仍待查（可能与 DAG 并发写库有关） |
 | 三节点 ≠ 一个长期运行容器 | Docker 里多个 matmul 镜像 | 一个 Dockerfile 三个 target（source/compute/sink），每实例各起 3 个容器，属正常 |
@@ -247,6 +250,13 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 - Live E2E 应用较小矩阵（如 64×1）缩短等待；完整性能验收另开 profile。
 - 成功跑完的实例在 `restart_policy: no` 下仍可能留下 Exited 容器——**正常 stop / 成功完成路径**的容器清理尚未统一，删除实例 API 会删容器；失败路径已由 §2.7 修复。
 - **2026-05-24**：`e2e_matmul_live.sh` 连续 3 次通过；默认矩阵 64×1；metrics 上报增加 evaluation 幂等，reporter 对 5xx 重试。
+
+**与设计原则的偏差（待 P2+ 改造）：**
+
+- 当前 matmul 三节点通过 `/scratch` 共享卷做 **文件 IPC**，节点间**没有网络通信**，也**未声明 `ports`**。
+- 这违反核心约束「业务节点间数据必须通过网络通信、必须如实声明监听端口」（详 [`docs/business-task-design-summary.md`](docs/business-task-design-summary.md) §4.4）。
+- 仅支持单机演示：三节点必须落到同一台 Worker（seed 默认 `agent_address=http://127.0.0.1:8001`），多机部署会因 `/scratch` 不共享而 compute 卡住等不到 job.json。
+- 完整改造计划见 [`docs/development-roadmap.md`](docs/development-roadmap.md) P2+「业务节点网络通信改造」。
 
 ### 2.9 批量删除/停止前端超时，删除接口 500
 
@@ -406,6 +416,7 @@ cd frontend && npm run build
 
 - [ ] 本地 `alpine` 镜像下 preflight + start 全链路脚本通过
 - [ ] compute 容器 env 含 `PEER_*_URL_*`（业务 IPv6 优先）、`DB_URL` 等宏变量
+- [ ] **matmul 节点间网络通信改造**：source/compute/sink 各自声明 `ports`，模板更新，节点改 HTTP/gRPC 通信，preflight 端口冲突检测在 matmul 上生效，移除 `/scratch` 业务数据依赖（详 [`docs/development-roadmap.md`](docs/development-roadmap.md) P2+）
 
 ## 10. 意图与认证（骨架，下阶段启用路由守卫）
 

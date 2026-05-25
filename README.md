@@ -142,6 +142,7 @@ PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
 - **业务网络**：Docker 容器通过 host 网络模式通信
   - IPv6：2001:db8:1::/64（可配置）
   - IPv4：10.0.1.0/24（可配置）
+  - **业务节点间数据通信必须走网络**（host 网络 + IPv6/IPv4 PEER URL），节点必须如实声明 `ports` 用于 preflight 防冲突；不允许共享卷/宿主机文件做业务数据传递（MinIO 仅用于结果归档）
 
 ## 项目结构
 
