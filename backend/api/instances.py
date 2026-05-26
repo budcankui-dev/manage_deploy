@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -526,9 +526,26 @@ async def preflight_instance_create(
 
 @router.get("", response_model=list[TaskInstanceSimple])
 async def list_instances(
+    status: str | None = Query(None),
+    template_id: str | None = Query(None),
+    deployment_mode: str | None = Query(None),
+    source_order_id: str | None = Query(None),
+    q: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(TaskInstance).options(selectinload(TaskInstance.nodes)))
+    query = select(TaskInstance).options(selectinload(TaskInstance.nodes))
+    if status:
+        query = query.where(TaskInstance.status == status)
+    if template_id:
+        query = query.where(TaskInstance.template_id == template_id)
+    if deployment_mode:
+        query = query.where(TaskInstance.deployment_mode == deployment_mode)
+    if source_order_id:
+        query = query.where(TaskInstance.source_order_id == source_order_id)
+    if q:
+        query = query.where(TaskInstance.name.ilike(f"%{q}%"))
+    query = query.order_by(TaskInstance.created_at.desc())
+    result = await db.execute(query)
     return result.scalars().all()
 
 

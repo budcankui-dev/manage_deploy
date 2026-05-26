@@ -6,6 +6,7 @@ from .business_tasks import router as business_tasks_router
 from .auth import router as auth_router
 from .conversations import router as conversations_router
 from .routing import router as routing_router
+from .admin import router as admin_router
 
 __all__ = [
     "nodes_router",
@@ -16,4 +17,5 @@ __all__ = [
     "auth_router",
     "conversations_router",
     "routing_router",
+    "admin_router",
 ]

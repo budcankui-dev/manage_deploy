@@ -7,10 +7,10 @@ export const useInstancesStore = defineStore('instances', () => {
   const loading = ref(false)
   const currentInstance = ref(null)
 
-  async function fetchInstances() {
+  async function fetchInstances(params = {}) {
     loading.value = true
     try {
-      const { data } = await instancesApi.list()
+      const { data } = await instancesApi.list(params)
       instances.value = data
     } finally {
       loading.value = false

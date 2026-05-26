@@ -51,7 +51,7 @@ export const templatesApi = {
 }
 
 export const instancesApi = {
-  list: () => api.get('/instances'),
+  list: (params = {}) => api.get('/instances', { params }),
   get: (id) => api.get(`/instances/${id}`),
   preflight: (data) => api.post('/instances/preflight', data),
   create: (data) => api.post('/instances', data),
@@ -112,6 +112,16 @@ export const conversationApi = {
     }),
   createRoutingRequest: (data) => api.post('/routing-requests', data),
   getRoutingRequest: (id) => api.get(`/routing-requests/${id}`)
+}
+
+export const adminApi = {
+  listUsers: () => api.get('/admin/users'),
+  deleteUser: (id) => api.delete(`/admin/users/${id}`),
+  listConversations: (params = {}) => api.get('/admin/conversations', { params }),
+  getConversation: (id) => api.get(`/admin/conversations/${id}`),
+  listRoutingRequests: (params = {}) => api.get('/admin/routing-requests', { params }),
+  listOrders: (params = {}) => api.get('/admin/orders', { params }),
+  parseOne: (data) => api.post('/admin/intent-parser/parse-one', data),
 }
 
 export default api

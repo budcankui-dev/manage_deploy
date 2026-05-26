@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
 from api import (
+    admin_router,
     auth_router,
     business_tasks_router,
     conversations_router,
@@ -63,6 +64,7 @@ app.include_router(business_tasks_router)
 app.include_router(auth_router)
 app.include_router(conversations_router)
 app.include_router(routing_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
