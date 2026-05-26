@@ -15,10 +15,10 @@ echo "[0] prerequisites"
 require_http "${BASE_URL}/docs"
 require_http "http://127.0.0.1:8001/health"
 
-echo "[1] seed"
-SEED_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py > /tmp/lifecycle_seed.json
-TEMPLATE_ID=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_seed.json'))['matmul_template_id'])")
-NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_seed.json'))['node_ids'][0])")
+echo "[1] prepare scientific matmul demo"
+DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py > /tmp/lifecycle_matmul_demo.json
+TEMPLATE_ID=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_matmul_demo.json'))['matmul_template_id'])")
+NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_matmul_demo.json'))['node_ids'][0])")
 
 echo "[2] create instance"
 CREATE=$(curl -sS -X POST "${BASE_URL}/api/instances" -H 'Content-Type: application/json' -d "{

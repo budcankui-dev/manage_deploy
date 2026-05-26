@@ -135,8 +135,8 @@ drafting
 | `business_ipv6` + PEER URL | 已实现 | 需 `verify_macro_port_e2e.py` 脚本验收 |
 | 模板名称去重 | 已实现 | API 409 |
 | 实例详情抽屉 编辑 | 已实现 | InstanceDetailView |
-| seed 含 macro/port | 待做 | 更新 `seed_demo_data.py` |
-| L2 `e2e_business_task.sh` | 待做 | 手工 + 脚本 |
+| 演示准备含 macro/port | 已实现 | `setup_matmul_demo.py` |
+| L2 `e2e_matmul_live.sh` | 已实现 | 科学计算矩阵乘法实容器 E2E |
 | 批量任务 ↔ 待部署任务 | 部分 | `task_orders` + conversations 已有关联字段 |
 
 **验收：**
@@ -148,8 +148,8 @@ drafting
 
 ### P1b 部署接入（业务任务基础）
 
-- [x] `backend/scripts/seed_demo_data.py`
-- [x] `scripts/e2e_business_task.sh`
+- [x] `backend/scripts/setup_matmul_demo.py`
+- [x] `scripts/e2e_matmul_live.sh`
 - [x] `POST /api/business-tasks` 可物化 instance（L1）
 - [ ] L2 手工验收写入 DEVELOPMENT_ACCEPTANCE §11
 
@@ -157,8 +157,9 @@ drafting
 
 ### P2 业务容器（后续）
 
-- [x] matmul 三节点 Worker（`workers/high-throughput-matmul/`，替代早期 A/B/C mock 规划）
-  - **当前为 `/scratch` 文件 IPC，节点间无网络通信、未声明 `ports`，不符合节点间网络通信设计原则，见 P2+**
+- [x] 科学计算矩阵乘法 Worker（`workers/high-throughput-matmul/`，替代早期 A/B/C mock 规划）
+  - 单镜像 `manage-deploy/scientific-matmul:{tag}`，source / compute / sink 通过不同 command 启动
+  - source -> compute -> sink 通过 HTTP 网络通信，模板节点声明 `port_defs`
 - [x] 容器上报 metric 到 `POST /api/instances/{id}/metrics`
 - [x] 触发 `BusinessObjectiveEvaluation` 入库
 - [x] `GET /api/business-tasks/summary` 按工单 + 已评估成功率
@@ -167,7 +168,7 @@ drafting
 
 ---
 
-### P2+ 业务节点网络通信改造（强约束补齐）
+### P2+ 业务节点网络通信约束（已在 matmul 演示落地）
 
 **设计原则（强约束）：**
 
@@ -176,18 +177,13 @@ drafting
 - 平台通过模板 `port_defs` + 实例 `port_values` + 路由 placements 生成 PEER URL 宏（如 `PEER_SOURCE_URL_*`、`PEER_COMPUTE_URL_*`），注入下游容器环境变量。
 - 详细原则见 [`docs/business-task-design-summary.md`](business-task-design-summary.md) §4.4。
 
-**当前偏差：** `high_throughput_matmul` 三节点全部走 `/scratch` 共享卷做文件 IPC，模板未声明 `ports`，preflight 在 matmul 上完全不生效，仅能在单机演示（三节点必须落在同一台 Worker）。
+**matmul 落地状态：**
 
-**matmul 重构子项：**
-
-- [ ] source / compute / sink 各自开 HTTP（或 gRPC）listen，分配各自端口（如 8801 / 8802 / 8803）
-  - source 提供 `GET /job` 返回 job.json；compute 拉取后计算
-  - compute 提供 `GET /result` 返回 result.json；sink 拉取后上报
-- [ ] [`backend/scripts/seed_demo_data.py`](../backend/scripts/seed_demo_data.py) matmul 模板节点补 `ports` 字段与 `port_defs`
-- [ ] 通过模板 `port_defs` + 实例 `port_values` + PEER URL 宏，让 compute 知道 source 地址、sink 知道 compute 地址
-- [ ] 移除 [`apply_scratch_bind_mount`](../backend/services/platform_runtime.py) 在业务路径上的注入，或将 `/scratch` 降级为仅本实例容器内可见的本地缓存
-- [ ] [`workers/contracts/worker-env.md`](../workers/contracts/worker-env.md) 删除或正式标 deprecated 的 `PLATFORM_SCRATCH=1` 契约项
-- [ ] 健康检查由 log 型改为 `port` 型（与 `port_utils.is_host_port_in_use` 对齐）
+- [x] source / compute / sink 各自开 HTTP listen，默认端口 18801 / 18802 / 18803
+- [x] [`backend/scripts/setup_matmul_demo.py`](../backend/scripts/setup_matmul_demo.py) 在模板节点声明 `port_defs`
+- [x] 平台通过模板 `port_defs` + 实例 `port_values` + PEER URL 宏注入节点互访地址
+- [x] 健康检查使用 `port` 型（与 `port_utils.is_host_port_in_use` 对齐）
+- [x] `workers/contracts/worker-env.md` 将 `/scratch` 标为历史兼容能力，新业务不使用它传递业务数据
 
 **验收：**
 
@@ -409,7 +405,7 @@ manage_deploy/
 │   │   └── task.py               # 已有 BusinessTaskCreate
 │   ├── tests/
 │   └── scripts/
-│       └── seed_demo_data.py     # P1
+│       └── setup_matmul_demo.py  # 科学计算矩阵乘法演示准备
 ├── frontend/
 │   ├── src/
 │   │   ├── views/

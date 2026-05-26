@@ -9,7 +9,7 @@ import {
   taskTypeLabel,
 } from '../src/constants/businessTaskDisplay.js'
 
-assert.equal(taskTypeLabel('high_throughput_matmul'), '高通量矩阵乘法')
+assert.equal(taskTypeLabel('high_throughput_matmul'), '科学计算矩阵乘法')
 assert.ok(
   describeObjectiveMeaning('high_throughput_matmul', {
     metric_key: 'compute_latency_ms',

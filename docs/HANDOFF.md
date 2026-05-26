@@ -25,14 +25,14 @@
 | 结果 metadata | sink `tags.result` 全量上报 → `_extract_result_metadata` 白名单落库；业务成功仍为耗时 ≤ 目标 |
 | 一键演示 | `auto_start` + 轮询 evaluation + 打开「结果」Tab |
 | 删工单 | 级联删除 `BusinessObjectiveEvaluation` / `TaskResultObject`（[`order_sync.py`](../backend/services/order_sync.py)） |
-| Worker | `workers/high-throughput-matmul/` 三镜像 + `scripts/e2e_matmul_live.sh`（**当前为 `/scratch` 文件 IPC，节点间无网络通信、未声明 `ports`，与设计原则不符，详 §7 P0 / roadmap P2+**） |
+| Worker | `workers/high-throughput-matmul/` 单镜像 `manage-deploy/scientific-matmul:{tag}` + `scripts/e2e_matmul_live.sh`；source / compute / sink 通过 HTTP 网络通信并声明端口 |
 | 意图串联 | Admin 在 IntentChat 提交后跳转 `?orderId=` 打开中心详情 |
 | 生命周期 | SCHEDULED 强制 `scheduled_end_time`（默认 start+2h，可配置）；到期自动 stop → 默认删除实例 + 工单标 `COMPLETED`；新增 `keep_after_stop` 开关、`restore_pending_jobs` 启动重注册。详 §6.3、roadmap P3+ |
 | 测试 | 后端 62 passed（含 8 项 lifecycle 单测）；`npm run test:display`；E2E matmul 脚本 |
 
 **刻意不做 / 未验收：**
 
-- `low_latency_video_pipeline` 本地镜像未齐，**不要**用旧视频示例做工演示
+- 当前只维护科学计算矩阵乘法演示；旧视频/LLM 示例仅保留在测试和历史设计中
 - MinIO 结果文件 **内联预览**（结果 Tab 展示输入/输出/耗时验收；原始 JSON 可折叠）
 - P5 路由状态 SSE/轮询（IntentChat 侧仅有 pending 轮询）
 - P6 真实 LLM 意图解析
@@ -48,12 +48,13 @@ UI 一键演示 / e2e_matmul_live.sh
     → TaskOrder + TaskInstance (pending)
     → POST /api/instances/{id}/start  (DAG)
     → Node Agent 起 source → compute → sink 容器
+    → source/compute/sink 通过 HTTP 传递 job/result
     → sink 上报 POST /api/instances/{id}/metrics
     → evaluate_and_store_business_metric → BusinessObjectiveEvaluation
     → GET /api/business-tasks/summary | GET /api/orders/{id}
 ```
 
-> **节点间数据流偏差**：source→compute→sink 之间 job.json / result.json 走的是同一台 Worker 上 `/scratch` 共享卷（[`apply_scratch_bind_mount`](../backend/services/platform_runtime.py)），**不是网络通信**，模板也未声明 `ports` → preflight 在 matmul 上完全不生效。设计目标是节点间走业务网络 PEER URL + 显式 ports（详 [`docs/business-task-design-summary.md`](business-task-design-summary.md) §4.4），改造计划见 §7 P0 与 [`docs/development-roadmap.md`](development-roadmap.md) P2+。
+矩阵乘法演示已完成网络通信改造：source 生成 job，compute 通过 HTTP 接收并计算，sink 通过 HTTP 接收结果并上报指标。统一说明见 [`scientific-matmul-demo.md`](scientific-matmul-demo.md)。
 
 关键文件：
 
@@ -84,11 +85,11 @@ cd frontend && npm install && npm run dev
 
 macOS Docker Desktop：Worker 回调 Manager 需 `MANAGER_PUBLIC_URL=http://host.docker.internal:8000`（见 [`backend/.env.example`](../backend/.env.example)）。
 
-### 4.2 Seed 与镜像
+### 4.2 演示准备与镜像
 
 ```bash
 ./scripts/build_workers.sh   # 首次或 Worker 代码变更后
-SEED_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
+DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 ```
 
 默认账号：`admin/admin`（Admin）、`user/user`（普通用户）。
@@ -282,27 +283,27 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh   # 重建镜像后去掉 SKIP 
 - [x] `auto_cleanup_instance` + `mark_orders_completed_for_instance` + `restore_pending_jobs`
 - [x] 业务任务 / 意图提交强制 SCHEDULED + end_time；IMMEDIATE 仍走旧通路
 - [x] 前端 `InstancesView` / `InstanceDetailView` / `BusinessTasksHubView` 文案 + 倒计时 + `keep_after_stop`
-- [ ] `scripts/e2e_matmul_live.sh` 适配 SCHEDULED：缩短 end_time（60s 内）、断言到期清理（与 P0 matmul 网络改造一并做）
+- [ ] `scripts/e2e_matmul_live.sh` 适配 SCHEDULED 到期清理断言（可独立做）
 - [ ] APScheduler timezone 偏差修复：`scheduled_*_time` 改 timezone-aware，或 scheduler timezone 统一 UTC（影响"立即启动"语义）
 
-### P0 matmul 节点间通信改造（违反设计原则，必须处理）
+### P0 matmul 节点间通信改造（已完成，保留验收项）
 
-**目标**：把 matmul source/compute/sink 三节点从 `/scratch` 文件 IPC 改为**网络通信**，并让每节点**如实声明 `ports`**，使 preflight 端口冲突检测在 matmul 上生效。详细计划见 [`docs/development-roadmap.md`](development-roadmap.md) P2+。
+**目标**：matmul source/compute/sink 三节点通过网络通信，并让每节点如实声明 `ports`，使 preflight 端口冲突检测在 matmul 上生效。详细说明见 [`docs/scientific-matmul-demo.md`](scientific-matmul-demo.md)。
 
 **子任务摘要**（细节以 roadmap P2+ 为准）：
 
-- [ ] source / compute / sink 各开 HTTP listen，分配端口（如 8801/8802/8803）
-- [ ] [`backend/scripts/seed_demo_data.py`](../backend/scripts/seed_demo_data.py) matmul 模板节点声明 `ports` 与 `port_defs`
-- [ ] compute 通过 `PEER_SOURCE_URL_*` 拉 job；sink 通过 `PEER_COMPUTE_URL_*` 拉 result
-- [ ] 健康检查由 log 型改 `port` 型
-- [ ] 移除 [`apply_scratch_bind_mount`](../backend/services/platform_runtime.py) 业务路径注入；偏差化文档（worker-env.md、matmul README、DEVELOPMENT_ACCEPTANCE §2.6/§2.8/§9.2、本节）同步清理 deprecated 标记
+- [x] source / compute / sink 各开 HTTP listen，默认端口 18801/18802/18803
+- [x] [`backend/scripts/setup_matmul_demo.py`](../backend/scripts/setup_matmul_demo.py) matmul 模板节点声明 `port_defs`
+- [x] source -> compute -> sink 通过平台注入的 `PEER_*` URL 传递 job/result
+- [x] 健康检查由 log 型改 `port` 型
+- [x] 文档入口统一到 [`docs/scientific-matmul-demo.md`](scientific-matmul-demo.md)
 - [ ] 验证：preflight 报端口、同机重复部署能检出冲突、`scripts/e2e_matmul_live.sh` 通过、`pytest tests/` 全绿
 
 **风险与影响**：
 
 - 现有 `scripts/e2e_matmul_live.sh` 行为需同步更新（健康检查、PEER URL 注入断言）
 - 必须 `./scripts/build_workers.sh` 重建 worker 镜像
-- 历史 `/scratch` 实例数据迁移：建议直接清理旧工单（`scripts/cleanup_stale_business_orders.sh`），无须保留旧实现
+- 历史旧模板/旧工单建议直接清理（`scripts/cleanup_stale_business_orders.sh`），无须保留旧实现
 
 ### P1（合并 matmul UI 改动前）
 
@@ -327,8 +328,8 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh   # 重建镜像后去掉 SKIP 
 
 ## 8. 已知问题 / 技术债
 
-1. **matmul 节点间是文件 IPC（违反设计原则）**：三节点走 `/scratch` 共享卷，未声明 `ports`，preflight 不生效，仅能单机演示；改造见 §7 P0 / roadmap P2+。
-2. **视频 pipeline 示例**：历史工单可能部署失败；演示请只用 matmul。
+1. **历史旧模板/旧工单**：早期 `demo-matmul-pipeline-v2` 或视频示例可能仍在开发库里；演示前可跑 `scripts/cleanup_stale_business_orders.sh` 并重新执行 `setup_matmul_demo.py`。
+2. **视频 pipeline 示例**：当前只维护科学计算矩阵乘法演示；视频/LLM 仅保留为历史设计与单测场景。
 3. **README** 中「后台 UI 重组待做」与 `planned-admin-ui-restructure.md` 状态略旧（中心已落地，可改文案）。
 4. **MySQL 连接串** 在 README 含示例密码，Review 时勿提交真实 `.env`。
 5. **评估指标**：仅支持 `operator: <=`（[`business_evaluator.py`](../backend/services/business_evaluator.py)）。

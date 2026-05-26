@@ -49,17 +49,63 @@ def get_peer_url(role: str) -> str | None:
     return None
 
 
-def post_json_to_peer(role: str, path: str, data: dict, timeout_sec: float = 120.0) -> None:
-    """Push JSON data to the next node in the pipeline."""
+def get_peer_url_by_name(peer_name: str) -> str | None:
+    key = f"PEER_{peer_name.upper()}_URL"
+    val = os.environ.get(key, "")
+    if val:
+        return val.rstrip("/")
+    return None
+
+
+def _post_json(
+    peer_url: str,
+    path: str,
+    data: dict,
+    timeout_sec: float = 120.0,
+    interval_sec: float = 0.5,
+) -> None:
     import httpx
 
+    url = f"{peer_url}{path}"
+    deadline = time.time() + timeout_sec
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            resp = httpx.post(url, json=data, timeout=min(10.0, timeout_sec))
+            resp.raise_for_status()
+            return
+        except (httpx.HTTPError, OSError) as exc:
+            last_error = exc
+            time.sleep(interval_sec)
+    raise TimeoutError(f"Timed out posting to {url}: {last_error}")
+
+
+def post_json_to_peer(
+    role: str,
+    path: str,
+    data: dict,
+    timeout_sec: float = 120.0,
+    interval_sec: float = 0.5,
+) -> None:
+    """Push JSON data to the next node in the pipeline."""
     peer_url = get_peer_url(role)
     if not peer_url:
-        raise RuntimeError(f"No peer URL configured for role={role}")
+        raise RuntimeError(f"No downstream peer URL configured for role={role}")
+    _post_json(peer_url, path, data, timeout_sec, interval_sec)
 
-    url = f"{peer_url}{path}"
-    resp = httpx.post(url, json=data, timeout=timeout_sec)
-    resp.raise_for_status()
+
+def post_json_to_named_peer(
+    peer_name: str,
+    path: str,
+    data: dict,
+    timeout_sec: float = 120.0,
+    interval_sec: float = 0.5,
+) -> None:
+    """Push JSON data to an explicit peer role such as source or sink."""
+    peer_url = get_peer_url_by_name(peer_name)
+    if not peer_url:
+        raise RuntimeError(f"No peer URL configured for peer={peer_name}")
+    _post_json(peer_url, path, data, timeout_sec, interval_sec)
 
 
 def poll_and_post_json(

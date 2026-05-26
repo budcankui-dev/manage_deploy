@@ -10,10 +10,10 @@ COMPUTE_NODE="${3:-}"
 SINK_NODE="${4:-}"
 
 if [[ -z "${SOURCE_NODE}" ]]; then
-  SEED=$(PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py)
-  SOURCE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][0])" "${SEED}")
-  COMPUTE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][1])" "${SEED}")
-  SINK_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][2])" "${SEED}")
+  DEMO=$(DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py)
+  SOURCE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][0])" "${DEMO}")
+  COMPUTE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][1])" "${DEMO}")
+  SINK_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][2])" "${DEMO}")
 fi
 
 curl -sS -X POST "${BASE_URL}/api/routing-results/${ROUTING_ID}" \
@@ -28,8 +28,8 @@ curl -sS -X POST "${BASE_URL}/api/routing-results/${ROUTING_ID}" \
       \"sink\": \"${SINK_NODE}\"
     },
     \"estimated_metric\": {
-      \"metric_key\": \"end_to_end_latency_ms\",
-      \"metric_value\": 180,
+      \"metric_key\": \"compute_latency_ms\",
+      \"metric_value\": 5000,
       \"unit\": \"ms\"
     },
     \"external_routing_id\": \"mock-router\"

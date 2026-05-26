@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live E2E: seed -> business-task (matmul) -> start -> wait evaluation
+# Live E2E: prepare scientific matmul demo -> business-task -> start -> wait evaluation
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
@@ -25,11 +25,11 @@ if [[ "${WORKER_SKIP_BUILD:-0}" != "1" ]]; then
   "$(dirname "$0")/build_workers.sh"
 fi
 
-echo "[2/7] seed demo data (via ${BASE_URL})"
-SEED_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py > /tmp/seed_matmul.json
-NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/seed_matmul.json'))['node_ids'][0])")
-NODE_B=$(python3 -c "import json; print(json.load(open('/tmp/seed_matmul.json'))['node_ids'][1])")
-NODE_C=$(python3 -c "import json; print(json.load(open('/tmp/seed_matmul.json'))['node_ids'][2])")
+echo "[2/7] prepare scientific matmul demo data (via ${BASE_URL})"
+DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py > /tmp/matmul_demo_setup.json
+NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_setup.json'))['node_ids'][0])")
+NODE_B=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_setup.json'))['node_ids'][1])")
+NODE_C=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_setup.json'))['node_ids'][2])")
 
 TASK_ID="matmul-live-$(date +%s)"
 echo "[3/7] create business task ${TASK_ID} (matrix=${MATRIX_SIZE}, batch=${BATCH_COUNT})"
@@ -38,7 +38,7 @@ CREATE_BODY=$(cat <<EOF
   "external_task_id": "${TASK_ID}",
   "task_type": "high_throughput_matmul",
   "modality": "high_throughput_compute",
-  "name": "Matmul Live E2E",
+  "name": "Scientific Matmul Live E2E",
   "data_profile": {
     "profile_id": "matmul_dev",
     "matrix_size": ${MATRIX_SIZE},

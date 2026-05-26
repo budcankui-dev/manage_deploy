@@ -2,23 +2,25 @@
 
 通用多节点 Docker 任务编排系统（DAG 执行器）。
 
-## 业务任务中心演示
+## 科学计算矩阵乘法演示
 
 ```bash
 # 清理旧工单（可选）
 ./scripts/cleanup_stale_business_orders.sh
 
-# 实容器 matmul E2E（生成可演示工单）
+# 实容器科学计算 matmul E2E（生成可演示工单）
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 ```
 
 前端 Admin → **业务任务中心** → **一键演示矩阵乘法**（自动启动并轮询评估）。详情 **结果** Tab 展示输入参数、计算输出与耗时是否达标（不校验矩阵数值正确性）。
 
-## 科学计算 Worker（matmul）
+完整说明见 [`docs/scientific-matmul-demo.md`](docs/scientific-matmul-demo.md)。
+
+## 科学计算 Worker
 
 ```bash
 ./scripts/build_workers.sh
-SEED_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
+DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 # 需 backend :8000 + node_agent :8001
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 # 可选：E2E_DELETE_INSTANCE=1 跑完删实例；MATMUL_MATRIX_SIZE=256 大矩阵
@@ -26,7 +28,7 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 
 默认账号（`init_db` 自动创建）：`admin/admin`（管理员）、`user/user`（普通用户）。
 
-说明见 [`workers/high-throughput-matmul/README.md`](workers/high-throughput-matmul/README.md)。
+Worker 说明见 [`workers/high-throughput-matmul/README.md`](workers/high-throughput-matmul/README.md)。
 
 ## 后续规划
 
@@ -118,12 +120,12 @@ docker compose -f docker-compose.agents.yml up -d
 cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 ```
 
-### 种子数据与 E2E 脚本
+### 演示准备与 E2E 脚本
 
 ```bash
-PYTHONPATH=backend backend/venv/bin/python backend/scripts/seed_demo_data.py
-./scripts/e2e_business_task.sh
+PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 ./scripts/mock_router_callback.sh <routing_request_id>
+./scripts/e2e_matmul_live.sh
 ```
 
 ### 前端入口

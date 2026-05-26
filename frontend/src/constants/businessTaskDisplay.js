@@ -1,11 +1,11 @@
 export const TASK_TYPE_LABELS = {
-  high_throughput_matmul: '高通量矩阵乘法',
+  high_throughput_matmul: '科学计算矩阵乘法',
   low_latency_video_pipeline: '低时延视频链路',
 }
 
 export const TASK_TYPE_SUMMARIES = {
   high_throughput_matmul:
-    '在 source → compute → sink 三节点流水线中执行 batched 矩阵乘法，以计算耗时作为吞吐/性能验收指标。',
+    '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以计算耗时作为科学计算演示的验收指标。',
   low_latency_video_pipeline:
     '在 source → compute → sink 链路上处理视频帧流，以端到端时延作为体验验收指标。',
 }
@@ -22,9 +22,9 @@ const OPERATOR_LABELS = {
 }
 
 export const MATMUL_PIPELINE_STEPS = [
-  { role: 'source', title: '准备输入', detail: '根据 data_profile 写入 job.json（矩阵规模、批次数、随机种子）' },
-  { role: 'compute', title: '执行计算', detail: 'NumPy 执行 batched FP32 矩阵乘法，写出 result.json' },
-  { role: 'sink', title: '上报结果', detail: '读取 result.json，向 Manager 上报 compute_latency_ms' },
+  { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
+  { role: 'compute', title: '执行计算', detail: 'NumPy 执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
+  { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 compute_latency_ms' },
 ]
 
 export function taskTypeLabel(taskType) {

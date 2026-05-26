@@ -18,6 +18,7 @@ sys.path.insert(0, "/app")
 from _common.http_server import (
     get_listen_port,
     post_json_to_peer,
+    post_json_to_named_peer,
     PostDataHandler,
     start_server,
     wait_for_data_handler,
@@ -32,7 +33,7 @@ def main() -> int:
     start_server(port, PostDataHandler)
 
     # POST "ready" 信号给 source，让 source 开始推送 job
-    post_json_to_peer("compute", "/data", {"status": "ready"}, timeout_sec=30.0)
+    post_json_to_named_peer("source", "/data", {"status": "ready"}, timeout_sec=30.0)
     print("COMPUTE_READY_SIGNAL_SENT", flush=True)
 
     # 等待 source POST 的 job 数据
