@@ -62,7 +62,7 @@ def _post_json(
     path: str,
     data: dict,
     timeout_sec: float = 120.0,
-    interval_sec: float = 0.5,
+    interval_sec: float = 2.0,
 ) -> None:
     import httpx
 
@@ -71,7 +71,7 @@ def _post_json(
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            resp = httpx.post(url, json=data, timeout=min(10.0, timeout_sec))
+            resp = httpx.post(url, json=data, timeout=min(30.0, timeout_sec))
             resp.raise_for_status()
             return
         except (httpx.HTTPError, OSError) as exc:

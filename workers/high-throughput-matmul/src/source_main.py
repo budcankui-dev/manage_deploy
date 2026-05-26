@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Matmul pipeline source: POST job to compute after starting HTTP server."""
+"""Matmul pipeline source: POST job to compute via HTTP."""
 
 from __future__ import annotations
 
@@ -15,11 +15,9 @@ sys.path.insert(0, "/app")
 
 from _common.http_server import (
     get_listen_port,
-    get_peer_url,
     post_json_to_peer,
     PostDataHandler,
     start_server,
-    wait_for_data_handler,
 )
 
 
@@ -43,21 +41,17 @@ def main() -> int:
         "profile_id": profile.get("profile_id", "matmul_dev"),
     }
 
-    # source 监听自己的端口，等待下游 compute 推送完成信号（compute 开始等待 job）
-    # 或者：compute 启动后直接 POST 给 source，source 收到后再 POST 给 compute
-    # 当前设计：source 启动 HTTP server，等待 compute 发送"就绪"信号，
-    # 然后 source POST job 给 compute
+    # source 启动 HTTP server（用于接收 compute 的就绪信号，但不再依赖它）
+    # 直接推送 job 给 compute，附带重试逻辑
     port = get_listen_port("source")
     print(f"SOURCE_STARTING port={port} job={job}", flush=True)
 
-    # 启动 server 等待 compute 的"就绪"信号
+    # 延迟确保容器完全启动，HTTP server 先起来
+    time.sleep(2)
     start_server(port, PostDataHandler)
 
-    # 等待 compute 发来 POST /data（表示 compute 已就绪）
-    _ = wait_for_data_handler(port, timeout_sec=120.0)
-    print("SOURCE_COMPUTE_READY", flush=True)
-
-    # POST job 给 compute
+    # 直接 POST job 给 compute，带重试因为 compute 可能还在启动中
+    # 推送成功即认为 job 已送达，后续 compute 会处理
     post_json_to_peer("source", "/data", job, timeout_sec=120.0)
     print(f"SOURCE_POSTED_JOB to compute", flush=True)
 
