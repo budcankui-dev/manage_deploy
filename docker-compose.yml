@@ -6,7 +6,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=mysql+aiomysql://root:Bupt%401234@10.112.249.191:3306/task_manager
+      # DATABASE_URL must be provided via .env or shell env; do NOT inline real
+      # credentials here. Example:
+      #   DATABASE_URL=mysql+aiomysql://USER:CHANGE_ME@DB_HOST:3306/DB_NAME
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./task_manager.db}
     volumes:
       - ./backend:/app
     networks:

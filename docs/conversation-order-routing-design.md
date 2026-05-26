@@ -204,64 +204,72 @@ API 预留模式：
 - `POST /api/routing-results/{id}` 回写结果。
 - 第一阶段可不作为主路径实现。
 
-给外部路由系统的 DAG JSON 应包含：
+给外部路由系统的 DAG JSON 以外部路由系统当前接收格式为准。意图解析和参数校验完成后，后端需要把结构化 intent 转换为如下 `RoutingRequest.input_payload`：
 
 ```json
 {
-  "task_type": "high_throughput_matmul",
-  "source_name": "user-terminal-a",
-  "destination_name": "compute-node-c",
-  "business_window": {
-    "start_time": "2026-05-27T10:00:00+08:00",
-    "end_time": "2026-05-27T12:00:00+08:00"
+  "job_id": "视频AI推理_低延时转发模态_3f4a9205-c4b3-4517-b520-4e0ed9e6b71d",
+  "job_name": "视频AI推理",
+  "modal": "低延时转发模态",
+  "_comment": "低延时转发模态",
+  "policy_type": "COST_CONSTRAINED",
+  "submit_ts_ms": 1777341600000,
+  "constraints": {
+    "budget": null,
+    "deadline_ms": 1777342200000
   },
-  "dag": {
-    "nodes": [
-      {
-        "role": "source",
-        "resource": {
-          "cpu": 1,
-          "memory": "512Mi"
-        }
+  "nodes": [
+    {
+      "node_id": "video",
+      "resources": {
+        "cpu_units": 20,
+        "mem_mb": 1024,
+        "disk_mb": 1024,
+        "gpu_units": 0
       },
-      {
-        "role": "compute",
-        "resource": {
-          "cpu": 2,
-          "memory": "2Gi",
-          "gpu": 0
-        }
-      },
-      {
-        "role": "sink",
-        "resource": {
-          "cpu": 1,
-          "memory": "512Mi"
-        }
+      "exec": {
+        "est_runtime_ms": 600000
       }
-    ],
-    "edges": [
-      ["source", "compute"],
-      ["compute", "sink"]
-    ]
-  },
-  "routing_strategies": [
-    "completion_time_first",
-    "resource_guarantee"
+    },
+    {
+      "node_id": "infer",
+      "resources": {
+        "cpu_units": 10,
+        "mem_mb": 1024,
+        "disk_mb": 1024,
+        "gpu_units": 0
+      },
+      "exec": {
+        "est_runtime_ms": 600000
+      }
+    }
   ],
-  "business_objective": {
-    "metric_key": "compute_latency_ms",
-    "operator": "<=",
-    "target_value": 60000,
-    "unit": "ms"
-  },
-  "data_profile": {
-    "matrix_size": 64,
-    "batch_count": 1,
-    "seed": 42
-  }
+  "edges": [
+    {
+      "from": "video",
+      "to": "infer",
+      "data_mb": 20
+    }
+  ]
 }
 ```
+
+字段映射建议：
+
+- `job_id`：由 `job_name`、`modal` 和工单 UUID 生成，保证外部路由系统幂等识别。
+- `job_name`：来自业务类型的人类可读名称，例如“视频AI推理”或“科学计算矩阵乘法演示”。
+- `modal` / `_comment`：来自用户选择或意图解析出的业务模态；`_comment` 仅用于外部系统展示和调试。
+- `submit_ts_ms`：第一阶段按用户填写的 `business_start_time` 转为 epoch milliseconds；如果外部路由系统后续要求真实提交时间，则新增 `order_created_ts_ms` 或调整映射。
+- `constraints.deadline_ms`：用户填写的 `business_end_time` 转为 epoch milliseconds。
+- `constraints.budget`：用户未填写预算时为 `null`。
+- `policy_type`：由业务目标或用户偏好映射；第一阶段可用固定默认值，例如 `COST_CONSTRAINED`。
+- `nodes[].node_id`：路由 DAG 内部逻辑节点名，不等于平台 `nodes.id`。例如 `video`、`infer`、`source`、`compute`、`sink`。
+- `nodes[].resources`：外部路由系统需要的资源约束，单位使用 `cpu_units`、`mem_mb`、`disk_mb`、`gpu_units`。
+- `nodes[].exec.est_runtime_ms`：估计运行时间，可由业务模板默认值、用户输入或规则估算得到。
+- `edges[].from/to`：引用 `nodes[].node_id`，表达业务数据流向。
+- `edges[].data_mb`：边上的估计数据量，可由用户上传文件大小、业务画像或默认规则估算。
+
+该 payload 是给外部路由系统计算路径和节点选择的输入，不直接等同于 Task Manager 的 `TaskTemplate` 或 `TaskInstance`。外部路由系统回写 placements 后，平台再把逻辑节点映射到实际部署节点，并物化为可启动的 DAG 实例。
 
 回写结果至少包含：
 

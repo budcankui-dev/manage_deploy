@@ -149,4 +149,4 @@ source / compute / sink 使用同一个镜像，通过不同 `command` 启动。
 - 端口冲突必须有两层防护：Manager 侧运行中实例检查，Node Agent 侧 Docker/宿主机检查。
 - 业务结果归档和业务数据传递是两个概念：MinIO 可保存结果，但不能作为 source/compute/sink 之间的数据总线。
 - 演示业务必须体现随路计算：数据沿外部路由选择出的节点路径流动，而不是只展示容器拓扑启动成功。
-- 演示脚本可以兼容旧入口，但新文档必须使用 `setup_matmul_demo.py`，不要再把 `seed_demo_data.py` 作为主入口。
+- 演示脚本入口统一为 `backend/scripts/rebuild_matmul_template.py`。它通过 `DATABASE_URL` 或 `MYSQL_*` 环境变量解析连接信息，直接查 MySQL 的 `nodes` 表绑定真实 compute-1/2/3 UUID；旧的 `setup_matmul_demo.py` / `seed_demo_data.py` 已停用，不要再写入新文档。

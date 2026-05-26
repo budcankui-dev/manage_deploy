@@ -16,9 +16,11 @@ require_http "${BASE_URL}/docs"
 require_http "http://127.0.0.1:8001/health"
 
 echo "[1] prepare scientific matmul demo"
-DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py > /tmp/lifecycle_matmul_demo.json
+# rebuild_matmul_template.py needs DATABASE_URL (or MYSQL_* env vars) and the
+# compute-1/2/3 node rows present in MySQL. Aborts if either is missing.
+DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py > /tmp/lifecycle_matmul_demo.json
 TEMPLATE_ID=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_matmul_demo.json'))['matmul_template_id'])")
-NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_matmul_demo.json'))['node_ids'][0])")
+NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/lifecycle_matmul_demo.json'))['node_ids']['compute-1'])")
 
 echo "[2] create instance"
 CREATE=$(curl -sS -X POST "${BASE_URL}/api/instances" -H 'Content-Type: application/json' -d "{

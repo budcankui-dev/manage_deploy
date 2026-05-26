@@ -6,9 +6,11 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 DEBUG_LOG="${DEBUG_LOG:-.cursor/debug-2df3cf.log}"
 
 echo "[1/6] prepare scientific matmul demo data"
-DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py > /tmp/matmul_demo_verify.json
+# rebuild_matmul_template.py needs DATABASE_URL (or MYSQL_* env vars) and the
+# compute-1/2/3 node rows present in MySQL. Aborts if either is missing.
+DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py > /tmp/matmul_demo_verify.json
 MATMUL_TEMPLATE_ID=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_verify.json'))['matmul_template_id'])")
-NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_verify.json'))['node_ids'][0])")
+NODE_A=$(python3 -c "import json; print(json.load(open('/tmp/matmul_demo_verify.json'))['node_ids']['compute-1'])")
 
 echo "[2/6] create instance with impossible source health check"
 CREATE_BODY=$(cat <<EOF

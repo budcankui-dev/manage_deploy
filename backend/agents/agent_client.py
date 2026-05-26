@@ -34,9 +34,12 @@ class AgentClient:
                 if response.status_code == 200:
                     return True, response.json()
                 else:
-                    return False, {"error": response.text}
+                    return False, {
+                        "error": response.text,
+                        "status_code": response.status_code,
+                    }
         except httpx.RequestError as e:
-            return False, {"error": str(e)}
+            return False, {"error": str(e), "status_code": None}
 
     async def stop_container(
         self,
@@ -51,9 +54,12 @@ class AgentClient:
                 if response.status_code == 200:
                     return True, response.json()
                 else:
-                    return False, {"error": response.text}
+                    return False, {
+                        "error": response.text,
+                        "status_code": response.status_code,
+                    }
         except httpx.RequestError as e:
-            return False, {"error": str(e)}
+            return False, {"error": str(e), "status_code": None}
 
     async def delete_container(
         self,
@@ -68,9 +74,12 @@ class AgentClient:
                 if response.status_code == 200:
                     return True, response.json()
                 else:
-                    return False, {"error": response.text}
+                    return False, {
+                        "error": response.text,
+                        "status_code": response.status_code,
+                    }
         except httpx.RequestError as e:
-            return False, {"error": str(e)}
+            return False, {"error": str(e), "status_code": None}
 
     async def get_container_status(
         self,
@@ -205,9 +214,12 @@ class AgentClient:
                 response = await client.post(url, json=payload)
                 if response.status_code == 200:
                     return True, response.json()
-                return False, {"error": response.text}
+                return False, {
+                    "error": response.text,
+                    "status_code": response.status_code,
+                }
         except httpx.RequestError as e:
-            return False, {"error": str(e)}
+            return False, {"error": str(e), "status_code": None}
 
     async def list_managed_containers(
         self,

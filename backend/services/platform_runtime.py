@@ -9,10 +9,20 @@ from schemas import ContainerStartRequest
 
 
 def build_platform_env(instance_id: str, node_instance_id: str) -> dict[str, str]:
+    manager_url = settings.manager_public_url
+    if not manager_url:
+        # `resolve_manager_public_url()` runs in the lifespan startup hook.
+        # If we land here the lookup failed silently (e.g. someone called this
+        # outside of FastAPI lifespan, like a script). Fail loud rather than
+        # ship workers with a broken callback URL.
+        raise RuntimeError(
+            "settings.manager_public_url is unset; resolve_manager_public_url() "
+            "must run before container env is built (normally during FastAPI lifespan startup)."
+        )
     env = {
         "TASK_INSTANCE_ID": instance_id,
         "TASK_NODE_INSTANCE_ID": node_instance_id,
-        "MANAGER_API_BASE": settings.manager_public_url.rstrip("/"),
+        "MANAGER_API_BASE": manager_url.rstrip("/"),
         "MINIO_ENDPOINT": settings.minio_endpoint.rstrip("/"),
         "MINIO_BUCKET": settings.minio_bucket,
     }
@@ -58,4 +68,8 @@ def apply_platform_runtime(
 ) -> dict[str, str]:
     if enable_scratch:
         apply_scratch_bind_mount(request, instance_id)
-    return merge_platform_env(instance_id, node_instance_id, runtime_env)
+    # Start with runtime_env (contains peer_env + local_port_env + macros + user_env)
+    merged = dict(runtime_env)
+    # Overlay platform env (TASK_INSTANCE_ID, MANAGER_API_BASE, etc.)
+    merged.update(build_platform_env(instance_id, node_instance_id))
+    return merged

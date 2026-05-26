@@ -5,7 +5,8 @@
 ## P0：跑通并固化 matmul E2E
 
 - [ ] 诊断 `GET /api/nodes` 500 的根因。
-- [ ] 跑通 `WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh`。
+- [ ] 固化远程 AMD64 worker/node_agent 镜像构建、推送、拉取流程。
+- [ ] 跑通真实 4 节点 `./scripts/e2e_matmul_live.sh`。
 - [ ] 验证 source / compute / sink 节点均写入 `ports` 和 `port_values`。
 - [ ] 验证同机重复部署触发端口冲突。
 - [ ] 将 E2E 结果写入 `docs/work-items/active/matmul-e2e-stabilization.md`。

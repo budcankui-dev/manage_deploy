@@ -1,12 +1,17 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "mysql+aiomysql://root:Bupt%401234@10.112.249.191:3306/task_manager"
-    # For SQLite during development:
-    # database_url: str = "sqlite+aiosqlite:///./task_manager.db"
+    # Deployments MUST set DATABASE_URL in env (.env or process env). The default
+    # below is a credentials-free local SQLite path used as a safe fallback so
+    # the process can boot in dev / unit-test environments without leaking any
+    # lab credentials. For production MySQL set e.g.
+    #   DATABASE_URL=mysql+aiomysql://USER:PASS@HOST:PORT/task_manager
+    database_url: str = "sqlite+aiosqlite:///./task_manager.db"
 
     agent_request_timeout: int = 60
     health_check_interval: int = 5
@@ -36,8 +41,15 @@ class Settings(BaseSettings):
     minio_access_key: str = ""
     minio_secret_key: str = ""
 
-    # Worker 回调 Manager（Docker Desktop 下 host 网络需 host.docker.internal）
-    manager_public_url: str = "http://host.docker.internal:8000"
+    # Backend self-identity: how Worker containers reach this Manager process.
+    # `backend_hostname` is looked up in the `nodes` table at startup; the
+    # `management_ip` column there becomes the host portion of MANAGER_PUBLIC_URL.
+    # `manager_public_url`, if explicitly set in env, OVERRIDES the lookup
+    # (use when the backend is reachable via a different URL than what is recorded
+    # in the nodes table, e.g. behind NAT or a load balancer).
+    backend_hostname: str = "admin"
+    backend_port: int = 8000
+    manager_public_url: Optional[str] = None
     platform_scratch_root: str = "/tmp/manage_deploy"
 
     # SCHEDULED 模式默认运行时长（创建时未填 scheduled_end_time 则填 start+N 小时）

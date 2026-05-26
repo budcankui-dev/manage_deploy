@@ -1,9 +1,17 @@
+import pytest
+
+from config import settings
 from schemas import ContainerStartRequest
 from services.platform_runtime import (
     apply_platform_runtime,
     merge_platform_env,
     scratch_host_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _set_manager_url(monkeypatch):
+    monkeypatch.setattr(settings, "manager_public_url", "http://test-manager:8000")
 
 
 def test_merge_platform_env_injects_ids():

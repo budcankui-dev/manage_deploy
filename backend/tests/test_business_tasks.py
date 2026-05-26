@@ -8,7 +8,8 @@ from enums import DeploymentMode
 from schemas import BusinessObjective, BusinessTaskCreate, RoutingResult
 
 
-def test_build_instance_create_maps_routing_and_runtime_env():
+@pytest.mark.asyncio
+async def test_build_instance_create_maps_routing_and_runtime_env():
     payload = BusinessTaskCreate(
         external_task_id="intent-001",
         task_type="low_latency_video_pipeline",
@@ -42,8 +43,19 @@ def test_build_instance_create_maps_routing_and_runtime_env():
         },
     )
 
-    instance = build_instance_create_from_business_task(
-        payload,
+    # Use valid UUIDs to bypass hostname resolution in test
+    uuid_a = "11111111-1111-1111-1111-111111111111"
+    uuid_b = "22222222-2222-2222-2222-222222222222"
+    uuid_c = "33333333-3333-3333-3333-333333333333"
+    payload.routing_result.placements = {
+        "source": uuid_a,
+        "compute": uuid_b,
+        "sink": uuid_c,
+    }
+
+    instance = await build_instance_create_from_business_task(
+        db=None,
+        payload=payload,
         template_id="template-video",
         role_node_names={
             "source": "source",
@@ -61,9 +73,9 @@ def test_build_instance_create_maps_routing_and_runtime_env():
     assert instance.scheduled_end_time is not None
     assert instance.keep_after_stop is False
     overrides = {item.template_node_name: item for item in instance.node_overrides}
-    assert overrides["source"].node_id == "node-a"
-    assert overrides["compute"].node_id == "node-b"
-    assert overrides["sink"].node_id == "node-c"
+    assert overrides["source"].node_id == uuid_a
+    assert overrides["compute"].node_id == uuid_b
+    assert overrides["sink"].node_id == uuid_c
     assert overrides["compute"].env["TASK_TYPE"] == "low_latency_video_pipeline"
     assert overrides["compute"].env["BUSINESS_OBJECTIVE"] == payload.business_objective.model_dump_json()
     assert overrides["compute"].env["RUNTIME_PLAN"] == '{"codec":"h264","preset":"ultrafast"}'

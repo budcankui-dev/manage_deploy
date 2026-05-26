@@ -10,10 +10,14 @@ COMPUTE_NODE="${3:-}"
 SINK_NODE="${4:-}"
 
 if [[ -z "${SOURCE_NODE}" ]]; then
-  DEMO=$(DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py)
-  SOURCE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][0])" "${DEMO}")
-  COMPUTE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][1])" "${DEMO}")
-  SINK_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids'][2])" "${DEMO}")
+  # rebuild_matmul_template.py reads MySQL credentials from DATABASE_URL (or
+  # MYSQL_* env vars) and rebuilds the matmul template against the live
+  # compute-1/2/3 node rows. It prints a JSON object whose `node_ids` is a
+  # dict keyed by hostname.
+  DEMO=$(DEMO_BASE_URL="${BASE_URL}" PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py)
+  SOURCE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids']['compute-1'])" "${DEMO}")
+  COMPUTE_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids']['compute-2'])" "${DEMO}")
+  SINK_NODE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_ids']['compute-3'])" "${DEMO}")
 fi
 
 curl -sS -X POST "${BASE_URL}/api/routing-results/${ROUTING_ID}" \

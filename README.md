@@ -49,7 +49,7 @@ npm run dev
 
 ```bash
 ./scripts/build_workers.sh
-DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
+DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 ```
 

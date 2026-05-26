@@ -9,6 +9,8 @@ COPY config.py .
 COPY docker_handler.py .
 COPY health_checks.py .
 COPY main.py .
+COPY port_utils.py .
+COPY runtime_resources.py .
 
 EXPOSE 8001
 

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from models import (
     TaskInstanceEdge,
     Node as NodeModel,
     TaskTemplate,
+    TaskEvent,
 )
 from enums import TaskStatus, NodeStatus
 from schemas import ContainerStartRequest
@@ -24,6 +25,132 @@ logger = logging.getLogger(__name__)
 
 def func_now() -> datetime:
     return datetime.utcnow()
+
+
+def _format_agent_error(result: dict) -> str:
+    """Compact, truncated representation of a non-2xx node_agent response."""
+    status = result.get("status_code")
+    raw_body = result.get("error", "")
+    body = str(raw_body)[:500] if raw_body is not None else ""
+    if status is None:
+        return f"node_agent unreachable: {body}" if body else "node_agent unreachable"
+    return f"node_agent http {status}: {body}" if body else f"node_agent http {status}"
+
+
+def _default_session_maker() -> Callable[[], Any]:
+    """Lazy-imported default `async_session_maker` so tests can patch it."""
+    from database import async_session_maker
+
+    return async_session_maker
+
+
+async def record_agent_failure_event_independent(
+    *,
+    instance_id: str,
+    node_id: Optional[str],
+    node_status: Optional[Any],
+    operation: str,
+    result: dict,
+    session_maker: Optional[Callable[[], Any]] = None,
+) -> None:
+    """Write a `node_agent_error` task_event in an INDEPENDENT session.
+
+    Use this from preflight-time call sites where the surrounding FastAPI
+    request may still raise `HTTPException` and rollback its own session.
+    The DAG-executor-time helpers stay on the request/executor session
+    because that session has its own commit point and the executor itself
+    is the unit of work.
+
+    Failures inside this helper are logged but never re-raised; the audit
+    write must never mask the original outcome the caller is reporting.
+    """
+    maker = session_maker or _default_session_maker()
+    try:
+        message = f"{operation}: {_format_agent_error(result)}"
+        async with maker() as session:
+            session.add(
+                TaskEvent(
+                    instance_id=instance_id,
+                    node_id=node_id,
+                    event_type="node_agent_error",
+                    old_status=str(node_status) if node_status is not None else None,
+                    new_status="failed",
+                    message=message[:2048],
+                )
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 - defensive: audit failure must not bubble
+        logger.exception(
+            "Failed to record independent TaskEvent for node_agent failure "
+            "(instance=%s op=%s)",
+            instance_id,
+            operation,
+        )
+
+
+async def reconcile_stale_running_node_independent(
+    *,
+    existing_node_id: str,
+    existing_instance_id: str,
+    message: str,
+    session_maker: Optional[Callable[[], Any]] = None,
+) -> bool:
+    """Reconcile a stale `running` DB row + append a `reconcile_stale_container`
+    task_event in an INDEPENDENT session that commits independently of the
+    surrounding request.
+
+    Returns True iff the reconcile write committed successfully. Failures are
+    logged and the function returns False; the caller (preflight) treats this
+    the same as "could not reconcile" and keeps the conflict, which is the
+    safe fallback.
+    """
+    maker = session_maker or _default_session_maker()
+    try:
+        async with maker() as session:
+            node_row = (
+                await session.execute(
+                    select(TaskInstanceNode).where(TaskInstanceNode.id == existing_node_id)
+                )
+            ).scalar_one_or_none()
+            instance_row = (
+                await session.execute(
+                    select(TaskInstance).where(TaskInstance.id == existing_instance_id)
+                )
+            ).scalar_one_or_none()
+            if not node_row or not instance_row:
+                logger.warning(
+                    "reconcile independent: node=%s instance=%s not found in DB; "
+                    "skipping",
+                    existing_node_id,
+                    existing_instance_id,
+                )
+                return False
+
+            prior_status = node_row.status
+            node_row.container_id = None
+            node_row.container_name = None
+            node_row.status = NodeStatus.STOPPED
+            instance_row.status = TaskStatus.STOPPED
+
+            session.add(
+                TaskEvent(
+                    instance_id=existing_instance_id,
+                    node_id=existing_node_id,
+                    event_type="reconcile_stale_container",
+                    old_status=str(prior_status) if prior_status is not None else None,
+                    new_status="stopped",
+                    message=message[:2048],
+                )
+            )
+            await session.commit()
+            return True
+    except Exception:  # noqa: BLE001 - defensive: audit failure must not bubble
+        logger.exception(
+            "Failed to record independent reconcile event (instance=%s node=%s)",
+            existing_instance_id,
+            existing_node_id,
+        )
+        return False
 
 
 class DAGExecutor:
@@ -100,6 +227,40 @@ class DAGExecutor:
     def _get_agent_endpoint(self, machine: NodeModel) -> str:
         return machine.agent_address or machine.management_ip
 
+    async def _record_agent_failure_event(
+        self,
+        *,
+        instance_id: str,
+        node: Optional[TaskInstanceNode],
+        operation: str,
+        result: dict,
+    ) -> None:
+        """Persist a task_event when a node_agent call fails (non-2xx / unreachable).
+
+        Keeps the failure trail visible in the UI / API even when the operator
+        cannot ssh into the worker host. Uses event_type=`node_agent_error`,
+        new_status=`failed`, message=<operation>: <node_agent status + body>.
+        """
+        try:
+            message = f"{operation}: {_format_agent_error(result)}"
+            self.db.add(
+                TaskEvent(
+                    instance_id=instance_id,
+                    node_id=node.id if node is not None else None,
+                    event_type="node_agent_error",
+                    old_status=str(node.status) if node is not None and node.status is not None else None,
+                    new_status="failed",
+                    message=message[:2048],
+                )
+            )
+            await self.db.flush()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to record TaskEvent for node_agent failure (instance=%s op=%s)",
+                instance_id,
+                operation,
+            )
+
     async def update_node_status(
         self, node: TaskInstanceNode, status: NodeStatus, error_message: Optional[str] = None
     ) -> None:
@@ -171,8 +332,15 @@ class DAGExecutor:
             node.container_id = result.get("container_id")
             node.container_name = container_name
             await self.db.flush()
+            return True, None
 
-        return success, result.get("error") if not success else None
+        await self._record_agent_failure_event(
+            instance_id=instance_id,
+            node=node,
+            operation="start_container",
+            result=result,
+        )
+        return False, _format_agent_error(result)
 
     async def stop_node(self, node: TaskInstanceNode) -> tuple[bool, Optional[str]]:
         machine = await self.get_node_machine(node.node_id)
@@ -184,7 +352,15 @@ class DAGExecutor:
             task_id=node.instance_id,
             node_id=node.id,
         )
-        return success, result.get("error") if not success else None
+        if success:
+            return True, None
+        await self._record_agent_failure_event(
+            instance_id=node.instance_id,
+            node=node,
+            operation="stop_container",
+            result=result,
+        )
+        return False, _format_agent_error(result)
 
     async def remove_node(self, node: TaskInstanceNode) -> tuple[bool, Optional[str]]:
         machine = await self.get_node_machine(node.node_id)
@@ -202,7 +378,14 @@ class DAGExecutor:
             node.error_message = None
             await self.update_node_status(node, NodeStatus.STOPPED)
             await self.db.flush()
-        return success, result.get("error") if not success else None
+            return True, None
+        await self._record_agent_failure_event(
+            instance_id=node.instance_id,
+            node=node,
+            operation="delete_container",
+            result=result,
+        )
+        return False, _format_agent_error(result)
 
     async def get_node_status(
         self, node: TaskInstanceNode

@@ -85,7 +85,7 @@ Worker 和脚本语法：
 
 ```bash
 python3 -m py_compile \
-  backend/scripts/setup_matmul_demo.py \
+  backend/scripts/rebuild_matmul_template.py \
   backend/scripts/seed_demo_data.py \
   workers/_common/http_server.py \
   workers/high-throughput-matmul/src/*.py
@@ -105,26 +105,32 @@ git diff --check
 ./scripts/build_workers.sh
 ```
 
-准备演示数据：
+准备演示数据：脚本通过 `DATABASE_URL`（或 `MYSQL_HOST` / `MYSQL_USER` /
+`MYSQL_PASSWORD` / `MYSQL_PORT` / `MYSQL_DATABASE`）读取 MySQL 凭据，并要求
+`nodes` 表里已有 compute-1/2/3 三行。
 
 ```bash
 DEMO_BASE_URL=http://127.0.0.1:8000 \
 PYTHONPATH=backend \
-backend/venv/bin/python backend/scripts/setup_matmul_demo.py
+backend/venv/bin/python backend/scripts/rebuild_matmul_template.py
 ```
 
 运行 live E2E：
 
 ```bash
-WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+./scripts/e2e_matmul_live.sh
 ```
 
 可选参数：
 
 ```bash
-MATMUL_MATRIX_SIZE=256 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
-E2E_DELETE_INSTANCE=1 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+MATMUL_MATRIX_SIZE=256 ./scripts/e2e_matmul_live.sh
+E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 ```
+
+`WORKER_SKIP_BUILD=1` 只允许在已经确认目标节点可拉取正确 tag、正确 registry、正确 CPU 架构的镜像后使用。远程 AMD64 节点测试前必须验证镜像是 `linux/amd64`，不能复用 macOS Docker Desktop 上默认构建出的本地镜像。
+
+真实 4 节点测试时，优先使用 admin-server 私有仓库镜像，例如 `10.112.244.94:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。
 
 期望：
 

@@ -21,9 +21,40 @@
 | `BUSINESS_TASK_ID` | 外部任务 ID |
 | `TASK_TYPE` | 如 `high_throughput_matmul` |
 | `TASK_ROLE` | `source` / `compute` / `sink` |
-| `DATA_PROFILE` | JSON 字符串 |
+| `DATA_PROFILE` | JSON 字符串，synthetic 数据画像 |
+| `INPUT_OBJECTS` | JSON array，S3 URI 列表，下载并合并到 DATA_PROFILE |
+| `INPUT_MANIFEST_URI` | MinIO URI（如 `s3://bucket/path/manifest.json`），包含 profile 和 objects |
 | `BUSINESS_OBJECTIVE` | JSON 字符串 |
 | `RUNTIME_PLAN` | JSON 字符串 |
+
+### INPUT_OBJECTS 与 INPUT_MANIFEST_URI 优先级
+
+当两者同时存在时，`INPUT_MANIFEST_URI` 优先。三个变量均不存在时，回退到 `DATA_PROFILE` synthetic 行为。
+
+**INPUT_OBJECTS 示例：**
+
+```json
+["s3://task-inputs/user-123/order-456/job.json", "s3://task-inputs/user-123/order-456/profile.json"]
+```
+
+**INPUT_MANIFEST_URI 指向的 manifest.json 示例：**
+
+```json
+{
+  "objects": [
+    { "name": "matrix-a.npy", "uri": "s3://task-inputs/user-123/order-456/matrix-a.npy" },
+    { "name": "matrix-b.npy", "uri": "s3://task-inputs/user-123/order-456/matrix-b.npy" }
+  ],
+  "profile": {
+    "matrix_size": 1024,
+    "batch_count": 1,
+    "seed": 42,
+    "profile_id": "matmul_prod"
+  }
+}
+```
+
+manifest 中的 `profile` 字段（matrix_size, batch_count, seed）覆盖 DATA_PROFILE。若 manifest 中无 `profile`，从 manifest 顶层字段读取。
 
 ## 指标上报
 

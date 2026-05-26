@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -12,6 +13,7 @@ from enums import DeploymentMode, OrderStatus, TaskStatus
 from models import (
     BusinessObjectiveEvaluation,
     BusinessTemplateCatalog,
+    Node as NodeModel,
     TaskOrder,
     TaskResultObject,
 )
@@ -39,8 +41,26 @@ from .instances import _create_instance_from_template
 
 router = APIRouter(prefix="/api", tags=["business-tasks"])
 
+UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
 
-def build_instance_create_from_business_task(
+
+def _is_uuid(value: str) -> bool:
+    return bool(UUID_PATTERN.match(value))
+
+
+async def _resolve_hostname_to_uuid(db: AsyncSession, hostname: str) -> str:
+    """Resolve hostname to node UUID. Raises HTTPException if not found."""
+    result = await db.execute(select(NodeModel).where(NodeModel.hostname == hostname))
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node not found: {hostname}")
+    return node.id
+
+
+async def build_instance_create_from_business_task(
+    db: AsyncSession,
     payload: BusinessTaskCreate,
     template_id: str,
     role_node_names: dict[str, str],
@@ -58,9 +78,13 @@ def build_instance_create_from_business_task(
     }
     overrides: list[TaskInstanceNodeOverride] = []
     for role, template_node_name in role_node_names.items():
-        node_id = payload.routing_result.placements.get(role)
-        if not node_id:
+        raw_node_id = payload.routing_result.placements.get(role)
+        if not raw_node_id:
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
+        if _is_uuid(raw_node_id):
+            node_id = raw_node_id
+        else:
+            node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
         env = dict(shared_env)
         env["TASK_ROLE"] = role
         overrides.append(
@@ -150,7 +174,8 @@ async def create_business_task(payload: BusinessTaskCreate, db: AsyncSession = D
         "compute": catalog.compute_node_name,
         "sink": catalog.sink_node_name,
     }
-    instance_create = build_instance_create_from_business_task(
+    instance_create = await build_instance_create_from_business_task(
+        db,
         payload,
         template_id=catalog.template_id,
         role_node_names=role_node_names,

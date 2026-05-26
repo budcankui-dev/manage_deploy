@@ -16,6 +16,7 @@ from api import (
     templates_router,
 )
 from services.scheduler import TaskScheduler, restore_pending_jobs
+from services.self_identity import resolve_manager_public_url
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Starting application...")
     await init_db()
+    # Resolve MANAGER_PUBLIC_URL from the nodes table unless explicitly overridden.
+    # Fails fast if the backend hostname is not registered (the operator must
+    # either insert it or set BACKEND_HOSTNAME / MANAGER_PUBLIC_URL).
+    await resolve_manager_public_url()
     TaskScheduler.start()
     try:
         await restore_pending_jobs()

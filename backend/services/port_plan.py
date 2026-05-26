@@ -166,13 +166,31 @@ def build_peer_env_for_node(
     return env
 
 
-async def find_running_port_conflicts(
+def format_running_port_conflict_message(
+    worker_id: str,
+    ports_text: str,
+    existing_instance_name: str,
+    existing_node_name: str,
+) -> str:
+    return (
+        f"Worker {worker_id} 端口 {ports_text} 已被运行中实例 "
+        f"「{existing_instance_name}」节点「{existing_node_name}」占用"
+    )
+
+
+async def find_running_port_conflict_records(
     db: AsyncSession,
     node_plans: list[dict],
     exclude_instance_id: Optional[str] = None,
-) -> list[str]:
+) -> list[dict]:
+    """Return structured conflict records (one per (existing_node, overlap)).
+
+    Each record contains the existing instance + node objects and the overlap
+    port set so the caller can attempt on-demand reconcile against the
+    real node_agent state before rendering a user-visible error.
+    """
     active_statuses = (TaskStatus.RUNNING, TaskStatus.STARTING)
-    messages: list[str] = []
+    records: list[dict] = []
 
     for plan in node_plans:
         worker_id = plan.get("node_id")
@@ -204,10 +222,38 @@ async def find_running_port_conflicts(
             overlap = requested & existing_ports
             if not overlap:
                 continue
-            ports_text = ",".join(sorted(overlap))
-            messages.append(
-                f"Worker {worker_id} 端口 {ports_text} 已被运行中实例 "
-                f"「{existing_instance.name}」节点「{existing_node.name}」占用"
+            records.append(
+                {
+                    "worker_id": worker_id,
+                    "overlap": overlap,
+                    "existing_node": existing_node,
+                    "existing_instance": existing_instance,
+                }
             )
 
-    return messages
+    return records
+
+
+async def find_running_port_conflicts(
+    db: AsyncSession,
+    node_plans: list[dict],
+    exclude_instance_id: Optional[str] = None,
+) -> list[str]:
+    """Backwards-compatible wrapper that renders conflict messages directly.
+
+    Callers that need to reconcile against node_agent (i.e. detect stale DB
+    state where the container has actually been removed) should use
+    `find_running_port_conflict_records` instead.
+    """
+    records = await find_running_port_conflict_records(
+        db, node_plans, exclude_instance_id=exclude_instance_id
+    )
+    return [
+        format_running_port_conflict_message(
+            r["worker_id"],
+            ",".join(sorted(r["overlap"])),
+            r["existing_instance"].name,
+            r["existing_node"].name,
+        )
+        for r in records
+    ]

@@ -10,12 +10,16 @@
 # 构建单个 worker 镜像
 ./scripts/build_workers.sh
 
-# 准备演示节点、模板和业务目录项
-DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
+# 准备演示节点、模板和业务目录项。脚本通过 DATABASE_URL（或 MYSQL_HOST /
+# MYSQL_USER / MYSQL_PASSWORD / MYSQL_PORT / MYSQL_DATABASE 环境变量）读取
+# MySQL 凭据；并要求 nodes 表里已有 compute-1/2/3 三行。
+DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py
 
 # 需 backend :8000 + node_agent :8001 + Docker
-WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+./scripts/e2e_matmul_live.sh
 ```
+
+真实 4 节点测试时，先构建并推送 `linux/amd64` 镜像到 admin-server 私有仓库，再让业务节点拉取运行。`WORKER_SKIP_BUILD=1` 只适合已经验证镜像 tag、registry、架构均正确的复测场景。
 
 前端入口：Admin -> 业务任务中心 -> 一键演示矩阵乘法。
 
@@ -39,10 +43,27 @@ manage-deploy/scientific-matmul:dev
 
 ## 数据流
 
-1. source 根据 `DATA_PROFILE` 生成矩阵规模、批次数和随机种子，并等待 compute 就绪信号。
-2. compute 启动 HTTP 服务后通知 source，收到 job 后执行 NumPy batched FP32 矩阵乘法。
-3. compute 通过 HTTP 将结果推给 sink。
-4. sink 接收结果，向 Manager 上报 `compute_latency_ms`，并可选上传 `result.json` 到 MinIO。
+### 数据来源优先级
+
+第一优先级：**MinIO / 对象存储**（生产路径）
+
+- source 通过 `INPUT_MANIFEST_URI` 或 `INPUT_OBJECTS` 从 MinIO 拉取用户上传的输入对象。
+- `INPUT_MANIFEST_URI` 指向 manifest.json，包含 profile 和 object URI 列表。
+- `INPUT_OBJECTS` 是 S3 URI 数组，直接列出要下载的 JSON 文件，合并到 DATA_PROFILE。
+- 凭据通过 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY` 环境变量注入，不写入镜像。
+
+第二优先级：**synthetic 合成数据**（演示 / 验收路径）
+
+- 当没有 INPUT_* 变量时，source 根据 `DATA_PROFILE` 环境变量生成矩阵规模、批次数和随机种子。
+- 适合本地 E2E 测试和验收演示，不依赖外部对象存储。
+
+### 节点间数据传递
+
+1. source 根据数据来源生成 job（矩阵规模、批次数、seed）。
+2. source 通过 HTTP POST 将 job 发送到 compute 节点。
+3. compute 执行 NumPy batched FP32 矩阵乘法。
+4. compute 通过 HTTP POST 将结果发送到 sink 节点。
+5. sink 上报 `compute_latency_ms` 指标，并将 result.json 可选上传到 MinIO。
 
 节点之间的业务数据通过 HTTP 网络通信传递，不再依赖 `/scratch` 共享目录。
 
@@ -50,4 +71,4 @@ manage-deploy/scientific-matmul:dev
 
 ## 命名说明
 
-旧脚本名 `seed_demo_data.py` 表达的是“向开发库填充种子数据”。现在这个演示更准确的动作是“准备矩阵乘法演示环境”，因此新入口是 `backend/scripts/setup_matmul_demo.py`。旧脚本仍保留为兼容包装，避免已有命令立即失效。
+旧脚本名 `seed_demo_data.py` 表达的是“向开发库填充种子数据”，后来短暂出现过 `setup_matmul_demo.py`。这两个脚本都已停用——它们假设 SQLite 演示库里的 demo-worker UUID，而生产 MySQL 没有这些 UUID。当前唯一入口是 `backend/scripts/rebuild_matmul_template.py`：它从 `DATABASE_URL`（或 `MYSQL_*` 环境变量）解析连接信息，直接查 MySQL 的 `nodes` 表拿 compute-1/2/3 的真实 UUID，再调用 API 重建模板。

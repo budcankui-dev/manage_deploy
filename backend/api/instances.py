@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,12 +35,22 @@ from schemas import (
     TaskMetricResponse,
     TemplateMetricSummary,
 )
-from services.dag_executor import DAGExecutor
+from services.dag_executor import (
+    DAGExecutor,
+    record_agent_failure_event_independent,
+    reconcile_stale_running_node_independent,
+)
 from services.runtime_fields import apply_runtime_overrides, build_container_start_request, pick_override
 from services.scheduler import TaskScheduler
 from services.order_sync import mark_orders_cancelled_for_instance
-from services.port_plan import extract_host_ports, find_running_port_conflicts
+from services.port_plan import (
+    extract_host_ports,
+    find_running_port_conflict_records,
+    format_running_port_conflict_message,
+)
 from services.instance_builder import resolve_port_values
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
@@ -80,7 +91,16 @@ async def _preflight_instance_plan(
     db: AsyncSession,
     node_plans: list[dict],
     exclude_instance_id: str | None = None,
+    *,
+    instance_id_for_events: str | None = None,
 ) -> InstancePreflightResponse:
+    """Run port preflight against each node_agent.
+
+    When `instance_id_for_events` is set (i.e. we are preflight-checking an
+    existing instance, not creating a new one) a `task_event` is written
+    whenever node_agent itself is unreachable / returns 5xx, so the
+    failure trail is visible in the UI in addition to the HTTP response.
+    """
     executor = DAGExecutor(db)
     conflicts: list[InstancePreflightIssue] = []
     warnings: list[InstancePreflightIssue] = []
@@ -128,6 +148,16 @@ async def _preflight_instance_plan(
             exclude_container_name=plan.get("container_name"),
         )
         if not success:
+            if instance_id_for_events:
+                # Use an INDEPENDENT session so the audit row survives a later
+                # HTTPException(400) rollback of the request session.
+                await record_agent_failure_event_independent(
+                    instance_id=instance_id_for_events,
+                    node_id=None,
+                    node_status=None,
+                    operation=f"preflight_ports({machine.hostname})",
+                    result=result,
+                )
             conflicts.append(
                 InstancePreflightIssue(
                     template_node_id=plan.get("template_node_id"),
@@ -177,11 +207,33 @@ async def _preflight_instance_plan(
             )
         )
 
-    for message in await find_running_port_conflicts(db, node_plans, exclude_instance_id=exclude_instance_id):
+    records = await find_running_port_conflict_records(
+        db, node_plans, exclude_instance_id=exclude_instance_id
+    )
+    for record in records:
+        existing_node = record["existing_node"]
+        existing_instance = record["existing_instance"]
+        overlap_text = ",".join(sorted(record["overlap"]))
+
+        # On-demand reconcile: if the DB believes this node is running but
+        # node_agent reports its container as removed, mark the stale row
+        # stopped and skip the conflict so the new deployment can proceed.
+        if await _reconcile_stale_running_node(
+            executor=executor,
+            existing_node=existing_node,
+            existing_instance=existing_instance,
+        ):
+            continue
+
         conflicts.append(
             InstancePreflightIssue(
                 level="conflict",
-                message=message,
+                message=format_running_port_conflict_message(
+                    record["worker_id"],
+                    overlap_text,
+                    existing_instance.name,
+                    existing_node.name,
+                ),
             )
         )
 
@@ -190,6 +242,102 @@ async def _preflight_instance_plan(
         conflicts=conflicts,
         warnings=warnings,
     )
+
+
+# Status values that node_agent's /containers/{task}/{node}/status returns
+# when the underlying docker container no longer exists on the worker.
+_NODE_AGENT_REMOVED_STATUSES = frozenset({"not_found", "removed", "not_running"})
+
+
+async def _reconcile_stale_running_node(
+    *,
+    executor: DAGExecutor,
+    existing_node: TaskInstanceNode,
+    existing_instance: TaskInstance,
+) -> bool:
+    """Return True iff the existing node was reconciled (DB updated to stopped).
+
+    Decision matrix:
+        * existing_node.container_id is blank -> nothing to reconcile, treat
+          the DB record as authoritative and keep the conflict.
+        * node_agent reports container removed/not_found -> update DB, write
+          a `reconcile_stale_container` task_event, and signal the caller to
+          drop this conflict.
+        * node_agent says the container is still running -> keep the conflict.
+        * node_agent is unreachable -> keep the conflict (do not silently
+          believe stale DB rows could be right; also do not pretend the
+          worker is healthy).
+    """
+    if not existing_node.container_id:
+        return False
+
+    machine = await executor.get_node_machine(existing_node.node_id)
+    if not machine:
+        return False
+
+    try:
+        status, _healthy, message = await executor.agent_client.get_container_status(
+            management_ip=executor._get_agent_endpoint(machine),
+            task_id=existing_node.instance_id,
+            node_id=existing_node.id,
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive, do not swallow silently
+        logger.warning(
+            "preflight reconcile: unable to reach node_agent for instance=%s node=%s: %s; "
+            "keeping stale DB conflict",
+            existing_node.instance_id,
+            existing_node.id,
+            exc,
+        )
+        return False
+
+    if status in _NODE_AGENT_REMOVED_STATUSES:
+        prior_container_id = existing_node.container_id
+        prior_node_status = existing_node.status
+        reconcile_message = (
+            f"Reconciled stale instance state on {machine.hostname}: "
+            f"container {prior_container_id} reported as {status} by node_agent; "
+            f"marking node {existing_node.name} (was {prior_node_status}) and "
+            f"instance 「{existing_instance.name}」 stopped"
+        )
+        # Persist the reconcile via an INDEPENDENT session. The request session
+        # (executor.db) may still be rolled back by a later HTTPException(400)
+        # if other conflicts in this preflight remain unreconcilable; the audit
+        # row + the stale-row cleanup must survive that rollback.
+        committed = await reconcile_stale_running_node_independent(
+            existing_node_id=existing_node.id,
+            existing_instance_id=existing_node.instance_id,
+            message=reconcile_message,
+        )
+        if not committed:
+            # Independent write failed; do NOT mutate in-memory state, do NOT
+            # signal the conflict as resolved. Keep the conflict, log was
+            # already emitted by the helper.
+            return False
+        # Mirror the committed state into the in-memory ORM objects so any
+        # subsequent inspection within this request (e.g. response building)
+        # sees the same values that landed in the DB.
+        existing_node.container_id = None
+        existing_node.container_name = None
+        existing_node.status = NodeStatus.STOPPED
+        existing_instance.status = TaskStatus.STOPPED
+        return True
+
+    if status == "unknown" or (isinstance(status, str) and status.startswith("error")):
+        # node_agent itself reachable but reports an error path (HTTP 5xx
+        # surfaced as status='unknown' by agent_client, or docker SDK error
+        # bubbled through docker_handler). Do not modify DB.
+        logger.warning(
+            "preflight reconcile: node_agent returned status=%s message=%r for instance=%s node=%s; "
+            "keeping stale DB conflict",
+            status,
+            message,
+            existing_node.instance_id,
+            existing_node.id,
+        )
+        return False
+
+    return False
 
 
 async def _build_preflight_plan_from_create(
@@ -539,6 +687,7 @@ async def start_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
         db,
         await _build_preflight_plan_from_instance(instance),
         exclude_instance_id=instance_id,
+        instance_id_for_events=instance_id,
     )
     if not preflight.ok:
         messages = "; ".join(issue.message for issue in preflight.conflicts)

@@ -214,10 +214,10 @@ Use the integration-fix subagent to address the review findings and prepare E2E 
 - 当前 work item
 
 任务：
-跑真实部署和 E2E 验收。
+先理解用户本次提出的问题，选择最小但可信的测试范围；不要默认每次跑全量端到端。
 确认 backend、node_agent、Docker 是否可用。
 使用真实命令验证，不只做静态判断。
-验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 running/ready。
+只有当本次目标涉及业务链路或部署闭环时，才验证业务数据沿 source -> compute -> sink 网络链路流转。
 用户需要看前端过程时，运行 cd frontend && npm run test:e2e:headed 打开有头浏览器；默认可用 npm run test:e2e 无头执行。
 
 常用命令：
@@ -225,8 +225,8 @@ curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8001/health
 curl -sS http://127.0.0.1:8000/api/nodes | python3 -m json.tool
 ./scripts/build_workers.sh
-DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
-WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/rebuild_matmul_template.py
+./scripts/e2e_matmul_live.sh
 cd frontend && npm run test:e2e
 cd frontend && npm run test:e2e:headed
 
@@ -236,6 +236,7 @@ cd frontend && npm run test:e2e:headed
 - 判断是环境问题、旧 DB/schema 问题，还是代码问题。
 - 如果是代码问题，交给 Implementation Agent。
 - 如果 E2E 通过，也要补充 source/compute/sink 日志或等价证据，证明 job/result 走 HTTP PEER_* 链路。
+- 如果没有跑全量 E2E，必须说明为什么当前问题不需要全量 E2E。
 ```
 
 ## Review Agent 模板
@@ -320,10 +321,11 @@ approve / request changes
 优先定位 /api/nodes 500。
 如果是旧数据库 schema 或服务状态问题，给出最小处理命令并继续 E2E。
 如果是代码问题，记录 traceback 和复现命令，交给 Implementation Agent。
+如果目标是真实 4 节点测试，先确认 worker/node_agent 镜像已经以 `linux/amd64` 构建并推送到 `10.112.244.94:5000`，不要默认使用 `WORKER_SKIP_BUILD=1`。
 
 验收重点：
 - GET /api/nodes 正常返回数组。
-- setup_matmul_demo.py 输出 node_ids、matmul_template_id、worker_image。
+- rebuild_matmul_template.py 输出 node_ids、matmul_template_id、worker_image。
 - e2e_matmul_live.sh 输出 OK matmul live e2e passed。
 - evaluation 返回 metric_key=compute_latency_ms 且 business_success=true。
 - source / compute / sink 节点有非空 ports 和 port_values。
