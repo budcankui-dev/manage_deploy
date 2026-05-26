@@ -7,6 +7,7 @@ from .auth import router as auth_router
 from .conversations import router as conversations_router
 from .routing import router as routing_router
 from .admin import router as admin_router
+from .uploads import router as uploads_router
 
 __all__ = [
     "nodes_router",
@@ -18,4 +19,5 @@ __all__ = [
     "conversations_router",
     "routing_router",
     "admin_router",
+    "uploads_router",
 ]

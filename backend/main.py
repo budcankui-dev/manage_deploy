@@ -15,6 +15,7 @@ from api import (
     orders_router,
     routing_router,
     templates_router,
+    uploads_router,
 )
 from services.scheduler import TaskScheduler, restore_pending_jobs
 from services.self_identity import resolve_manager_public_url
@@ -65,6 +66,7 @@ app.include_router(auth_router)
 app.include_router(conversations_router)
 app.include_router(routing_router)
 app.include_router(admin_router)
+app.include_router(uploads_router)
 
 
 @app.get("/health")

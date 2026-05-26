@@ -315,6 +315,24 @@ class TaskResultObject(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
+class UserUploadedObject(Base):
+    __tablename__ = "user_uploaded_objects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    bucket: Mapped[str] = mapped_column(String(255), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(2048), nullable=False)
+    uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(nullable=True)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="uploaded")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
 class User(Base):
     __tablename__ = "users"
 
