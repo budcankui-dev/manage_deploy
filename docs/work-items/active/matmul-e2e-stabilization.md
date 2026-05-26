@@ -21,6 +21,8 @@ Last Updated: 2026-05-26
 
 本任务的架构关注点是随路计算：DAG 拓扑启动保证生命周期安全，但验收重点是业务数据沿外部路由选择的 source -> compute -> sink 节点路径通过 HTTP 网络流转。
 
+远程测试部署机器清单见 `docs/deployment/test-lab.md`。该文件只记录非密码信息；不要把 SSH 密码写入 work item 或 git tracked 文件。
+
 最新已知阻塞：提升权限运行 `WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh` 时，`setup_matmul_demo.py` 调 `GET /api/nodes` 返回 500，随后本地 backend 一度不可连接。需要确认这是旧数据库 schema、运行服务状态，还是代码缺陷。
 
 ## Files Likely Involved

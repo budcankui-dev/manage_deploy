@@ -8,6 +8,8 @@ frontend/test-results/
 .vite/
 backend/.env
 frontend/.env
+ops/secrets/
+*.local.md
 .cursor/
 .playwright-mcp/
 backend/task_manager.db

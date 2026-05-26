@@ -210,6 +210,7 @@ Use the integration-fix subagent to address the review findings and prepare E2E 
 - docs/agents/base.md
 - docs/agents/e2e-deploy-test.md
 - docs/testing.md
+- 远程测试部署任务还要读 docs/deployment/test-lab.md
 - 当前 work item
 
 任务：

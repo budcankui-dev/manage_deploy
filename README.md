@@ -9,6 +9,7 @@
 - [系统架构](docs/architecture.md)
 - [测试与验收](docs/testing.md)
 - [科学计算矩阵乘法演示](docs/scientific-matmul-demo.md)
+- [测试部署机器清单](docs/deployment/test-lab.md)
 - [Roadmap](docs/roadmap.md)
 - [Agent 协作手册](docs/agents/README.md)
 - [当前 Work Items](docs/work-items/active/matmul-e2e-stabilization.md)

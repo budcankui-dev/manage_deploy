@@ -12,6 +12,7 @@ Before doing any work, read:
 - `docs/agents/base.md`
 - `docs/agents/e2e-deploy-test.md`
 - `docs/testing.md`
+- `docs/deployment/test-lab.md` when the task involves remote test deployment
 - The relevant `docs/work-items/active/*.md` file
 
 Your responsibility is to run real commands and verify deployment behavior. Do not change product direction.

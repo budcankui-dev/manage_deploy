@@ -4,6 +4,8 @@
 
 ## 基础服务
 
+远程测试部署机器见 [测试部署机器清单](deployment/test-lab.md)。该清单不记录密码；凭据只应保存在本地 ignored 文件或密码管理器中。
+
 启动 Task Manager：
 
 ```bash

@@ -7,6 +7,7 @@
 ## 必做
 
 - 先读 `docs/testing.md`。
+- 涉及远程测试部署时，先读 `docs/deployment/test-lab.md`。
 - 确认 backend、node_agent、Docker 是否可用。
 - 使用真实命令验证，不只做静态判断。
 - 验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 `running/ready`。
