@@ -40,6 +40,7 @@ class OrderStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+    ORPHANED = "orphaned"
 
 
 class UserRole(str, Enum):
