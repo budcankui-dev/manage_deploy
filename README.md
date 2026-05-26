@@ -10,7 +10,7 @@
 - [测试与验收](docs/testing.md)
 - [科学计算矩阵乘法演示](docs/scientific-matmul-demo.md)
 - [Roadmap](docs/roadmap.md)
-- [Agent 协作提示词](docs/agents/base.md)
+- [Agent 协作手册](docs/agents/README.md)
 - [当前 Work Items](docs/work-items/active/matmul-e2e-stabilization.md)
 
 ## 快速启动
