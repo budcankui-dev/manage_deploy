@@ -1,0 +1,139 @@
+# 系统架构
+
+`manage_deploy` 是一个多节点 Docker DAG 编排系统。当前产品主线是在通用编排能力之上，演示一个 **科学计算矩阵乘法** 业务闭环：对话/业务任务 -> 路由放置 -> DAG 部署 -> 指标上报 -> 业务目标评估。
+
+## 组件
+
+| 组件 | 路径 | 职责 |
+|------|------|------|
+| Task Manager | `backend/` | FastAPI 后端，负责模板、实例、DAG 编排、调度、工单、业务评估 |
+| Node Agent | `node_agent/` | 部署在 worker 机器上，通过 Docker SDK 控制本地容器 |
+| Frontend | `frontend/` | Vue3 + Element Plus 管理端和意图对话入口 |
+| Workers | `workers/` | 业务容器代码，当前维护科学计算矩阵乘法演示 |
+
+## 核心概念
+
+- **Node**：一台可部署 worker 机器，包含管理地址和业务地址。
+- **TaskTemplate**：DAG 蓝图，包含模板节点、边、镜像、命令、端口、健康检查和资源限制。
+- **TaskInstance**：模板的一次具体运行，实例节点会绑定到实际 Node。
+- **TaskOrder**：业务层工单，关联业务输入、路由结果和物化后的实例。
+- **BusinessObjectiveEvaluation**：业务目标评估结果，例如 `compute_latency_ms <= target_value`。
+- **Conversation / IntentDraft / RoutingRequest**：普通用户从自然语言到部署请求的前置工作流。
+
+## DAG 生命周期
+
+任务状态：
+
+```text
+pending -> scheduled -> starting -> running -> stopping -> stopped | failed | expired
+```
+
+节点状态：
+
+```text
+pending -> starting -> running -> ready -> stopping -> stopped | failed
+```
+
+启动时，Task Manager 按拓扑顺序启动根节点，等待上游节点 `ready` 后启动下游节点。停止时按反向拓扑顺序执行。节点启动失败时，已创建容器应被 remove，而不是只 stop 后留下 exited 容器。
+
+## 网络模型
+
+控制面：
+
+- Task Manager、数据库、MinIO、Node Agent API 走管理网络。
+- 本地开发常用 `127.0.0.1:8000` / `127.0.0.1:8001`。
+
+业务面：
+
+- 业务容器使用 host 网络模式。
+- 业务节点之间必须通过网络通信传递业务数据。
+- 模板节点必须声明 `port_defs` 或 `ports`，让平台生成端口映射和 `PEER_*` 环境变量。
+- 不允许通过共享卷、宿主机文件或对象存储中转业务数据。MinIO 只用于结果归档。
+
+开发默认：
+
+- `PREFER_BUSINESS_IPV6=false`
+- `business_ip` 与管理面同源，通常为 `127.0.0.1`
+
+验收/生产：
+
+- 节点配置 `business_ipv6`
+- `PREFER_BUSINESS_IPV6=true`
+- 使用 `scripts/verify_macro_port_e2e.py` 验证 PEER URL 注入
+
+## 当前演示业务
+
+唯一维护的演示业务是 **科学计算矩阵乘法演示**。
+
+| 项 | 值 |
+|----|----|
+| `task_type` | `high_throughput_matmul` |
+| 模板名 | `scientific-matmul-demo` |
+| 镜像 | `manage-deploy/scientific-matmul:{tag}` |
+| 说明 | `docs/scientific-matmul-demo.md` |
+
+source / compute / sink 使用同一个镜像，通过不同 `command` 启动。三节点通过 HTTP 传递 job/result，sink 上报 `compute_latency_ms`。
+
+## 主要 API
+
+部署编排：
+
+- `POST /api/templates`
+- `POST /api/instances`
+- `POST /api/instances/{id}/start`
+- `POST /api/instances/{id}/stop`
+- `POST /api/instances/preflight`
+- `POST /api/instances/{id}/metrics`
+- `POST /api/nodes`
+
+业务任务：
+
+- `POST /api/business-tasks`
+- `GET /api/business-tasks`
+- `GET /api/business-tasks/summary`
+- `GET /api/orders/{id}`
+
+意图与路由：
+
+- `POST /api/conversations`
+- `POST /api/conversations/{id}/messages`
+- `POST /api/conversations/{id}/confirm-intent`
+- `POST /api/routing-requests`
+- `POST /api/routing-results/{id}`
+- `POST /api/conversations/{id}/submit`
+
+## 数据表分组
+
+基础设施：
+
+- `nodes`
+- `task_templates`
+- `task_template_nodes`
+- `task_template_edges`
+- `task_instances`
+- `task_instance_nodes`
+- `task_instance_edges`
+- `task_events`
+
+业务闭环：
+
+- `task_orders`
+- `task_metrics`
+- `task_result_objects`
+- `business_template_catalog`
+- `business_objective_evaluations`
+
+用户和意图：
+
+- `users`
+- `conversations`
+- `conversation_messages`
+- `intent_drafts`
+- `routing_requests`
+
+## 设计约束
+
+- 模板和实例的运行时字段要保持可预检：镜像、命令、端口、资源、健康检查都应能在启动前检查。
+- 端口冲突必须有两层防护：Manager 侧运行中实例检查，Node Agent 侧 Docker/宿主机检查。
+- 业务结果归档和业务数据传递是两个概念：MinIO 可保存结果，但不能作为 source/compute/sink 之间的数据总线。
+- 演示脚本可以兼容旧入口，但新文档必须使用 `setup_matmul_demo.py`，不要再把 `seed_demo_data.py` 作为主入口。
