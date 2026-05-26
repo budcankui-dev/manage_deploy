@@ -1,6 +1,6 @@
 # 测试部署机器清单
 
-本文档记录当前业务端到端测试可用机器。不要在本文件中记录密码、token、私钥或其他凭据；凭据应放在本地密码管理器，或放在被 `.gitignore` 忽略的本地文件，例如 `ops/secrets/test-lab-credentials.local.md`。
+本文档记录当前业务端到端测试可用机器。不要在本文件中记录密码、token、私钥或其他凭据；凭据应放在本地密码管理器，或放在被 `.gitignore` 忽略的本地文件 `ops/secrets/test-lab-credentials.local.md`。
 
 ## 拓扑角色
 
@@ -10,6 +10,16 @@
 | compute-1 | 业务节点 | `10.112.249.191` | `2345` | `chengyubin` | TITAN X * 1 | `/disk/sdc` | 当前阶段也可作为 source 或 sink |
 | compute-2 | 业务节点 | `10.112.150.166` | `2345` | `chengyubin` | TITAN X * 1 | `/data/hdd1` | 当前阶段也可作为 source、compute 或 sink |
 | compute-3 | 业务节点 | `10.112.116.165` | `22` | `compute` | Tesla P40 * 8 | `/data` | 当前阶段也可作为 source、compute 或 sink |
+
+## 本地凭据文件
+
+本机可选存在 ignored 文件：
+
+```text
+ops/secrets/test-lab-credentials.local.md
+```
+
+该文件可记录 SSH 用户的 sudo 密码，供 E2E Deploy Test Agent 在需要 `sudo` 时读取。它不受版本管理控制，不应被复制进 work item、日志或提交信息。
 
 ## 当前测试原则
 
@@ -64,9 +74,11 @@ ssh -p 22 compute@10.112.116.165 hostname
 已确认：
 
 - 四台机器均可通过 SSH key 免密登录。
+- 四台机器登录用户均可使用 sudo；sudo 密码见本地 ignored 凭据文件。
 - compute-1 的 `/disk/sdc/manage_deploy` 已创建并可写。
 - compute-2 的 `/data/hdd1/manage_deploy` 已创建并可写。
 - compute-2 当前实测 GPU 为 1 张 TITAN Xp。
+- admin-server 上已有私有 registry 容器 `registry:2`，地址为 `10.112.244.94:5000`。
 
 待 E2E Deploy Test Agent 处理：
 
@@ -74,10 +86,36 @@ ssh -p 22 compute@10.112.116.165 hostname
 - compute-3 的 `/data/manage_deploy` 创建时当前用户权限不足，需要用合适权限或 sudo 处理。
 - 确认每台机器 Docker、NVIDIA runtime、Node Agent 部署路径和运行方式。
 
+## 私有镜像仓库
+
+admin-server 上已部署 Docker registry：
+
+```text
+10.112.244.94:5000
+```
+
+E2E Deploy Test Agent 如需让业务节点拉取该私有仓库镜像，可在业务节点上配置 Docker daemon。若该 registry 使用 HTTP 而非 HTTPS，通常需要在业务节点 `/etc/docker/daemon.json` 中加入：
+
+```json
+{
+  "insecure-registries": ["10.112.244.94:5000"]
+}
+```
+
+然后重启 Docker：
+
+```bash
+sudo systemctl restart docker
+```
+
+配置前应先读取现有 `/etc/docker/daemon.json` 并保留已有字段，避免覆盖节点现有 Docker 配置。
+
 ## 给 E2E Deploy Test Agent 的提示
 
 - 先确认 SSH 连通性、数据盘可写、Docker/NVIDIA runtime 状态。
 - 不要把密码写入 git tracked 文件。
 - 如果需要记录临时凭据位置，只记录本地 ignored 文件路径，不记录具体内容。
+- 需要 sudo 时读取 `ops/secrets/test-lab-credentials.local.md`，不要把密码打印到日志。
+- 需要私有镜像仓库时，优先使用 `10.112.244.94:5000`，并按需配置业务节点 Docker daemon。
 - 部署验证应记录每台机器的 `hostname`、`docker --version`、`nvidia-smi` 或无 GPU 可用的原因。
 - 注册平台 Node 时，管理地址和业务地址初期可都使用上述 IP；后续如启用业务 IPv6，再更新 `business_ipv6`。

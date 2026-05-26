@@ -23,6 +23,8 @@ Rules:
 - Use real commands; do not rely only on static inspection.
 - Verify business data flows through source -> compute/middle -> sink over HTTP `PEER_*` links, not only that containers are `running` or `ready`.
 - When the user wants to watch the frontend flow, run the headed browser command `cd frontend && npm run test:e2e:headed`; otherwise use `cd frontend && npm run test:e2e` for headless UI checks.
+- For remote sudo, you may read the local ignored file `ops/secrets/test-lab-credentials.local.md`, but never write passwords into logs, work items, or tracked files.
+- If worker nodes need to pull private images, use the admin-server registry `10.112.244.94:5000` and preserve any existing Docker daemon config when adding insecure registry settings.
 - Record commands and conclusions in the work item.
 - If a failure is caused by code, capture the key error and hand off to Implementation Agent.
 - If a failure is caused by environment or old database schema, propose the smallest safe cleanup or migration and continue when possible.

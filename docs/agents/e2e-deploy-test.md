@@ -12,6 +12,7 @@
 - 使用真实命令验证，不只做静态判断。
 - 验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 `running/ready`。
 - 用户要求看前端过程时，使用 `npm run test:e2e:headed` 打开有头浏览器；默认可用 `npm run test:e2e` 无头执行。
+- 需要远程 sudo 时，可读取本地 ignored 文件 `ops/secrets/test-lab-credentials.local.md`，但不能把密码写入日志、work item 或 git tracked 文件。
 - 将命令结果写入 work item。
 
 ## 常用命令
@@ -34,6 +35,7 @@ cd frontend && npm run test:e2e:headed
 - metrics 缺失：查 sink logs 和 `POST /api/instances/{id}/metrics`。
 - E2E 通过但路由价值不清：查 source/compute/sink logs，确认 job/result 不是通过共享文件或本地旁路传递。
 - 有头浏览器无法启动：先确认是否安装 Playwright Chromium，或使用 `PLAYWRIGHT_CHANNEL=chrome npm run test:e2e:headed` 调用本机 Chrome。
+- 业务节点无法拉取私有镜像：检查是否需要配置 `10.112.244.94:5000` 为 Docker insecure registry，并保留原有 daemon 配置。
 
 ## 输出
 
