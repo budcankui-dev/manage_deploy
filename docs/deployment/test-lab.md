@@ -8,7 +8,7 @@
 |------|------|---------|----------|----------|-----|--------|------|
 | admin-server | 管理面主控机器 | `10.112.244.94` | `22` | `bupt` | 未记录 | `/mnt/data` | Task Manager、Frontend、数据库/对象存储等管理面组件优先部署在这里 |
 | compute-1 | 业务节点 | `10.112.249.191` | `2345` | `chengyubin` | TITAN X * 1 | `/disk/sdc` | 当前阶段也可作为 source 或 sink |
-| compute-2 | 业务节点 | `10.112.150.166` | `2345` | `chengyubin` | TITAN X * 2 | `/data/hdd1` | 当前阶段也可作为 source、compute 或 sink |
+| compute-2 | 业务节点 | `10.112.150.166` | `2345` | `chengyubin` | TITAN X * 1 | `/data/hdd1` | 当前阶段也可作为 source、compute 或 sink |
 | compute-3 | 业务节点 | `10.112.116.165` | `22` | `compute` | Tesla P40 * 8 | `/data` | 当前阶段也可作为 source、compute 或 sink |
 
 ## 当前测试原则
@@ -39,12 +39,40 @@ sudo chown -R "$USER":"$USER" /path/to/manage_deploy
 
 ## SSH 连通性检查
 
+本机已配置项目级 SSH alias，供 Claude CLI / E2E Deploy Test Agent 使用：
+
+```bash
+ssh manage-admin hostname
+ssh manage-compute-1 hostname
+ssh manage-compute-2 hostname
+ssh manage-compute-3 hostname
+```
+
+这些 alias 使用本机专用 key `~/.ssh/manage_deploy_test_lab_ed25519`。公钥已上传到四台机器；不要把私钥或密码复制到仓库。
+
+原始连接方式：
+
 ```bash
 ssh -p 22 bupt@10.112.244.94 hostname
 ssh -p 2345 chengyubin@10.112.249.191 hostname
 ssh -p 2345 chengyubin@10.112.150.166 hostname
 ssh -p 22 compute@10.112.116.165 hostname
 ```
+
+## 当前准备状态
+
+已确认：
+
+- 四台机器均可通过 SSH key 免密登录。
+- compute-1 的 `/disk/sdc/manage_deploy` 已创建并可写。
+- compute-2 的 `/data/hdd1/manage_deploy` 已创建并可写。
+- compute-2 当前实测 GPU 为 1 张 TITAN Xp。
+
+待 E2E Deploy Test Agent 处理：
+
+- admin-server 的 `/mnt/data/manage_deploy` 创建时当前用户权限不足，需要用合适权限或 sudo 处理。
+- compute-3 的 `/data/manage_deploy` 创建时当前用户权限不足，需要用合适权限或 sudo 处理。
+- 确认每台机器 Docker、NVIDIA runtime、Node Agent 部署路径和运行方式。
 
 ## 给 E2E Deploy Test Agent 的提示
 
