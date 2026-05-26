@@ -10,6 +10,7 @@
 - 确认 backend、node_agent、Docker 是否可用。
 - 使用真实命令验证，不只做静态判断。
 - 验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 `running/ready`。
+- 用户要求看前端过程时，使用 `npm run test:e2e:headed` 打开有头浏览器；默认可用 `npm run test:e2e` 无头执行。
 - 将命令结果写入 work item。
 
 ## 常用命令
@@ -20,6 +21,8 @@ curl -sS http://127.0.0.1:8001/health
 ./scripts/build_workers.sh
 DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+cd frontend && npm run test:e2e
+cd frontend && npm run test:e2e:headed
 ```
 
 ## 失败处理
@@ -29,6 +32,7 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 - 端口冲突：确认 `ports` / `port_values` 是否非空。
 - metrics 缺失：查 sink logs 和 `POST /api/instances/{id}/metrics`。
 - E2E 通过但路由价值不清：查 source/compute/sink logs，确认 job/result 不是通过共享文件或本地旁路传递。
+- 有头浏览器无法启动：先确认是否安装 Playwright Chromium，或使用 `PLAYWRIGHT_CHANNEL=chrome npm run test:e2e:headed` 调用本机 Chrome。
 
 ## 输出
 

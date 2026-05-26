@@ -43,6 +43,18 @@ Claude Code 可直接调用的项目级 subagents 放在 `.claude/agents/`。本
 | Review Agent | `docs/agents/review.md` | 找 bug、回归风险、架构违背和测试缺口 |
 | Integration Fix Agent | `docs/agents/integration-fix.md` | 处理 review 后的小修、冲突、文档同步和收尾 |
 
+## Work Item 原则
+
+Claude Code 提供 subagent 运行机制，但不提供适合本项目的标准任务单规范。`docs/work-items/active/*.md` 是本项目自定义的跨会话交接协议，应继续作为 agent 之间的事实来源。
+
+保留 work item 的原因：
+
+- 子 agent 会话短生命周期，不能依赖聊天记忆传递状态。
+- 不同角色需要同一份 `Goal`、`Non-goals`、`Acceptance Criteria` 和 `Commands Run`。
+- 测试命令、失败原因、剩余风险必须落文件，方便下一位 agent 和主会话审查。
+
+Claude subagent 负责执行角色，work item 负责保存任务状态；两者不是替代关系。
+
 ## Claude Code 调用方式
 
 当前环境已验证 Claude Code `2.1.112` 可识别本项目 agents。先在项目根目录确认：
@@ -205,6 +217,7 @@ Use the integration-fix subagent to address the review findings and prepare E2E 
 确认 backend、node_agent、Docker 是否可用。
 使用真实命令验证，不只做静态判断。
 验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 running/ready。
+用户需要看前端过程时，运行 cd frontend && npm run test:e2e:headed 打开有头浏览器；默认可用 npm run test:e2e 无头执行。
 
 常用命令：
 curl -sS http://127.0.0.1:8000/health
@@ -213,6 +226,8 @@ curl -sS http://127.0.0.1:8000/api/nodes | python3 -m json.tool
 ./scripts/build_workers.sh
 DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+cd frontend && npm run test:e2e
+cd frontend && npm run test:e2e:headed
 
 失败时：
 - 记录失败命令。

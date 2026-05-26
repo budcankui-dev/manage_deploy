@@ -44,6 +44,41 @@ cd frontend
 npm run test:display
 ```
 
+前端浏览器 E2E：
+
+```bash
+cd frontend
+npm run test:e2e
+```
+
+可视化有头浏览器 E2E：
+
+```bash
+cd frontend
+npm run test:e2e:headed
+```
+
+如果本机未安装 Playwright 浏览器，先运行：
+
+```bash
+cd frontend
+npx playwright install chromium
+```
+
+如果本机已有 Chrome，也可以避免下载 Playwright Chromium：
+
+```bash
+cd frontend
+PLAYWRIGHT_CHANNEL=chrome npm run test:e2e:headed
+```
+
+可选触发 UI 上的“一键演示矩阵乘法”按钮：
+
+```bash
+cd frontend
+E2E_TRIGGER_MATMUL_DEMO=1 npm run test:e2e:headed
+```
+
 Worker 和脚本语法：
 
 ```bash
@@ -145,6 +180,6 @@ docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}'
 ## 提交前最低要求
 
 - 后端改动：跑相关单测；共享行为变更跑全量 `backend/tests`。
-- 前端展示改动：跑 `npm run test:display`，必要时打开页面手工确认。
+- 前端展示改动：跑 `npm run test:display`；涉及页面流程时跑 `npm run test:e2e`，需要人工观察时跑 `npm run test:e2e:headed`。
 - Worker/Docker 改动：跑 `./scripts/build_workers.sh`，能跑 E2E 时跑 `e2e_matmul_live.sh`。
 - 文档/agent 提示词改动：跑 `git diff --check`，确认 README 链接不指向已删除文件。

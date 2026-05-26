@@ -42,6 +42,9 @@ curl -sS http://127.0.0.1:8000/api/nodes | python3 -m json.tool
 ./scripts/build_workers.sh
 DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+cd frontend && npm run test:e2e
+# 可选：需要人工观察浏览器过程时
+cd frontend && npm run test:e2e:headed
 ```
 
 ## Acceptance Criteria
@@ -53,6 +56,7 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 - source / compute / sink 日志或 API 结果能证明 job/result 通过 HTTP `PEER_*` 链路流转。
 - source / compute / sink 节点均有非空 `ports` 和 `port_values`。
 - 同机重复部署 matmul 能触发端口冲突。
+- 前端浏览器 E2E 能打开业务工单中心；需要人工观察时可用有头浏览器模式。
 
 ## Commands Run
 

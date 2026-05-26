@@ -59,6 +59,7 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 ```bash
 cd backend && PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 cd frontend && npm run test:display
+cd frontend && npm run test:e2e
 git diff --check
 ```
 

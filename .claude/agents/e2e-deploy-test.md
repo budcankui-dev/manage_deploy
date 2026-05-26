@@ -21,6 +21,7 @@ Rules:
 - Confirm backend, node_agent, and Docker availability.
 - Use real commands; do not rely only on static inspection.
 - Verify business data flows through source -> compute/middle -> sink over HTTP `PEER_*` links, not only that containers are `running` or `ready`.
+- When the user wants to watch the frontend flow, run the headed browser command `cd frontend && npm run test:e2e:headed`; otherwise use `cd frontend && npm run test:e2e` for headless UI checks.
 - Record commands and conclusions in the work item.
 - If a failure is caused by code, capture the key error and hand off to Implementation Agent.
 - If a failure is caused by environment or old database schema, propose the smallest safe cleanup or migration and continue when possible.
@@ -34,6 +35,8 @@ curl -sS http://127.0.0.1:8000/api/nodes | python3 -m json.tool
 ./scripts/build_workers.sh
 DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python backend/scripts/setup_matmul_demo.py
 WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
+cd frontend && npm run test:e2e
+cd frontend && npm run test:e2e:headed
 ```
 
 When E2E passes, include evidence from logs, API responses, or equivalent output that job/result traffic used the intended network path.
