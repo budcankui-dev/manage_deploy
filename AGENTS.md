@@ -13,11 +13,12 @@
 
 ### 网络架构
 - **控制面（IPv4）**：Manager、MySQL、MinIO、Node Agent API（如 `127.0.0.1:8000/8001`）
-- **数据面（开发）**：`business_ip` 与管理面同源（seed 默认 `127.0.0.1`），`PREFER_BUSINESS_IPV6=false`
+- **数据面（开发）**：`business_ip` 与管理面同源（演示环境默认 `127.0.0.1`），`PREFER_BUSINESS_IPV6=false`
 - **数据面（验收）**：节点配置 `business_ipv6`，`PREFER_BUSINESS_IPV6=true`，跑 `scripts/verify_macro_port_e2e.py`
 - **macOS Docker Desktop**：Worker 回调 Manager/MinIO 用 `MANAGER_PUBLIC_URL=http://host.docker.internal:8000`（见 `backend/.env.example`）
-- **业务 Worker**：`workers/high-throughput-matmul/` 三镜像；`./scripts/build_workers.sh` + `scripts/e2e_matmul_live.sh`
+- **业务 Worker**：当前维护 `workers/high-throughput-matmul/` 单镜像 `manage-deploy/scientific-matmul:{tag}`；`./scripts/build_workers.sh` + `scripts/e2e_matmul_live.sh`
 - **节点间业务通信（强约束）**：业务节点之间必须通过网络通信（host 网络 + IPv6/IPv4 PEER URL），每节点必须如实声明 `ports`（监听端口），让 preflight（`backend/api/instances.py` + `node_agent/port_utils.py`）能检出冲突；不允许共享卷/宿主机文件做业务数据传递（MinIO 仅用于结果归档）。当前科学计算矩阵乘法演示已改为 HTTP 网络通信，详 `docs/scientific-matmul-demo.md`。
+- **随路计算原则**：业务节点的容器启动顺序不是产品重点，数据流转顺序才是路由演示重点。测试业务应体现 source -> 中间业务节点 -> sink 的数据路径，用节点放置结果展示外部路由算法的选路能力。
 
 ## 技术栈
 - 后端：FastAPI + SQLAlchemy（异步）+ APScheduler + Docker SDK

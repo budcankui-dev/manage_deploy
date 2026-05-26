@@ -9,6 +9,7 @@
 - 先读 `docs/testing.md`。
 - 确认 backend、node_agent、Docker 是否可用。
 - 使用真实命令验证，不只做静态判断。
+- 验证业务数据沿 source -> compute -> sink 网络链路流转，不只验证容器 `running/ready`。
 - 将命令结果写入 work item。
 
 ## 常用命令
@@ -27,6 +28,7 @@ WORKER_SKIP_BUILD=1 ./scripts/e2e_matmul_live.sh
 - Docker 启动失败：记录 Node Agent 响应和容器 logs。
 - 端口冲突：确认 `ports` / `port_values` 是否非空。
 - metrics 缺失：查 sink logs 和 `POST /api/instances/{id}/metrics`。
+- E2E 通过但路由价值不清：查 source/compute/sink logs，确认 job/result 不是通过共享文件或本地旁路传递。
 
 ## 输出
 

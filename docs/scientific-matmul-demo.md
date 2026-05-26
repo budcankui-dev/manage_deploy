@@ -2,6 +2,8 @@
 
 本项目当前维护的演示业务是 **科学计算矩阵乘法**，内部 `task_type` 为 `high_throughput_matmul`。它用一个 source -> compute -> sink 的三节点 DAG 展示业务任务从创建、路由放置、容器编排、指标上报到业务目标评估的完整闭环。
 
+这个演示的产品重点不是证明容器必须按某个业务顺序启动，而是证明外部路由算法选择的路径会承载真实业务数据。source、compute、sink 的放置来自 routing placements，矩阵 job/result 沿这些节点之间的 HTTP `PEER_*` 地址流转，这就是当前测试业务的随路计算原则。
+
 ## 运行入口
 
 ```bash
@@ -43,6 +45,8 @@ manage-deploy/scientific-matmul:dev
 4. sink 接收结果，向 Manager 上报 `compute_latency_ms`，并可选上传 `result.json` 到 MinIO。
 
 节点之间的业务数据通过 HTTP 网络通信传递，不再依赖 `/scratch` 共享目录。
+
+架构上允许平台为了健康检查按 DAG 拓扑启动容器；但验收时更要确认数据确实按 source -> compute -> sink 网络路径流转，而不是依赖启动顺序或共享文件系统“看起来跑完”。
 
 ## 命名说明
 
