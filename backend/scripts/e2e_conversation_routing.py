@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--username", default="user")
     parser.add_argument("--password", default="user")
-    parser.add_argument("--service-token", default="dev-service-token")
+    parser.add_argument("--service-token", default="change-me-service-token")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
@@ -53,6 +53,7 @@ def main():
     conv = r.json()
     conv_id = conv["id"]
     print(f"  OK - conversation_id: {conv_id}")
+    time.sleep(0.5)
 
     # Step 3: 发送消息
     print("\n[3/6] 发送消息（含 source/dest/time）...")
@@ -73,6 +74,7 @@ def main():
         print(f"  validation_errors: {draft.get('validation_errors')}")
         print("  E2E 需要 parse_status=valid 才能继续，请检查消息内容")
         sys.exit(1)
+    time.sleep(0.5)
 
     # Step 4: 确认意图（自动创建 TaskOrder + RoutingRequest）
     print("\n[4/6] 确认意图（创建工单 + 路由请求）...")
@@ -94,6 +96,7 @@ def main():
     if not routing:
         print("  FAIL: No routing request created")
         sys.exit(1)
+    time.sleep(0.5)
 
     # Step 5: 模拟外部路由系统回写结果
     print("\n[5/6] 模拟外部路由回写...")
