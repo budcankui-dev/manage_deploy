@@ -225,6 +225,17 @@ class DockerHandler:
             logger.error(f"Error collecting host ports: {e}")
         return claimed
 
+    def get_all_occupied_ports(self, network_mode: str = "host") -> list[int]:
+        """收集所有已被容器占用的宿主机端口。"""
+        claimed = self._collect_declared_host_ports()
+        ports: set[int] = set()
+        for port_str in claimed.keys():
+            try:
+                ports.add(int(port_str))
+            except ValueError:
+                continue
+        return sorted(ports)
+
     def find_port_binding_conflicts(
         self,
         ports: Optional[dict[str, str]],

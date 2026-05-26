@@ -59,6 +59,14 @@ class PortPreflightRequest(BaseModel):
     exclude_container_name: Optional[str] = None
 
 
+class PortsAvailableRequest(BaseModel):
+    count: int = Field(ge=1, le=100)
+    start: int = Field(default=18000, ge=1024, le=65535)
+    end: int = Field(default=19999, ge=1024, le=65535)
+    exclude: list[int] = Field(default_factory=list)
+    network_mode: str = "host"
+
+
 class ManagedContainerResponse(BaseModel):
     container_id: str
     container_name: str
@@ -180,6 +188,31 @@ async def preflight_ports(request: PortPreflightRequest):
     return {
         "ok": not conflicts,
         "conflicts": conflicts,
+        "warnings": warnings,
+    }
+
+
+@app.post("/ports/available")
+async def find_available_ports_endpoint(request: PortsAvailableRequest):
+    """查找宿主机可用端口，供 Task Manager 自动分配使用。"""
+    from port_utils import find_available_ports
+
+    occupied = docker_handler.get_all_occupied_ports(network_mode=request.network_mode)
+    ports = find_available_ports(
+        count=request.count,
+        start=request.start,
+        end=request.end,
+        exclude=request.exclude,
+        occupied=occupied,
+    )
+    warnings = []
+    if len(ports) < request.count:
+        warnings.append(f"Only {len(ports)} available in range [{request.start}, {request.end}], requested {request.count}")
+    return {
+        "ports": ports,
+        "range": {"start": request.start, "end": request.end},
+        "count_requested": request.count,
+        "count_found": len(ports),
         "warnings": warnings,
     }
 

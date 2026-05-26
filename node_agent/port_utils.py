@@ -46,3 +46,38 @@ def is_host_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
 
 def format_host_ports_label(host_ports: list[int]) -> str:
     return ",".join(str(port) for port in host_ports)
+
+
+def find_available_ports(
+    count: int,
+    start: int = 18000,
+    end: int = 19999,
+    exclude: list[int] | None = None,
+    occupied: list[int] | None = None,
+) -> list[int]:
+    """在指定范围内查找可用端口。
+
+    Args:
+        count: 需要的端口数量
+        start: 范围起始（含）
+        end: 范围结束（含）
+        exclude: 显式排除的端口列表
+        occupied: 已被容器占用的端口列表（从 Docker 收集）
+
+    Returns:
+        可用端口列表（可能少于 count）
+    """
+    exclude_set = set(exclude or [])
+    occupied_set = set(occupied or [])
+    available: list[int] = []
+
+    for port in range(start, end + 1):
+        if port in exclude_set or port in occupied_set:
+            continue
+        if is_host_port_in_use(port):
+            continue
+        available.append(port)
+        if len(available) >= count:
+            break
+
+    return available
