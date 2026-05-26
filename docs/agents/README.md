@@ -45,7 +45,44 @@ Claude Code 可直接调用的项目级 subagents 放在 `.claude/agents/`。本
 
 ## Claude Code 调用方式
 
-在 Claude CLI / Claude Code 中，可以显式要求使用项目级 subagent：
+当前环境已验证 Claude Code `2.1.112` 可识别本项目 agents。先在项目根目录确认：
+
+```bash
+cd /Users/yanjia/codes/manage_deploy
+claude agents
+```
+
+预期能看到：
+
+```text
+Project agents:
+  e2e-deploy-test
+  implementation
+  integration-fix
+  product-architect
+  review
+```
+
+最简单的使用方式是直接用 `--agent` 开一个角色会话：
+
+```bash
+claude --agent e2e-deploy-test
+```
+
+进入后输入任务：
+
+```text
+Run docs/work-items/active/matmul-e2e-stabilization.md.
+按 work item 执行，失败时记录命令、错误和判断原因，最后更新 work item。
+```
+
+也可以用非交互方式执行一次性任务：
+
+```bash
+claude --agent product-architect -p "Turn the following main-session decision into a work item: ..."
+```
+
+如果已经在普通 Claude 会话中，也可以显式要求使用项目级 subagent：
 
 ```text
 Use the e2e-deploy-test subagent to run docs/work-items/active/matmul-e2e-stabilization.md
