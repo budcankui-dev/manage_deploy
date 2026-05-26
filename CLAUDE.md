@@ -5,7 +5,7 @@ Claude Code 进入本仓库时请先读：
 1. [`AGENTS.md`](AGENTS.md)
 2. [`docs/agents/README.md`](docs/agents/README.md)
 3. [`docs/agents/base.md`](docs/agents/base.md)
-4. 当前角色提示词：
+4. 当前角色提示词，或直接使用 `.claude/agents/` 下的项目级 subagent：
    - [`docs/agents/product-architect.md`](docs/agents/product-architect.md)
    - [`docs/agents/e2e-deploy-test.md`](docs/agents/e2e-deploy-test.md)
    - [`docs/agents/implementation.md`](docs/agents/implementation.md)

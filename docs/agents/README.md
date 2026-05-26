@@ -2,6 +2,8 @@
 
 本目录保存子 agent 的固定提示词和调用方式。主会话负责产品与架构决策，子 agent 负责把明确任务落到文件、代码、测试和 review。
 
+Claude Code 可直接调用的项目级 subagents 放在 `.claude/agents/`。本目录仍是人类可读的提示词事实来源；如果修改角色边界，应同步更新 `.claude/agents/*.md`。
+
 ## 调用顺序
 
 通用顺序：
@@ -40,6 +42,23 @@
 | E2E Deploy Test Agent | `docs/agents/e2e-deploy-test.md` | 启动服务、构建镜像、跑真实 E2E、定位部署问题 |
 | Review Agent | `docs/agents/review.md` | 找 bug、回归风险、架构违背和测试缺口 |
 | Integration Fix Agent | `docs/agents/integration-fix.md` | 处理 review 后的小修、冲突、文档同步和收尾 |
+
+## Claude Code 调用方式
+
+在 Claude CLI / Claude Code 中，可以显式要求使用项目级 subagent：
+
+```text
+Use the e2e-deploy-test subagent to run docs/work-items/active/matmul-e2e-stabilization.md
+```
+
+也可以按角色调用：
+
+```text
+Use the product-architect subagent to turn the main-session decision below into a work item.
+Use the implementation subagent to implement the active work item.
+Use the review subagent to review the latest diff against the active work item.
+Use the integration-fix subagent to address the review findings and prepare E2E retest.
+```
 
 ## 通用派工模板
 
