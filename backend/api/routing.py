@@ -1,14 +1,15 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, require_service_token
 from database import get_db
 from enums import ConversationStatus, ParseStatus, RoutingRequestStatus
-from models import Conversation, IntentDraft, RoutingRequest, User
+from models import Conversation, IntentDraft, RoutingRequest, TaskOrder, User
 from schemas.conversation import RoutingRequestCreate, RoutingRequestResponse, RoutingResultCallback
+from services.order_materialize import materialize_after_routing
 
 router = APIRouter(prefix="/api", tags=["routing"])
 
@@ -73,9 +74,14 @@ async def receive_routing_result(
     routing.status = payload.status
     if payload.strategy:
         routing.strategy = payload.strategy
+    if payload.selected_strategy:
+        routing.selected_strategy = payload.selected_strategy
     routing.placements = payload.placements
     routing.estimated_metric = payload.estimated_metric
     routing.external_routing_id = payload.external_routing_id
+    routing.error_message = payload.error_message
+    if payload.result_payload:
+        routing.result_payload = payload.result_payload
     routing.completed_at = datetime.utcnow()
 
     if payload.status == RoutingRequestStatus.COMPLETED and payload.placements:
@@ -83,7 +89,57 @@ async def receive_routing_result(
     elif payload.status == RoutingRequestStatus.FAILED:
         conversation.status = ConversationStatus.FAILED
 
+    # 同步更新关联的 TaskOrder routing_status
+    if routing.order_id:
+        order_result = await db.execute(select(TaskOrder).where(TaskOrder.id == routing.order_id))
+        order = order_result.scalar_one_or_none()
+        if order:
+            order.routing_status = payload.status.value
+            # 路由完成后自动物化实例
+            if payload.status == RoutingRequestStatus.COMPLETED and payload.placements:
+                await materialize_after_routing(db, order, routing)
+
     conversation.updated_at = datetime.utcnow()
+    await db.flush()
+    await db.refresh(routing)
+    return routing
+
+
+@router.get("/routing-requests", response_model=list[RoutingRequestResponse])
+async def list_routing_requests(
+    status: RoutingRequestStatus | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """供外部路由系统扫描待计算的路由请求。"""
+    query = select(RoutingRequest).where(RoutingRequest.deleted_at.is_(None))
+    if status:
+        query = query.where(RoutingRequest.status == status)
+    query = query.order_by(RoutingRequest.created_at.asc())
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.patch("/routing-requests/{routing_request_id}/claim", response_model=RoutingRequestResponse)
+async def claim_routing_request(
+    routing_request_id: str,
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """外部路由系统领取任务，标记为 computing。"""
+    result = await db.execute(select(RoutingRequest).where(RoutingRequest.id == routing_request_id))
+    routing = result.scalar_one_or_none()
+    if not routing:
+        raise HTTPException(status_code=404, detail="Routing request not found")
+    if routing.status != RoutingRequestStatus.PENDING:
+        raise HTTPException(status_code=409, detail=f"Cannot claim: current status is {routing.status.value}")
+
+    routing.status = RoutingRequestStatus.COMPUTING
+    if routing.order_id:
+        order_result = await db.execute(select(TaskOrder).where(TaskOrder.id == routing.order_id))
+        order = order_result.scalar_one_or_none()
+        if order:
+            order.routing_status = "computing"
     await db.flush()
     await db.refresh(routing)
     return routing

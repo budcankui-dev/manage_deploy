@@ -71,5 +71,25 @@ class MessageRole(str, Enum):
 
 class RoutingRequestStatus(str, Enum):
     PENDING = "pending"
+    COMPUTING = "computing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RoutingStatus(str, Enum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    COMPUTING = "computing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class NodeKind(str, Enum):
+    WORKER = "worker"
+    TERMINAL = "terminal"
+    ROUTER = "router"
+    SWITCH = "switch"
+    STORAGE = "storage"
+    UNKNOWN = "unknown"

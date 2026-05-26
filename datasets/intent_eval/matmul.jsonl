@@ -1,0 +1,5 @@
+{"utterance": "我要做一个矩阵计算任务，从 compute-1 到 compute-3，现在开始跑2小时，延迟目标 60000ms", "expected": {"task_type": "high_throughput_matmul", "source_name": "compute-1", "destination_name": "compute-3", "parse_status": "valid"}}
+{"utterance": "视频转发任务，源节点 terminal-A 目的节点 terminal-B，时延 200ms，现在开始跑1小时", "expected": {"task_type": "low_latency_video_pipeline", "source_name": "terminal-A", "destination_name": "terminal-B", "parse_status": "valid"}}
+{"utterance": "矩阵乘法 吞吐 500 GFLOPS", "expected": {"task_type": "high_throughput_matmul", "parse_status": "incomplete"}}
+{"utterance": "我想跑个大模型推理", "expected": {"task_type": "llm_text_generation", "parse_status": "incomplete"}}
+{"utterance": "帮我部署一个什么东西", "expected": {"task_type": null, "parse_status": "incomplete"}}

@@ -7,8 +7,8 @@ from sqlalchemy.orm import selectinload
 
 from api.auth import get_current_user
 from database import get_db
-from enums import ConversationStatus, MessageRole, ParseStatus, RoutingRequestStatus
-from models import Conversation, ConversationMessage, IntentDraft, RoutingRequest, User
+from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
+from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, RoutingRequest, TaskOrder, User
 from schemas import (
     BusinessObjective,
     BusinessTaskCreate,
@@ -23,6 +23,7 @@ from schemas import (
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
+from services.routing_payload_builder import build_routing_payload
 
 from .business_tasks import create_business_task
 
@@ -99,12 +100,18 @@ async def send_message(
         version=version,
         task_type=parsed.task_type,
         modality=parsed.modality,
+        source_name=parsed.source_name,
+        destination_name=parsed.destination_name,
+        business_start_time=parsed.business_start_time,
+        business_end_time=parsed.business_end_time,
         data_profile=parsed.data_profile or None,
         business_objective=parsed.business_objective or None,
         runtime_plan=parsed.runtime_plan or None,
         resource_requirement=parsed.resource_requirement or None,
         validation_errors=parsed.validation_errors or None,
         parse_status=ParseStatus(parsed.parse_status),
+        parser_name=parsed.parser_name,
+        parser_version=parsed.parser_version,
     )
     db.add(draft)
 
@@ -157,6 +164,7 @@ async def confirm_intent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """确认意图后创建 TaskOrder + RoutingRequest（方案 B：先创建工单再路由）。"""
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
     draft = await _get_latest_draft(db, conversation.id)
     if not draft:
@@ -171,7 +179,69 @@ async def confirm_intent(
 
     draft.parse_status = ParseStatus.VALID
     draft.validation_errors = None
+
+    # 查找业务模板
+    catalog_result = await db.execute(
+        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.task_type == draft.task_type)
+    )
+    catalog = catalog_result.scalar_one_or_none()
+    if not catalog:
+        raise HTTPException(status_code=400, detail=f"未找到 task_type={draft.task_type} 对应的业务模板")
+
+    # 创建 TaskOrder（直接关联 user_id）
+    order = TaskOrder(
+        user_id=current_user.id,
+        conversation_id=conversation.id,
+        intent_draft_id=draft.id,
+        template_id=catalog.template_id,
+        name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
+        source_name=draft.source_name,
+        destination_name=draft.destination_name,
+        business_start_time=draft.business_start_time,
+        business_end_time=draft.business_end_time,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=draft.business_start_time,
+        scheduled_end_time=draft.business_end_time,
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING,
+    )
+    db.add(order)
+    await db.flush()
+
+    # 生成外部路由 DAG payload
+    input_payload = build_routing_payload(
+        order_id=order.id,
+        order_name=order.name,
+        task_type=draft.task_type,
+        modality=draft.modality,
+        source_name=draft.source_name,
+        destination_name=draft.destination_name,
+        business_start_time=draft.business_start_time,
+        business_end_time=draft.business_end_time,
+        data_profile=draft.data_profile,
+        resource_requirement=draft.resource_requirement,
+    )
+
+    # 创建 RoutingRequest
+    routing = RoutingRequest(
+        conversation_id=conversation.id,
+        order_id=order.id,
+        intent_draft_id=draft.id,
+        strategy="resource_guarantee",
+        status=RoutingRequestStatus.PENDING,
+        source_name=draft.source_name,
+        destination_name=draft.destination_name,
+        business_start_time=draft.business_start_time,
+        business_end_time=draft.business_end_time,
+        input_payload=input_payload,
+    )
+    db.add(routing)
+    await db.flush()
+
+    # 回填关联
+    order.routing_request_id = routing.id
     conversation.status = ConversationStatus.AWAITING_ROUTING
+    conversation.materialized_order_id = order.id
     conversation.updated_at = datetime.utcnow()
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
@@ -304,6 +374,10 @@ def _draft_to_dict(draft: IntentDraft) -> dict:
     return {
         "task_type": draft.task_type,
         "modality": draft.modality,
+        "source_name": draft.source_name,
+        "destination_name": draft.destination_name,
+        "business_start_time": draft.business_start_time,
+        "business_end_time": draft.business_end_time,
         "data_profile": draft.data_profile or {},
         "business_objective": draft.business_objective or {},
         "runtime_plan": draft.runtime_plan or {},

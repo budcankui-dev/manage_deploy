@@ -68,9 +68,14 @@
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
           <el-descriptions-item label="模态">{{ draft.modality || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="解析状态">{{ draft.parse_status }}</el-descriptions-item>
+          <el-descriptions-item label="源节点">{{ draft.source_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
+          <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
+          <el-descriptions-item label="解析状态">
+            <el-tag :type="parseStatusType(draft.parse_status)" size="small">{{ draft.parse_status }}</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="业务目标">{{ formatObjectiveSentence(draft.business_objective) }}</el-descriptions-item>
-          <el-descriptions-item label="Workflow">{{ conversation?.workflow_trace?.engine || '-' }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" />
         <div v-if="draft?.validation_errors?.length" class="errors">
@@ -86,31 +91,43 @@
         <div v-if="draft" class="json-block">
           <h4>data_profile</h4>
           <pre>{{ formatJson(draft.data_profile) }}</pre>
-          <h4>runtime_plan</h4>
-          <pre>{{ formatJson(draft.runtime_plan) }}</pre>
-          <h4>resource_requirement</h4>
-          <pre>{{ formatJson(draft.resource_requirement) }}</pre>
         </div>
       </el-card>
 
       <el-card class="panel-card">
-        <template #header>路由与部署参数</template>
+        <template #header>
+          路由状态
+          <el-tag v-if="routing" :type="routingStatusType(routing.status)" size="small" style="margin-left:8px">
+            {{ formatRoutingStatus(routing.status) }}
+          </el-tag>
+        </template>
         <el-descriptions v-if="routing" :column="1" border size="small">
-          <el-descriptions-item label="策略">{{ routing.strategy }}</el-descriptions-item>
-          <el-descriptions-item label="状态">{{ routing.status }}</el-descriptions-item>
-          <el-descriptions-item label="source">{{ routing.placements?.source || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="compute">{{ routing.placements?.compute || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="sink">{{ routing.placements?.sink || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="策略">{{ routing.selected_strategy || routing.strategy }}</el-descriptions-item>
+          <el-descriptions-item label="source 节点">{{ routing.placements?.source || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="compute 节点">{{ routing.placements?.compute || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="sink 节点">{{ routing.placements?.sink || '-' }}</el-descriptions-item>
+          <el-descriptions-item v-if="routing.source_name" label="源">{{ routing.source_name }}</el-descriptions-item>
+          <el-descriptions-item v-if="routing.destination_name" label="目的">{{ routing.destination_name }}</el-descriptions-item>
         </el-descriptions>
-        <el-empty v-else description="确认意图并请求路由后显示" />
+        <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
+          <el-icon class="is-loading"><i class="el-icon-loading" /></el-icon>
+          <span>等待外部路由系统计算...</span>
+        </div>
+        <el-empty v-if="!routing" description="确认意图后自动发起路由" />
         <div v-if="routing?.estimated_metric" class="json-block">
-          <h4>estimated_metric</h4>
+          <h4>预估指标</h4>
           <pre>{{ formatJson(routing.estimated_metric) }}</pre>
         </div>
+        <div v-if="routing?.input_payload" class="json-block">
+          <h4>路由 DAG Payload</h4>
+          <pre>{{ formatJson(routing.input_payload) }}</pre>
+        </div>
+        <div v-if="conversation?.materialized_order_id" class="order-info">
+          <el-tag type="info" size="small">工单 ID: {{ conversation.materialized_order_id.slice(0, 8) }}...</el-tag>
+        </div>
         <div class="actions">
-          <el-button :disabled="!canConfirm" @click="confirmIntent">确认意图</el-button>
-          <el-button :disabled="!canRequestRouting" @click="requestRouting">请求路由</el-button>
-          <el-button type="success" :disabled="!canSubmit" @click="submitTask">确认提交</el-button>
+          <el-button :disabled="!canConfirm" type="primary" @click="confirmIntent">确认意图并创建工单</el-button>
+          <el-button type="success" :disabled="!canSubmit" @click="submitTask">确认提交部署</el-button>
         </div>
       </el-card>
     </aside>
@@ -136,12 +153,29 @@ let routingTimer = null
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
-const canConfirm = computed(() => draft.value && ['incomplete', 'valid'].includes(draft.value.parse_status))
-const canRequestRouting = computed(() => conversation.value?.status === 'awaiting_routing')
+const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting')
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 
 function formatJson(value) {
   return JSON.stringify(value || {}, null, 2)
+}
+
+function formatTime(value) {
+  if (!value) return '-'
+  const d = new Date(value)
+  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function parseStatusType(status) {
+  return { valid: 'success', incomplete: 'warning', rejected: 'danger' }[status] || 'info'
+}
+
+function routingStatusType(status) {
+  return { pending: 'warning', computing: 'warning', completed: 'success', failed: 'danger' }[status] || 'info'
+}
+
+function formatRoutingStatus(status) {
+  return { pending: '等待计算', computing: '计算中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] || status
 }
 
 function formatStatus(status) {
@@ -212,19 +246,20 @@ async function sendMessage() {
 }
 
 async function confirmIntent() {
-  const { data } = await conversationApi.confirmIntent(conversation.value.id)
-  conversation.value = data
-  await refreshList()
-  ElMessage.success('意图已确认，可请求路由')
-}
-
-async function requestRouting() {
-  await conversationApi.createRoutingRequest({
-    conversation_id: conversation.value.id,
-    strategy: 'completion_time_first',
-  })
-  await refreshConversation()
-  ElMessage.info('已发起路由请求，等待外部路由系统回调')
+  try {
+    const { data } = await conversationApi.confirmIntent(conversation.value.id)
+    conversation.value = data
+    await refreshList()
+    ElMessage.success('工单已创建，等待外部路由系统计算路径')
+    updateRoutingPolling()
+  } catch (err) {
+    const detail = err.response?.data?.detail
+    if (detail?.validation_errors) {
+      ElMessage.warning('参数不完整：' + detail.validation_errors.join('；'))
+    } else {
+      ElMessage.error(typeof detail === 'string' ? detail : '确认失败')
+    }
+  }
 }
 
 async function submitTask() {
@@ -240,7 +275,8 @@ async function submitTask() {
 
 function updateRoutingPolling() {
   stopRoutingPolling()
-  if (routing.value?.status === 'pending') {
+  const status = routing.value?.status
+  if (status === 'pending' || status === 'computing') {
     routingTimer = setInterval(refreshConversation, 3000)
   }
 }
@@ -443,6 +479,21 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 10px;
   border-radius: 6px;
   font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.routing-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.order-info {
+  margin-top: 10px;
 }
 
 @media (max-width: 1100px) {

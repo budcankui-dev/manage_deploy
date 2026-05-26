@@ -17,6 +17,10 @@ class ConversationMessageCreate(BaseModel):
 class IntentDraftUpdate(BaseModel):
     task_type: Optional[str] = None
     modality: Optional[str] = None
+    source_name: Optional[str] = None
+    destination_name: Optional[str] = None
+    business_start_time: Optional[datetime] = None
+    business_end_time: Optional[datetime] = None
     data_profile: Optional[dict[str, Any]] = None
     business_objective: Optional[dict[str, Any]] = None
     runtime_plan: Optional[dict[str, Any]] = None
@@ -41,12 +45,19 @@ class IntentDraftResponse(BaseModel):
     version: int
     task_type: Optional[str] = None
     modality: Optional[str] = None
+    source_name: Optional[str] = None
+    destination_name: Optional[str] = None
+    business_start_time: Optional[datetime] = None
+    business_end_time: Optional[datetime] = None
     data_profile: Optional[dict[str, Any]] = None
     business_objective: Optional[dict[str, Any]] = None
     runtime_plan: Optional[dict[str, Any]] = None
     resource_requirement: Optional[dict[str, Any]] = None
     validation_errors: Optional[list[str]] = None
     parse_status: ParseStatus
+    parser_name: Optional[str] = None
+    parser_version: Optional[str] = None
+    confidence: Optional[float] = None
     created_at: datetime
 
 
@@ -55,12 +66,21 @@ class RoutingRequestResponse(BaseModel):
 
     id: str
     conversation_id: str
+    order_id: Optional[str] = None
     intent_draft_id: str
     strategy: str
     status: RoutingRequestStatus
+    source_name: Optional[str] = None
+    destination_name: Optional[str] = None
+    business_start_time: Optional[datetime] = None
+    business_end_time: Optional[datetime] = None
+    input_payload: Optional[dict[str, Any]] = None
+    result_payload: Optional[dict[str, Any]] = None
     placements: Optional[dict[str, str]] = None
     estimated_metric: Optional[dict[str, Any]] = None
+    selected_strategy: Optional[str] = None
     external_routing_id: Optional[str] = None
+    error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
 
@@ -105,6 +125,10 @@ class RoutingResultCallback(BaseModel):
     estimated_metric: Optional[dict[str, Any]] = None
     external_routing_id: Optional[str] = None
     error_message: Optional[str] = None
+    result_payload: Optional[dict[str, Any]] = None
+    selected_strategy: Optional[str] = None
+    path: Optional[list[str]] = None
+    explanation: Optional[str] = None
 
 
 class ConversationSubmitResponse(BaseModel):

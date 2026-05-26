@@ -17,11 +17,16 @@ def run_intent_workflow(
     result = parse_intent(utterance, existing_draft)
     trace = {
         "engine": "rule_parser",
+        "parser_name": result.parser_name,
+        "parser_version": result.parser_version,
         "steps": [
             "merge_existing_draft",
+            "extract_source_destination",
+            "extract_time",
             "parse_task_type",
             "extract_business_objective",
             "validate_constraints",
+            "check_required_fields",
         ],
     }
     return result, trace

@@ -7,7 +7,7 @@ from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
-from enums import TaskStatus, NodeStatus, DeploymentMode, OrderStatus, UserRole, ConversationStatus, ParseStatus, MessageRole, RoutingRequestStatus
+from enums import TaskStatus, NodeStatus, DeploymentMode, OrderStatus, UserRole, ConversationStatus, ParseStatus, MessageRole, RoutingRequestStatus, RoutingStatus, NodeKind
 
 
 def generate_uuid() -> str:
@@ -23,6 +23,11 @@ class Node(Base):
     management_ip: Mapped[str] = mapped_column(String(45), nullable=False)
     business_ip: Mapped[str] = mapped_column(String(45), nullable=False)
     business_ipv6: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    node_kind: Mapped[str] = mapped_column(String(50), default=NodeKind.WORKER)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_schedulable: Mapped[bool] = mapped_column(default=True, server_default="1")
+    is_routable: Mapped[bool] = mapped_column(default=True, server_default="1")
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, onupdate=func.now(), nullable=True
@@ -219,10 +224,18 @@ class TaskOrder(Base):
     __tablename__ = "task_orders"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     external_task_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("conversations.id"), nullable=True)
+    intent_draft_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("intent_drafts.id"), nullable=True)
+    routing_request_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("routing_requests.id"), nullable=True)
     template_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_templates.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    source_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    destination_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    business_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    business_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     deployment_mode: Mapped[DeploymentMode] = mapped_column(String(50), default=DeploymentMode.IMMEDIATE)
     scheduled_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     scheduled_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -230,8 +243,10 @@ class TaskOrder(Base):
     keep_after_stop: Mapped[bool] = mapped_column(default=False, server_default="0")
     runtime_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[OrderStatus] = mapped_column(String(50), default=OrderStatus.PENDING)
+    routing_status: Mapped[str] = mapped_column(String(50), default=RoutingStatus.NOT_REQUIRED)
     materialized_instance_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, onupdate=func.now(), nullable=True
@@ -370,12 +385,21 @@ class IntentDraft(Base):
     version: Mapped[int] = mapped_column(default=1)
     task_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     modality: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    destination_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    business_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    business_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_profile: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     business_objective: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     runtime_plan: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     resource_requirement: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     validation_errors: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     parse_status: Mapped[ParseStatus] = mapped_column(String(50), default=ParseStatus.INCOMPLETE)
+    parser_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parser_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    raw_llm_response: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    normalized_intent: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="drafts")
@@ -386,12 +410,23 @@ class RoutingRequest(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     conversation_id: Mapped[str] = mapped_column(String(36), ForeignKey("conversations.id"), nullable=False, index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("task_orders.id"), nullable=True, index=True)
     intent_draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("intent_drafts.id"), nullable=False)
     strategy: Mapped[str] = mapped_column(String(255), default="resource_guarantee")
     status: Mapped[RoutingRequestStatus] = mapped_column(String(50), default=RoutingRequestStatus.PENDING)
+    source_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    destination_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    business_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    business_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    input_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    result_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     placements: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     estimated_metric: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    requested_strategies: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    selected_strategy: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     external_routing_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
