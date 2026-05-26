@@ -22,6 +22,15 @@ class DockerHandler:
             logger.error(f"Error getting container {container_name}: {e}")
             return None
 
+    @staticmethod
+    def _is_managed_container(container: docker.models.containers.Container) -> bool:
+        """检查容器是否属于本系统（通过 manage_deploy.* label 判断）。"""
+        try:
+            labels = (container.attrs.get("Config") or {}).get("Labels") or {}
+            return any(k.startswith("manage_deploy.") for k in labels)
+        except Exception:
+            return False
+
     def start_container(
         self,
         container_name: str,
@@ -55,7 +64,11 @@ class DockerHandler:
                 existing.reload()
                 if existing.status == "running":
                     return True, existing.id, None
-                existing.remove(force=True)
+                if self._is_managed_container(existing):
+                    existing.remove(force=True)
+                else:
+                    logger.warning("Refusing to remove non-managed container: %s", container_name)
+                    return False, None, f"Container {container_name} already exists but is not managed by this system"
 
             env_list = [f"{k}={v}" for k, v in (env or {}).items()]
 
@@ -135,6 +148,9 @@ class DockerHandler:
             container.reload()
 
             if container.status in {"running", "restarting", "paused"}:
+                if not self._is_managed_container(container):
+                    logger.warning("Refusing to stop non-managed container: %s", container_name)
+                    return True, None
                 try:
                     container.stop(timeout=timeout)
                 except (docker.errors.APIError, Exception):
@@ -152,6 +168,10 @@ class DockerHandler:
         try:
             container = self.get_container(container_name)
             if not container:
+                return True, None
+
+            if not self._is_managed_container(container):
+                logger.warning("Refusing to remove non-managed container: %s", container_name)
                 return True, None
 
             container.reload()
