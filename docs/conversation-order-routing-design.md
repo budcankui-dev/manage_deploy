@@ -7,9 +7,10 @@
 - 普通用户通过前端对话系统提交业务需求。
 - 后端调用大模型 API 解析用户意图，生成结构化任务参数。
 - 后端校验参数完整性、格式和取值范围，不合法时通过对话追问或拒绝。
-- 用户确认后生成外部路由系统可消费的 DAG JSON。
-- 外部路由系统读取路由请求，计算业务节点选取与路径结果。
-- 路由结果回写后，平台创建工单并可自动部署。
+- 用户确认后先创建工单，工单立即可见，并进入待路由状态。
+- 平台为工单生成外部路由系统可消费的 DAG JSON。
+- 外部路由系统读取待路由工单/路由请求，计算业务节点选取与路径结果。
+- 路由结果回写后，平台将工单转入 scheduled 调度队列，并可按业务时间窗口自动部署。
 - 管理员保留完整后台能力：用户管理、工单管理、部署系统、节点/模板/实例管理、路由与评测审计。
 
 ## 核心原则
@@ -22,6 +23,7 @@
 - 外部路由算法价值通过 placements/path 决定业务角色落点，并让业务数据沿该路径流转来体现。
 - 科研验收阶段优先采用数据库扫描交互，API 回调作为可选实现预留。
 - 用户强制填写业务开始和结束时间后，平台应优先创建 scheduled 工单，由调度器自动在时间窗口内启动和停止，不要求用户提交后立刻运行。
+- 采用方案 B：用户确认后先创建 `TaskOrder`，再由外部路由系统扫描新增待路由工单/路由请求并计算路径。`RoutingRequest` 是工单的路由计算子任务，而不是工单创建前置对象。
 
 ## 节点类型
 
@@ -115,8 +117,8 @@ scheduled_end_time = business_end_time + cleanup_margin
 User
  -> Conversation 可选
  -> IntentDraft 可选
- -> RoutingRequest 可选
  -> TaskOrder 必须
+ -> RoutingRequest 可选
  -> TaskInstance
 ```
 
@@ -132,6 +134,8 @@ User
 - `destination_name`
 - `business_start_time`
 - `business_end_time`
+- `routing_status`，例如 `not_required | pending | computing | completed | failed | cancelled`
+- `deleted_at` nullable，用于逻辑删除和外部路由巡检跳过
 
 `intent_drafts`：
 
@@ -147,6 +151,7 @@ User
 
 `routing_requests`：
 
+- `order_id`
 - `source_name`
 - `destination_name`
 - `business_start_time`
@@ -177,11 +182,12 @@ User
 
 数据库扫描模式：
 
-- 本系统在用户确认意图后写入 `routing_requests`。
-- 外部路由系统定时扫描 `routing_requests`。
-- 只处理 `status=pending` 且 `deleted_at is null` 的记录。
+- 本系统在用户确认意图后先写入 `task_orders`，工单状态对用户可见。
+- 本系统同步或异步为该工单写入 `routing_requests`，并在 `task_orders.routing_status` 标记为 `pending`。
+- 外部路由系统定时扫描新增待计算记录。
+- 推荐扫描 `routing_requests where status=pending and deleted_at is null`；如果外部系统只方便扫订单，也可扫描 `task_orders where routing_status=pending and deleted_at is null` 后再读取关联 routing request。
 - 外部路由系统领取任务后把状态更新为 `computing`，避免重复计算。
-- 计算完成后写回 `result_payload`、`placements`、`estimated_metric`、`selected_strategy`，状态置为 `completed`。
+- 计算完成后写回 `routing_requests.result_payload`、`placements`、`estimated_metric`、`selected_strategy`，并将 `routing_requests.status` 与 `task_orders.routing_status` 置为 `completed`。
 - 计算失败时状态置为 `failed`，写入 `error_message`。
 - 逻辑删除记录不物理删除，外部系统巡检时跳过。
 
@@ -279,10 +285,11 @@ API 预留模式：
  -> 参数校验
  -> 缺字段则追问
  -> 用户确认
- -> RoutingRequest(input_payload, status=pending)
+ -> TaskOrder(status=pending, routing_status=pending)
+ -> RoutingRequest(order_id, input_payload, status=pending)
  -> 外部路由系统扫描并置为 computing
  -> RoutingResult 回写
- -> 用户确认或自动提交为 TaskOrder
+ -> TaskOrder(routing_status=completed, deployment_mode=scheduled)
  -> TaskInstance scheduled
  -> 调度器按业务时间窗口自动部署
  -> 指标上报与业务评估
@@ -294,7 +301,7 @@ API 预留模式：
 - 校验：字段完整性、格式、范围、时间窗口、资源约束。
 - 补问：生成缺失字段问题。
 - 路由载荷生成：转换为外部路由 DAG JSON。
-- 工单创建：只消费已确认且路由完成的结构化结果。
+- 工单创建：消费已确认的结构化意图，先创建用户可见工单，再等待路由计算结果。
 
 ## 意图解析模块化
 
