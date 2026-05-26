@@ -20,6 +20,38 @@
 - 后端意图解析应模块化，支持线上调用和离线批量评测复用同一套解析方法。
 - 业务数据流验收仍遵循随路计算：source -> 中间业务节点 -> sink。
 - 外部路由算法价值通过 placements/path 决定业务角色落点，并让业务数据沿该路径流转来体现。
+- 科研验收阶段优先采用数据库扫描交互，API 回调作为可选实现预留。
+- 用户强制填写业务开始和结束时间后，平台应优先创建 scheduled 工单，由调度器自动在时间窗口内启动和停止，不要求用户提交后立刻运行。
+
+## 节点类型
+
+现有 `nodes` 表可以扩展一个类型字段，用于区分拓扑角色：
+
+```text
+node_kind = worker | terminal | router | switch | storage | unknown
+```
+
+第一阶段最少需要：
+
+- `worker`：可部署 Node Agent 和业务容器的工作节点。
+- `terminal`：用户源终端或目的终端，只参与路由语义，不一定运行容器。
+
+这样可以避免新增一整套拓扑实体表，同时满足“源终端和目的节点名称必须由用户填写”的验收需求。
+
+建议 `nodes` 增量字段：
+
+- `node_kind`
+- `display_name` nullable
+- `is_schedulable` bool，是否可部署业务容器
+- `is_routable` bool，是否参与外部路由图
+- `deleted_at` nullable，逻辑删除
+
+节点名称解析规则：
+
+- 用户输入的 `source_name` / `destination_name` 先按 `display_name` 匹配。
+- 再按 `hostname` 匹配。
+- 多个匹配时要求用户确认。
+- 未匹配时不创建路由请求，进入追问或参数校验失败。
 
 ## 用户必填参数
 
@@ -70,6 +102,13 @@ scheduled_end_time = business_end_time + cleanup_margin
 - 如果用户说“现在开始跑 2 小时”，可解析为 `start=now`、`end=now+2h`。
 - 如果用户只说“明天上午跑”，应追问明确结束时间，或使用明确的产品默认策略。
 
+科研验收阶段推荐：
+
+- 用户确认意图后，创建 `TaskOrder` 时使用 `deployment_mode=scheduled`。
+- `scheduled_start_time` 和 `scheduled_end_time` 来自业务时间窗口。
+- 如果 `business_start_time <= now`，可以允许调度器立即启动，仍然视为 scheduled 模式。
+- 路由完成后若 `auto_start=true`，含义应改为“自动进入调度队列”，而不是立即无视时间窗口运行。
+
 ## 推荐数据关系
 
 ```text
@@ -117,6 +156,7 @@ User
 - `requested_strategies` JSON
 - `selected_strategy`
 - `error_message`
+- `deleted_at` nullable，用于外部路由系统巡检时忽略逻辑删除记录
 
 待定用户上传数据：
 
@@ -133,10 +173,30 @@ User
 
 ## 外部路由交互
 
-第一阶段支持两种交互方式：
+第一阶段以数据库扫描为主，API 回调作为可选能力预留。
 
-- API 推送：本系统创建 routing request，外部路由系统通过 API 获取任务并回调结果。
-- 数据库扫描：外部路由系统扫描 `routing_requests where status=pending`，读取 `input_payload`，写回 `result_payload`、`placements`、`estimated_metric` 和状态。
+数据库扫描模式：
+
+- 本系统在用户确认意图后写入 `routing_requests`。
+- 外部路由系统定时扫描 `routing_requests`。
+- 只处理 `status=pending` 且 `deleted_at is null` 的记录。
+- 外部路由系统领取任务后把状态更新为 `computing`，避免重复计算。
+- 计算完成后写回 `result_payload`、`placements`、`estimated_metric`、`selected_strategy`，状态置为 `completed`。
+- 计算失败时状态置为 `failed`，写入 `error_message`。
+- 逻辑删除记录不物理删除，外部系统巡检时跳过。
+
+建议 `RoutingRequestStatus` 扩展：
+
+```text
+pending -> computing -> completed | failed | cancelled
+```
+
+API 预留模式：
+
+- `POST /api/routing-requests` 创建请求。
+- `GET /api/routing-requests/{id}` 查询请求。
+- `POST /api/routing-results/{id}` 回写结果。
+- 第一阶段可不作为主路径实现。
 
 给外部路由系统的 DAG JSON 应包含：
 
@@ -219,13 +279,12 @@ User
  -> 参数校验
  -> 缺字段则追问
  -> 用户确认
- -> RoutingRequest(input_payload)
- -> 外部路由计算
+ -> RoutingRequest(input_payload, status=pending)
+ -> 外部路由系统扫描并置为 computing
  -> RoutingResult 回写
- -> 用户确认或自动提交
- -> TaskOrder
- -> TaskInstance
- -> 自动部署
+ -> 用户确认或自动提交为 TaskOrder
+ -> TaskInstance scheduled
+ -> 调度器按业务时间窗口自动部署
  -> 指标上报与业务评估
 ```
 
