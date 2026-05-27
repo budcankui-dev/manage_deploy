@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.auth import get_current_user, require_admin
+from api.auth import get_current_user, hash_password, require_admin
 from database import get_db
 from enums import RoutingRequestStatus, UserRole
 from models import Conversation, ConversationMessage, IntentDraft, RoutingRequest, TaskOrder, User
@@ -52,6 +52,86 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
     await db.delete(user)
     return {"ok": True}
+
+
+@router.post("/users", response_model=UserResponse)
+async def admin_create_user(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    username = payload.get("username")
+    password = payload.get("password")
+    role_str = payload.get("role", UserRole.USER)
+    if not username or not password:
+        raise HTTPException(status_code=422, detail="username and password are required")
+    existing = await db.execute(select(User).where(User.username == username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="username already exists")
+    try:
+        role = UserRole(role_str)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid role: {role_str}")
+    user = User(
+        username=username,
+        password_hash=hash_password(password),
+        role=role,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+async def admin_update_user(
+    user_id: str,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if "role" in payload:
+        try:
+            user.role = UserRole(payload["role"])
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid role: {payload['role']}")
+    if "password" in payload and payload["password"]:
+        user.password_hash = hash_password(payload["password"])
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.get("/users/{user_id}")
+async def admin_get_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    order_count_r = await db.execute(
+        select(func.count()).select_from(TaskOrder).where(TaskOrder.user_id == user_id)
+    )
+    order_count = order_count_r.scalar_one()
+    conv_count_r = await db.execute(
+        select(func.count()).select_from(Conversation).where(Conversation.user_id == user_id)
+    )
+    conv_count = conv_count_r.scalar_one()
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "created_at": user.created_at,
+        "order_count": order_count,
+        "conversation_count": conv_count,
+    }
 
 # ─── 对话审计 ───────────────────────────────────────────────
 

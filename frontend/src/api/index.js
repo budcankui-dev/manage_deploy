@@ -117,6 +117,9 @@ export const conversationApi = {
 
 export const adminApi = {
   listUsers: () => api.get('/admin/users'),
+  getUser: (id) => api.get(`/admin/users/${id}`),
+  createUser: (data) => api.post('/admin/users', data),
+  updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
   deleteUser: (id) => api.delete(`/admin/users/${id}`),
   listConversations: (params = {}) => api.get('/admin/conversations', { params }),
   getConversation: (id) => api.get(`/admin/conversations/${id}`),

@@ -10,6 +10,7 @@ const ADMIN_ROUTES = new Set([
   'InstanceDetail',
   'BusinessTasksHub',
   'AdminConsole',
+  'Users',
 ])
 
 const routes = [
@@ -89,6 +90,11 @@ const routes = [
     path: '/admin',
     name: 'AdminConsole',
     component: () => import('@/views/AdminConsoleView.vue'),
+  },
+  {
+    path: '/users',
+    name: 'Users',
+    component: () => import('@/views/UsersView.vue'),
   },
 ]
 

@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import get_current_user
 from database import get_db
 from enums import OrderStatus
-from models import TaskInstance, TaskOrder
+from models import TaskInstance, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
     BatchOperationResponse,
@@ -71,12 +72,13 @@ async def list_orders(
     include_cancelled: bool = False,
     reconcile: bool = True,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if reconcile:
         if await reconcile_orphan_orders(db):
             await db.commit()
 
-    query = select(TaskOrder)
+    query = select(TaskOrder).where(TaskOrder.user_id == current_user.id)
     if status:
         query = query.where(TaskOrder.status == status)
     elif not include_cancelled:
@@ -92,10 +94,16 @@ async def list_orders(
 
 
 @router.get("/{order_id}", response_model=TaskOrderDetailResponse)
-async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
+async def get_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     order, instance, evaluation = await get_order_detail_context(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.user_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
 
     config = order.runtime_config or {}
     business_task = config.get("business_task")

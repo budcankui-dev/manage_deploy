@@ -29,6 +29,10 @@
           <el-icon><List /></el-icon>
           <span>运维 / 手动部署</span>
         </router-link>
+        <router-link to="/users" class="nav-item">
+          <el-icon><UserFilled /></el-icon>
+          <span>用户管理</span>
+        </router-link>
       </nav>
       <div class="sidebar-footer">
         <div class="account-row">

@@ -17,9 +17,11 @@
     <div class="intent-workspace">
     <aside class="conversation-sidebar">
       <div class="sidebar-top">
-        <div class="brand">
-          <strong class="brand-title">智联计算系统</strong>
-          <span class="brand-subtitle">意图解析模块</span>
+        <div class="sidebar-nav">
+          <div class="nav-item" :class="{ active: showOrders }" @click="toggleOrders">
+            <el-icon><List /></el-icon>
+            <span>我的工单</span>
+          </div>
         </div>
 
         <el-button type="primary" class="new-conv-btn" @click="startNewConversation">
@@ -70,97 +72,62 @@
           <p>任务 ID：<code>{{ conversation?.task_id || conversation?.id || '-' }}</code></p>
         </div>
         <div class="chat-header-right">
-          <el-button :type="showOrders ? 'primary' : 'default'" @click="toggleOrders">
-            <el-icon><List /></el-icon>
-            {{ showOrders ? '返回对话' : '我的工单' }}
-          </el-button>
           <el-tag>{{ formatStatus(conversation?.status) }}</el-tag>
         </div>
       </header>
 
       <!-- Orders panel (shown when showOrders=true) -->
       <div v-if="showOrders" class="orders-panel">
-        <div class="orders-panel-left">
-          <div class="orders-panel-toolbar">
-            <span class="orders-panel-title">工单列表</span>
-            <el-button size="small" @click="loadOrders">刷新</el-button>
-          </div>
-          <div v-if="ordersLoading" class="orders-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>加载中...</span>
-          </div>
-          <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="60" />
-          <div v-else class="orders-panel-list">
-            <div
-              v-for="order in myOrders"
-              :key="order.id"
-              class="orders-panel-item"
-              :class="{ active: selectedOrder?.id === order.id }"
-              @click="selectOrder(order)"
-            >
-              <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
-              <div class="order-meta">
-                <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
-                <span class="order-time">{{ formatTime(order.created_at) }}</span>
-              </div>
-            </div>
+        <div class="orders-panel-toolbar">
+          <span class="orders-panel-title">我的工单</span>
+          <div class="orders-toolbar-right">
+            <el-select v-model="orderStatusFilter" placeholder="全部" clearable size="small" style="width: 130px">
+              <el-option label="全部" value="" />
+              <el-option label="pending" value="pending" />
+              <el-option label="routing" value="routing" />
+              <el-option label="submitted" value="submitted" />
+              <el-option label="running" value="running" />
+              <el-option label="completed" value="completed" />
+              <el-option label="failed" value="failed" />
+            </el-select>
+            <el-button size="small" @click="loadOrders">
+              <el-icon><Refresh /></el-icon>
+            </el-button>
           </div>
         </div>
-        <div class="orders-panel-right">
-          <div v-if="!selectedOrder" class="orders-empty-detail">
-            <el-empty description="选择左侧工单查看详情" :image-size="80" />
-          </div>
-          <div v-else-if="orderDetailLoading" class="orders-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>加载中...</span>
-          </div>
-          <div v-else class="orders-detail-content">
-            <el-card class="detail-card">
-              <template #header>基本信息</template>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="工单 ID">{{ selectedOrderDetail?.id?.slice(0, 16) || '-' }}...</el-descriptions-item>
-                <el-descriptions-item label="状态">
-                  <el-tag :type="orderStatusType(selectedOrderDetail?.status)" size="small">{{ formatOrderStatus(selectedOrderDetail?.status) }}</el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="创建时间">{{ formatTime(selectedOrderDetail?.created_at) }}</el-descriptions-item>
-                <el-descriptions-item label="更新时间">{{ formatTime(selectedOrderDetail?.updated_at) }}</el-descriptions-item>
-              </el-descriptions>
-            </el-card>
-            <el-card class="detail-card">
-              <template #header>任务信息</template>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail?.task_type) || selectedOrderDetail?.task_type || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="路径">{{ selectedOrderDetail?.source_name || '-' }} → {{ selectedOrderDetail?.destination_name || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="开始时间">{{ formatTime(selectedOrderDetail?.business_start_time) }}</el-descriptions-item>
-                <el-descriptions-item label="结束时间">{{ formatTime(selectedOrderDetail?.business_end_time) }}</el-descriptions-item>
-              </el-descriptions>
-            </el-card>
-            <el-card v-if="selectedOrderDetail?.business_objective?.metric_key" class="detail-card">
-              <template #header>业务目标</template>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="指标">{{ selectedOrderDetail.business_objective.metric_key }}</el-descriptions-item>
-                <el-descriptions-item label="约束">{{ selectedOrderDetail.business_objective.operator || '<=' }}</el-descriptions-item>
-                <el-descriptions-item label="目标值">{{ selectedOrderDetail.business_objective.target_value }} {{ selectedOrderDetail.business_objective.unit || 'ms' }}</el-descriptions-item>
-              </el-descriptions>
-            </el-card>
-            <el-card v-if="selectedOrderDetail?.routing_request" class="detail-card">
-              <template #header>路由结果</template>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="策略">{{ selectedOrderDetail.routing_request.selected_strategy || '-' }}</el-descriptions-item>
-                <el-descriptions-item v-if="selectedOrderDetail.routing_request.placements" label="节点分配">
-                  {{ selectedOrderDetail.routing_request.placements.source }} → {{ selectedOrderDetail.routing_request.placements.compute }} → {{ selectedOrderDetail.routing_request.placements.sink }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </el-card>
-            <el-card v-if="orderInstances.length" class="detail-card">
-              <template #header>部署状态</template>
-              <div v-for="inst in orderInstances" :key="inst.id" class="instance-row">
-                <span class="instance-name">{{ inst.name || inst.id.slice(0, 12) }}</span>
-                <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ inst.status }}</el-tag>
-              </div>
-            </el-card>
-          </div>
-        </div>
+        <el-table
+          :data="filteredOrders"
+          v-loading="ordersLoading"
+          stripe
+          size="small"
+          class="orders-table"
+          @row-click="(row) => openOrderDetail(row)"
+        >
+          <el-table-column label="工单名称" min-width="160">
+            <template #default="{ row }">{{ row.name || row.id.slice(0, 20) }}</template>
+          </el-table-column>
+          <el-table-column label="任务类型" min-width="160">
+            <template #default="{ row }">{{ taskTypeLabel(row.task_type) }}</template>
+          </el-table-column>
+          <el-table-column label="路径" min-width="160">
+            <template #default="{ row }">
+              {{ row.source_name && row.destination_name ? `${row.source_name} → ${row.destination_name}` : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="orderStatusType(row.status)" size="small">{{ formatOrderStatus(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="创建时间" min-width="150">
+            <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="80" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" @click.stop="openOrderDetail(row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
 
       <!-- Chat view (shown when showOrders=false) -->
@@ -236,7 +203,65 @@
       </template>
     </main>
 
-    <aside class="intent-panel">
+    <!-- Order detail drawer (outside v-if/v-else, always mounted) -->
+    <el-drawer
+      v-model="orderDrawerVisible"
+      size="50%"
+      direction="rtl"
+      destroy-on-close
+      class="order-detail-drawer"
+    >
+      <template #header>
+        <span>{{ selectedOrderDetail?.name || (selectedOrderId ? selectedOrderId.slice(0, 8) : '工单详情') }}</span>
+        <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small" style="margin-left: 8px">
+          {{ formatOrderStatus(selectedOrderDetail.status) }}
+        </el-tag>
+      </template>
+      <div v-if="orderDetailLoading" class="orders-loading">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>加载中...</span>
+      </div>
+      <div v-else-if="selectedOrderDetail" class="orders-detail-content">
+        <el-descriptions title="基本信息" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item label="ID">{{ selectedOrderDetail.id?.slice(0, 8) || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="orderStatusType(selectedOrderDetail.status)" size="small">{{ formatOrderStatus(selectedOrderDetail.status) }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ formatTime(selectedOrderDetail.created_at) }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间">{{ formatTime(selectedOrderDetail.updated_at) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-descriptions title="任务参数" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail.task_type) }}</el-descriptions-item>
+          <el-descriptions-item label="源节点→目标节点">
+            {{ selectedOrderDetail.source_name || '-' }} → {{ selectedOrderDetail.destination_name || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="开始时间">{{ formatTime(selectedOrderDetail.business_start_time) }}</el-descriptions-item>
+          <el-descriptions-item label="结束时间">{{ formatTime(selectedOrderDetail.business_end_time) }}</el-descriptions-item>
+          <el-descriptions-item v-if="selectedOrderDetail.business_objective?.metric_key" label="业务目标">
+            {{ selectedOrderDetail.business_objective.metric_key }}
+            {{ selectedOrderDetail.business_objective.operator || '<=' }}
+            {{ selectedOrderDetail.business_objective.target_value }}
+            {{ selectedOrderDetail.business_objective.unit || 'ms' }}
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-descriptions v-if="selectedOrderDetail.routing_request" title="路由结果" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item label="策略">{{ selectedOrderDetail.routing_request.selected_strategy || '-' }}</el-descriptions-item>
+          <el-descriptions-item v-if="selectedOrderDetail.routing_request.placements" label="节点分配">
+            {{ selectedOrderDetail.routing_request.placements.source }} →
+            {{ selectedOrderDetail.routing_request.placements.compute }} →
+            {{ selectedOrderDetail.routing_request.placements.sink }}
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-descriptions v-if="orderInstances.length" title="部署实例" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item v-for="inst in orderInstances" :key="inst.id" :label="inst.id?.slice(0, 8) || '-'">
+            <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ inst.status }}</el-tag>
+            <span v-if="inst.started_at" style="margin-left: 8px; font-size: 12px; color: var(--text-muted)">{{ formatTime(inst.started_at) }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+    </el-drawer>
+
+    <aside class="intent-panel" v-show="!showOrders">
       <el-card class="panel-card" :class="{ 'valid-border': draft?.parse_status === 'valid' }">
         <template #header>
           意图参数
@@ -327,7 +352,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi, instancesApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
@@ -345,12 +370,19 @@ const uploadedFiles = ref([])
 const myOrders = ref([])
 const ordersLoading = ref(false)
 const showOrders = ref(false)
-const selectedOrder = ref(null)
+const orderDrawerVisible = ref(false)
+const selectedOrderId = ref(null)
 const selectedOrderDetail = ref(null)
-const orderInstances = ref([])
 const orderDetailLoading = ref(false)
+const orderStatusFilter = ref('')
+const orderInstances = ref([])
 let routingTimer = null
 let abortController = null
+
+const filteredOrders = computed(() => {
+  if (!orderStatusFilter.value) return myOrders.value
+  return myOrders.value.filter(o => o.status === orderStatusFilter.value)
+})
 
 function toggleOrders() { showOrders.value = !showOrders.value }
 
@@ -497,7 +529,7 @@ async function deleteConversation(item) {
 async function loadOrders() {
   ordersLoading.value = true
   try {
-    const { data } = await ordersApi.list({ reconcile: false })
+    const { data } = await ordersApi.list({ include_cancelled: true, reconcile: false })
     myOrders.value = data
   } catch {
     myOrders.value = []
@@ -510,10 +542,11 @@ watch(showOrders, (val) => {
   if (val) loadOrders()
 })
 
-async function selectOrder(order) {
-  selectedOrder.value = order
+async function openOrderDetail(order) {
+  selectedOrderId.value = order.id
   selectedOrderDetail.value = null
   orderInstances.value = []
+  orderDrawerVisible.value = true
   orderDetailLoading.value = true
   try {
     const [detailRes, instancesRes] = await Promise.all([
@@ -869,22 +902,35 @@ onBeforeUnmount(stopRoutingPolling)
 }
 
 .brand {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 18px;
+  display: none;
 }
 
 .brand-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
+  display: none;
 }
 
 .brand-subtitle {
-  font-size: 11px;
-  color: var(--text-secondary);
-  letter-spacing: 0.03em;
+  display: none;
+}
+
+.sidebar-nav {
+  margin-bottom: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-radius: 8px;
+  color: rgba(255,255,255,0.7);
+  transition: all 0.2s;
+}
+
+.nav-item:hover, .nav-item.active {
+  background: rgba(255,255,255,0.15);
+  color: white;
 }
 
 .history-title {
@@ -986,16 +1032,8 @@ onBeforeUnmount(stopRoutingPolling)
 .orders-panel {
   flex: 1;
   display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.orders-panel-left {
-  width: 280px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border-subtle);
-  display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1008,70 +1046,32 @@ onBeforeUnmount(stopRoutingPolling)
   flex-shrink: 0;
 }
 
+.orders-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .orders-panel-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.orders-panel-list {
+.orders-table {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.orders-panel-item {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--bg-tertiary);
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-
-.orders-panel-item:hover { border-color: var(--el-color-primary-light-5); }
-.orders-panel-item.active { border-color: var(--accent-primary); }
-
-.orders-panel-right {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.orders-empty-detail {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
 }
 
 .orders-detail-content {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  padding: 4px 0;
 }
 
-.detail-card { margin: 0; }
-
-.instance-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.instance-row:last-child { border-bottom: none; }
-.instance-name {
-  font-size: 13px;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  margin-right: 8px;
+.detail-desc-block {
+  margin: 0;
 }
 
 /* ── Chat column ── */
