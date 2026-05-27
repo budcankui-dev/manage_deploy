@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api.auth import get_current_user
-from database import get_db
+from database import async_session_maker, get_db
 from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
 from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, RoutingRequest, TaskOrder, User
 from schemas import (
@@ -146,14 +146,23 @@ async def send_message_stream(
     current_user: User = Depends(get_current_user),
 ):
     """Stream assistant reply token-by-token via SSE, then persist the full
-    intent parse and draft after streaming completes."""
+    intent parse and draft after streaming completes.
+
+    All DB reads happen BEFORE returning StreamingResponse so the Depends(get_db)
+    session is still open.  The generator captures only primitive values and uses
+    a fresh async_session_maker() session for the post-stream DB writes, because
+    FastAPI closes the Depends session as soon as the route handler returns.
+    """
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
     if conversation.status in {ConversationStatus.SUBMITTED, ConversationStatus.REJECTED}:
         raise HTTPException(status_code=400, detail="Conversation is closed")
 
+    # Update title while the session is still open
     if not conversation.title:
         conversation.title = payload.content[:80]
+        await db.flush()
 
+    # Save user message while the session is still open
     db.add(
         ConversationMessage(
             conversation_id=conversation.id,
@@ -163,68 +172,83 @@ async def send_message_stream(
     )
     await db.flush()
 
+    # Read draft while the session is still open; capture as plain dict
     latest_draft = await _get_latest_draft(db, conversation.id)
     existing = _draft_to_dict(latest_draft) if latest_draft else None
+    next_version = (latest_draft.version + 1) if latest_draft else 1
+
+    # Build LLM messages from primitives — no ORM objects cross into the generator
     llm_messages = _build_messages(payload.content, existing)
 
+    # Capture primitive IDs needed inside the generator
+    conv_id = conversation.id
+    user_content = payload.content
+
     async def _event_stream() -> AsyncGenerator[str, None]:
+        import logging
+        log = logging.getLogger(__name__)
+
         accumulated = ""
         try:
             async for token in stream_qwen_tokens(llm_messages):
                 accumulated += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).exception("SSE token stream error")
+            log.exception("SSE token stream error")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
             return
 
-        # After streaming: run structured parse then persist
+        # After streaming: run structured parse then persist using a FRESH session
         try:
-            parsed, _trace = await run_intent_workflow(payload.content, existing)
+            parsed, _trace = await run_intent_workflow(user_content, existing)
 
-            version = (latest_draft.version + 1) if latest_draft else 1
-            draft = IntentDraft(
-                conversation_id=conversation.id,
-                version=version,
-                task_type=parsed.task_type,
-                modality=parsed.modality,
-                source_name=parsed.source_name,
-                destination_name=parsed.destination_name,
-                business_start_time=parsed.business_start_time,
-                business_end_time=parsed.business_end_time,
-                data_profile=parsed.data_profile or None,
-                business_objective=parsed.business_objective or None,
-                runtime_plan=parsed.runtime_plan or None,
-                resource_requirement=parsed.resource_requirement or None,
-                validation_errors=parsed.validation_errors or None,
-                parse_status=ParseStatus(parsed.parse_status),
-                parser_name=parsed.parser_name,
-                parser_version=parsed.parser_version,
-                raw_llm_response=_trace.get("raw_llm_response"),
-                confidence=(
-                    _trace.get("raw_llm_response", {}).get("confidence")
-                    if isinstance(_trace.get("raw_llm_response"), dict)
-                    else None
-                ),
-            )
-            db.add(draft)
+            async with async_session_maker() as session:
+                async with session.begin():
+                    draft = IntentDraft(
+                        conversation_id=conv_id,
+                        version=next_version,
+                        task_type=parsed.task_type,
+                        modality=parsed.modality,
+                        source_name=parsed.source_name,
+                        destination_name=parsed.destination_name,
+                        business_start_time=parsed.business_start_time,
+                        business_end_time=parsed.business_end_time,
+                        data_profile=parsed.data_profile or None,
+                        business_objective=parsed.business_objective or None,
+                        runtime_plan=parsed.runtime_plan or None,
+                        resource_requirement=parsed.resource_requirement or None,
+                        validation_errors=parsed.validation_errors or None,
+                        parse_status=ParseStatus(parsed.parse_status),
+                        parser_name=parsed.parser_name,
+                        parser_version=parsed.parser_version,
+                        raw_llm_response=_trace.get("raw_llm_response"),
+                        confidence=(
+                            _trace.get("raw_llm_response", {}).get("confidence")
+                            if isinstance(_trace.get("raw_llm_response"), dict)
+                            else None
+                        ),
+                    )
+                    session.add(draft)
 
-            if parsed.parse_status == "rejected":
-                conversation.status = ConversationStatus.REJECTED
-            else:
-                conversation.status = ConversationStatus.DRAFTING
+                    new_status = (
+                        ConversationStatus.REJECTED
+                        if parsed.parse_status == "rejected"
+                        else ConversationStatus.DRAFTING
+                    )
+                    assistant_content = accumulated if accumulated else parsed.assistant_message
+                    session.add(
+                        ConversationMessage(
+                            conversation_id=conv_id,
+                            role=MessageRole.ASSISTANT,
+                            content=assistant_content,
+                        )
+                    )
 
-            assistant_content = accumulated if accumulated else parsed.assistant_message
-            db.add(
-                ConversationMessage(
-                    conversation_id=conversation.id,
-                    role=MessageRole.ASSISTANT,
-                    content=assistant_content,
-                )
-            )
-            conversation.updated_at = datetime.utcnow()
-            await db.flush()
+                    # Update conversation status + timestamp
+                    conv_row = await session.get(Conversation, conv_id)
+                    if conv_row:
+                        conv_row.status = new_status
+                        conv_row.updated_at = datetime.utcnow()
 
             done_payload = {
                 "type": "done",
@@ -237,12 +261,11 @@ async def send_message_stream(
                     "validation_errors": parsed.validation_errors or [],
                     "assistant_message": assistant_content,
                 },
-                "conversation_status": conversation.status.value,
+                "conversation_status": new_status.value,
             }
             yield f"data: {json.dumps(done_payload, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).exception("SSE post-stream parse error")
+            log.exception("SSE post-stream parse error")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(

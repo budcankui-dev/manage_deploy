@@ -6,9 +6,14 @@
           <strong class="brand-title">智联计算系统</strong>
           <span class="brand-subtitle">意图解析模块</span>
         </div>
-        <el-button type="primary" @click="startNewConversation">新建对话</el-button>
+
+        <el-button type="primary" class="new-conv-btn" @click="startNewConversation">
+          <el-icon><Plus /></el-icon>
+          新建对话
+        </el-button>
+
         <div class="history-title">历史对话</div>
-        <div class="conversation-list">
+        <div class="sidebar-conversations">
           <div
             v-for="item in conversations"
             :key="item.id"
@@ -30,30 +35,30 @@
               title="删除对话"
             />
           </div>
-        </div>
 
-        <!-- 我的工单 -->
-        <div class="orders-section">
-          <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
-            <span>我的工单</span>
-            <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
-          </div>
-          <div v-show="ordersExpanded" class="orders-list">
-            <div v-if="ordersLoading" class="orders-loading">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>加载中...</span>
+          <!-- 我的工单 -->
+          <div class="orders-section">
+            <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
+              <span>我的工单</span>
+              <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
             </div>
-            <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
-            <div
-              v-else
-              v-for="order in myOrders"
-              :key="order.id"
-              class="order-item"
-            >
-              <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
-              <div class="order-meta">
-                <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
-                <span class="order-time">{{ formatTime(order.created_at) }}</span>
+            <div v-show="ordersExpanded" class="orders-list">
+              <div v-if="ordersLoading" class="orders-loading">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span>加载中...</span>
+              </div>
+              <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
+              <div
+                v-else
+                v-for="order in myOrders"
+                :key="order.id"
+                class="order-item"
+              >
+                <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
+                <div class="order-meta">
+                  <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
+                  <span class="order-time">{{ formatTime(order.created_at) }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -80,7 +85,21 @@
       </header>
 
       <section class="messages" ref="messagesRef">
-        <el-empty v-if="!conversation?.messages?.length" description="描述你的业务任务，系统会实时解析意图" />
+        <!-- Empty state welcome screen -->
+        <div v-if="!conversation?.messages?.length" class="empty-state">
+          <div class="empty-avatar">智</div>
+          <h2 class="empty-title">智算意图解析助手</h2>
+          <p class="empty-subtitle">请描述您想要部署的计算任务</p>
+          <div class="example-chips">
+            <button
+              v-for="chip in exampleChips"
+              :key="chip"
+              class="chip"
+              @click="useChip(chip)"
+            >{{ chip }}</button>
+          </div>
+        </div>
+
         <div
           v-for="(message, idx) in conversation?.messages || []"
           :key="message.id || idx"
@@ -95,6 +114,7 @@
               <div class="bubble assistant-bubble">
                 <span class="bubble-text">{{ message.content }}</span><span v-if="message.streaming" class="streaming-cursor">▋</span>
               </div>
+              <div class="bubble-time">{{ formatBubbleTime(message.created_at) }}</div>
             </div>
           </template>
           <!-- User message (right) -->
@@ -102,6 +122,7 @@
             <div class="bubble-wrap user-bubble-wrap">
               <div class="bubble-name user-name">{{ auth.username || '我' }}</div>
               <div class="bubble user-bubble">{{ message.content }}</div>
+              <div class="bubble-time user-time">{{ formatBubbleTime(message.created_at) }}</div>
             </div>
             <div class="avatar user-avatar">{{ (auth.username || 'U')[0].toUpperCase() }}</div>
           </template>
@@ -114,17 +135,20 @@
           type="textarea"
           :rows="4"
           :disabled="isStreaming"
-          placeholder="例如：跑 64×64 矩阵乘法批处理，计算耗时不超过 60 秒"
+          placeholder="描述您的计算任务，例如：矩阵计算从A节点到B节点，运行2小时..."
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
-          <span>Ctrl + Enter 发送</span>
+          <span class="composer-hint">Ctrl + Enter 发送</span>
           <div class="composer-btns">
             <el-button v-if="isStreaming" type="danger" @click="stopStreaming">
               <el-icon><VideoPause /></el-icon>
               停止
             </el-button>
-            <el-button v-else type="primary" :loading="loading" :disabled="isStreaming" @click="sendMessage">发送</el-button>
+            <el-button v-else type="primary" :loading="loading" :disabled="isStreaming" @click="sendMessage">
+              <el-icon><Promotion /></el-icon>
+              发送
+            </el-button>
           </div>
         </div>
       </footer>
@@ -214,7 +238,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, ArrowRight, Loading, VideoPause } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, ArrowRight, Loading, VideoPause, Plus, Promotion } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
@@ -235,6 +259,12 @@ const ordersLoading = ref(false)
 let routingTimer = null
 let abortController = null
 
+const exampleChips = [
+  '矩阵计算，从compute-1到compute-3，跑2小时',
+  '视频转发任务，低延迟要求',
+  '大模型推理服务部署',
+]
+
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
 const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting')
@@ -250,6 +280,12 @@ function formatTime(value) {
   if (!value) return '-'
   const d = new Date(value)
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatBubbleTime(value) {
+  if (!value) return ''
+  const d = new Date(value)
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 function parseStatusType(status) {
@@ -370,6 +406,10 @@ watch(ordersExpanded, (val) => {
   if (val && !myOrders.value.length) loadOrders()
 })
 
+function useChip(text) {
+  utterance.value = text
+}
+
 async function sendMessage() {
   if (!utterance.value.trim() || loading.value || isStreaming.value) return
   loading.value = true
@@ -381,7 +421,6 @@ async function sendMessage() {
       await startNewConversation()
     }
 
-    // Ensure messages array exists and is reactive
     if (!conversation.value.messages) conversation.value.messages = []
     conversation.value.messages = [
       ...conversation.value.messages,
@@ -457,7 +496,6 @@ async function sendMessage() {
     }
   } catch (err) {
     if (err.name === 'AbortError') {
-      // User stopped — mark placeholder as done (keep accumulated content)
       if (conversation.value?.messages) {
         const msgs = conversation.value.messages
         const idx = msgs.findIndex(m => m.id === '_stream')
@@ -582,17 +620,32 @@ onBeforeUnmount(stopRoutingPolling)
 
 .sidebar-top {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 20px 0;
+}
+
+.sidebar-conversations {
+  flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  min-height: 0;
+  padding-bottom: 12px;
 }
 
 .sidebar-bottom {
-  margin-top: auto;
+  flex-shrink: 0;
   padding: 12px 16px;
   border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.new-conv-btn {
+  width: 100%;
+  margin-bottom: 4px;
+  justify-content: center;
 }
 
 .user-info {
@@ -763,6 +816,68 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 24px 28px;
 }
 
+/* ── Empty state ── */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  gap: 12px;
+}
+
+.empty-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.empty-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.empty-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.example-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.chip {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.chip:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+
 /* ── Message bubbles ── */
 .message-row {
   display: flex;
@@ -819,25 +934,34 @@ onBeforeUnmount(stopRoutingPolling)
 
 .bubble {
   padding: 10px 14px;
-  border-radius: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .assistant-bubble {
-  background: #f0f4ff;
+  background: #f0f7ff;
   color: #1e293b;
-  border-top-left-radius: 4px;
+  border-radius: 4px 16px 16px 16px;
 }
 
 .user-bubble {
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
-  border-top-right-radius: 4px;
+  border-radius: 16px 4px 16px 16px;
 }
 
 .bubble-text { display: inline; }
+
+.bubble-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
+.user-time {
+  text-align: right;
+}
 
 .streaming-cursor {
   display: inline-block;
@@ -863,8 +987,11 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: var(--text-muted);
+}
+
+.composer-hint {
   font-size: 12px;
+  color: var(--text-muted);
 }
 
 .composer-btns {
