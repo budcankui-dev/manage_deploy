@@ -46,7 +46,7 @@ async def create_conversation(
         status=ConversationStatus.DRAFTING,
     )
     db.add(conversation)
-    await db.flush()
+    await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 
@@ -162,7 +162,9 @@ async def send_message_stream(
         conversation.title = payload.content[:80]
         await db.flush()
 
-    # Save user message while the session is still open
+    # Save user message and commit BEFORE returning StreamingResponse,
+    # because the Depends session commits only after streaming completes,
+    # but the frontend may call GET before that.
     db.add(
         ConversationMessage(
             conversation_id=conversation.id,
@@ -170,7 +172,7 @@ async def send_message_stream(
             content=payload.content,
         )
     )
-    await db.flush()
+    await db.commit()
 
     # Read draft while the session is still open; capture as plain dict
     latest_draft = await _get_latest_draft(db, conversation.id)
