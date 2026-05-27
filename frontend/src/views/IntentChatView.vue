@@ -50,33 +50,6 @@
               title="删除对话"
             />
           </div>
-
-          <!-- 我的工单 -->
-          <div class="orders-section">
-            <div class="orders-header" @click="router.push('/my-orders')">
-              <span>我的工单</span>
-              <el-icon class="orders-arrow"><ArrowRight /></el-icon>
-            </div>
-            <div v-show="ordersExpanded" class="orders-list">
-              <div v-if="ordersLoading" class="orders-loading">
-                <el-icon class="is-loading"><Loading /></el-icon>
-                <span>加载中...</span>
-              </div>
-              <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
-              <div
-                v-else
-                v-for="order in myOrders"
-                :key="order.id"
-                class="order-item"
-              >
-                <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
-                <div class="order-meta">
-                  <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
-                  <span class="order-time">{{ formatTime(order.created_at) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -96,10 +69,103 @@
           <h1>{{ conversation?.title || '新任务对话' }}</h1>
           <p>任务 ID：<code>{{ conversation?.task_id || conversation?.id || '-' }}</code></p>
         </div>
-        <el-tag>{{ formatStatus(conversation?.status) }}</el-tag>
+        <div class="chat-header-right">
+          <el-button :type="showOrders ? 'primary' : 'default'" @click="toggleOrders">
+            <el-icon><List /></el-icon>
+            {{ showOrders ? '返回对话' : '我的工单' }}
+          </el-button>
+          <el-tag>{{ formatStatus(conversation?.status) }}</el-tag>
+        </div>
       </header>
 
-      <section class="messages" ref="messagesRef">
+      <!-- Orders panel (shown when showOrders=true) -->
+      <div v-if="showOrders" class="orders-panel">
+        <div class="orders-panel-left">
+          <div class="orders-panel-toolbar">
+            <span class="orders-panel-title">工单列表</span>
+            <el-button size="small" @click="loadOrders">刷新</el-button>
+          </div>
+          <div v-if="ordersLoading" class="orders-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+          <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="60" />
+          <div v-else class="orders-panel-list">
+            <div
+              v-for="order in myOrders"
+              :key="order.id"
+              class="orders-panel-item"
+              :class="{ active: selectedOrder?.id === order.id }"
+              @click="selectOrder(order)"
+            >
+              <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
+              <div class="order-meta">
+                <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
+                <span class="order-time">{{ formatTime(order.created_at) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="orders-panel-right">
+          <div v-if="!selectedOrder" class="orders-empty-detail">
+            <el-empty description="选择左侧工单查看详情" :image-size="80" />
+          </div>
+          <div v-else-if="orderDetailLoading" class="orders-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+          <div v-else class="orders-detail-content">
+            <el-card class="detail-card">
+              <template #header>基本信息</template>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="工单 ID">{{ selectedOrderDetail?.id?.slice(0, 16) || '-' }}...</el-descriptions-item>
+                <el-descriptions-item label="状态">
+                  <el-tag :type="orderStatusType(selectedOrderDetail?.status)" size="small">{{ formatOrderStatus(selectedOrderDetail?.status) }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ formatTime(selectedOrderDetail?.created_at) }}</el-descriptions-item>
+                <el-descriptions-item label="更新时间">{{ formatTime(selectedOrderDetail?.updated_at) }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+            <el-card class="detail-card">
+              <template #header>任务信息</template>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail?.task_type) || selectedOrderDetail?.task_type || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="路径">{{ selectedOrderDetail?.source_name || '-' }} → {{ selectedOrderDetail?.destination_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="开始时间">{{ formatTime(selectedOrderDetail?.business_start_time) }}</el-descriptions-item>
+                <el-descriptions-item label="结束时间">{{ formatTime(selectedOrderDetail?.business_end_time) }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+            <el-card v-if="selectedOrderDetail?.business_objective?.metric_key" class="detail-card">
+              <template #header>业务目标</template>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="指标">{{ selectedOrderDetail.business_objective.metric_key }}</el-descriptions-item>
+                <el-descriptions-item label="约束">{{ selectedOrderDetail.business_objective.operator || '<=' }}</el-descriptions-item>
+                <el-descriptions-item label="目标值">{{ selectedOrderDetail.business_objective.target_value }} {{ selectedOrderDetail.business_objective.unit || 'ms' }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+            <el-card v-if="selectedOrderDetail?.routing_request" class="detail-card">
+              <template #header>路由结果</template>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="策略">{{ selectedOrderDetail.routing_request.selected_strategy || '-' }}</el-descriptions-item>
+                <el-descriptions-item v-if="selectedOrderDetail.routing_request.placements" label="节点分配">
+                  {{ selectedOrderDetail.routing_request.placements.source }} → {{ selectedOrderDetail.routing_request.placements.compute }} → {{ selectedOrderDetail.routing_request.placements.sink }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+            <el-card v-if="orderInstances.length" class="detail-card">
+              <template #header>部署状态</template>
+              <div v-for="inst in orderInstances" :key="inst.id" class="instance-row">
+                <span class="instance-name">{{ inst.name || inst.id.slice(0, 12) }}</span>
+                <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ inst.status }}</el-tag>
+              </div>
+            </el-card>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat view (shown when showOrders=false) -->
+      <template v-else>
+        <section class="messages" ref="messagesRef">
         <!-- Empty state welcome screen -->
         <div v-if="!conversation?.messages?.length" class="empty-state">
           <div class="empty-avatar">智</div>
@@ -167,6 +233,7 @@
           </div>
         </div>
       </footer>
+      </template>
     </main>
 
     <aside class="intent-panel">
@@ -260,8 +327,8 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, ArrowRight, Loading, VideoPause, Plus, Promotion } from '@element-plus/icons-vue'
-import { conversationApi, ordersApi } from '@/api'
+import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List } from '@element-plus/icons-vue'
+import { conversationApi, ordersApi, instancesApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
 
@@ -275,11 +342,17 @@ const isStreaming = ref(false)
 const messagesRef = ref(null)
 const editableTarget = ref(null)
 const uploadedFiles = ref([])
-const ordersExpanded = ref(false)
 const myOrders = ref([])
 const ordersLoading = ref(false)
+const showOrders = ref(false)
+const selectedOrder = ref(null)
+const selectedOrderDetail = ref(null)
+const orderInstances = ref([])
+const orderDetailLoading = ref(false)
 let routingTimer = null
 let abortController = null
+
+function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
   '矩阵计算，从compute-1到compute-3，跑2小时',
@@ -323,7 +396,16 @@ function formatRoutingStatus(status) {
 }
 
 function orderStatusType(status) {
-  return { pending: 'info', materialized: 'warning', running: 'success', failed: 'danger', cancelled: '' }[status] || 'info'
+  return {
+    pending: 'info',
+    routing: 'warning',
+    ready_to_submit: 'warning',
+    submitted: 'success',
+    running: 'success',
+    completed: 'success',
+    failed: 'danger',
+    cancelled: 'info'
+  }[status] || 'info'
 }
 
 function formatOrderStatus(status) {
@@ -424,9 +506,28 @@ async function loadOrders() {
   }
 }
 
-watch(ordersExpanded, (val) => {
-  if (val && !myOrders.value.length) loadOrders()
+watch(showOrders, (val) => {
+  if (val) loadOrders()
 })
+
+async function selectOrder(order) {
+  selectedOrder.value = order
+  selectedOrderDetail.value = null
+  orderInstances.value = []
+  orderDetailLoading.value = true
+  try {
+    const [detailRes, instancesRes] = await Promise.all([
+      ordersApi.get(order.id),
+      instancesApi.list({ order_id: order.id })
+    ])
+    selectedOrderDetail.value = detailRes.data
+    orderInstances.value = instancesRes.data
+  } catch {
+    // keep nulls
+  } finally {
+    orderDetailLoading.value = false
+  }
+}
 
 function useChip(text) {
   utterance.value = text
@@ -498,6 +599,7 @@ async function sendMessage() {
             }
             await scrollToBottom()
           } else if (event.type === 'done') {
+            isStreaming.value = false
             await loadConversation(conversation.value.id)
             await refreshList()
           } else if (event.type === 'error') {
@@ -560,7 +662,7 @@ async function confirmIntent() {
     await refreshList()
     ElMessage.success('工单已创建，等待外部路由系统计算路径')
     updateRoutingPolling()
-    if (ordersExpanded.value) loadOrders()
+    if (showOrders.value) loadOrders()
   } catch (err) {
     const detail = err.response?.data?.detail
     if (detail?.validation_errors) {
@@ -574,7 +676,7 @@ async function confirmIntent() {
 async function submitTask() {
   const { data: result } = await conversationApi.submit(conversation.value.id, { auto_start: false })
   await refreshConversation()
-  if (ordersExpanded.value) loadOrders()
+  if (showOrders.value) loadOrders()
   if (auth.isAdmin && result.order_id) {
     ElMessage.success('任务已提交，正在打开业务任务中心…')
     await router.push({ path: '/business-tasks', query: { orderId: result.order_id } })
@@ -871,6 +973,106 @@ onBeforeUnmount(stopRoutingPolling)
 }
 .order-meta { display: flex; align-items: center; gap: 6px; }
 .order-time { font-size: 11px; color: var(--text-muted); }
+
+/* ── Chat header right ── */
+.chat-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* ── Inline orders panel ── */
+.orders-panel {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.orders-panel-left {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.orders-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.orders-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.orders-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.orders-panel-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.orders-panel-item:hover { border-color: var(--el-color-primary-light-5); }
+.orders-panel-item.active { border-color: var(--accent-primary); }
+
+.orders-panel-right {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.orders-empty-detail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.orders-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-card { margin: 0; }
+
+.instance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.instance-row:last-child { border-bottom: none; }
+.instance-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 8px;
+}
 
 /* ── Chat column ── */
 .chat-column {
