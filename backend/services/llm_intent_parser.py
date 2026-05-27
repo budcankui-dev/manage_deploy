@@ -142,6 +142,10 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
     task_type = raw.get("task_type")
     modality = raw.get("modality") or MODALITY_MAP.get(task_type or "")
 
+    data_profile = raw.get("data_profile") or {}
+    if task_type and not any(v for v in data_profile.values() if v is not None):
+        data_profile = _default_data_profile(task_type)
+
     result = ParseResult(
         task_type=task_type,
         modality=modality,
@@ -159,7 +163,16 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
     )
 
     result = _merge_with_draft(existing_draft, result)
-    result.validation_errors = validate_draft_fields(result)
+    draft_dict = {
+        "task_type": result.task_type,
+        "source_name": result.source_name,
+        "destination_name": result.destination_name,
+        "business_start_time": result.business_start_time,
+        "business_end_time": result.business_end_time,
+        "business_objective": result.business_objective,
+        "data_profile": result.data_profile,
+    }
+    result.validation_errors = validate_draft_fields(draft_dict)
     result.parse_status = "valid" if not result.validation_errors else "incomplete"
     return result
 
@@ -184,3 +197,28 @@ def _merge_with_draft(existing: dict[str, Any] | None, new: ParseResult) -> Pars
     if not new.data_profile and existing.get("data_profile"):
         new.data_profile = existing["data_profile"]
     return new
+
+
+def _default_data_profile(task_type: str) -> dict[str, Any]:
+    """为已知任务类型提供合理的默认数据画像。"""
+    defaults = {
+        "high_throughput_matmul": {
+            "profile_id": "matmul_default",
+            "source": "synthetic",
+            "matrix_size": 1024,
+            "batch_count": 10,
+        },
+        "low_latency_video_pipeline": {
+            "profile_id": "video_default",
+            "source": "synthetic",
+            "resolution": "1920x1080",
+            "fps": 30,
+        },
+        "llm_text_generation": {
+            "profile_id": "llm_default",
+            "source": "synthetic",
+            "prompt_tokens": 512,
+            "max_tokens": 256,
+        },
+    }
+    return defaults.get(task_type, {"profile_id": "generic", "source": "synthetic"})
