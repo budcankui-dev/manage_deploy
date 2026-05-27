@@ -55,5 +55,13 @@ class Settings(BaseSettings):
     # SCHEDULED 模式默认运行时长（创建时未填 scheduled_end_time 则填 start+N 小时）
     default_scheduled_duration_hours: int = 2
 
+    # Intent Parser LLM 配置
+    intent_parser_engine: str = "rule"  # "llm" or "rule"
+    dashscope_api_key: str = ""
+    dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_model: str = "qwen-plus"
+    dashscope_timeout: float = 30.0
+    dashscope_temperature: float = 0.1
+
 
 settings = Settings()

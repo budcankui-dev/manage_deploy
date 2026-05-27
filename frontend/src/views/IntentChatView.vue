@@ -63,71 +63,79 @@
     </main>
 
     <aside class="intent-panel">
-      <el-card class="panel-card">
-        <template #header>实时意图参数</template>
+      <el-card class="panel-card" :class="{ 'valid-border': draft?.parse_status === 'valid' }">
+        <template #header>
+          意图参数
+          <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ draft.parse_status }}</el-tag>
+        </template>
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="模态">{{ draft.modality || '-' }}</el-descriptions-item>
           <el-descriptions-item label="源节点">{{ draft.source_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
-          <el-descriptions-item label="解析状态">
-            <el-tag :type="parseStatusType(draft.parse_status)" size="small">{{ draft.parse_status }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="业务目标">{{ formatObjectiveSentence(draft.business_objective) }}</el-descriptions-item>
+          <el-descriptions-item label="解析引擎">{{ draft.parser_name || 'rule_based' }}</el-descriptions-item>
         </el-descriptions>
-        <el-empty v-else description="发送消息后查看解析结果" />
+        <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draft?.validation_errors?.length" class="errors">
-          <el-alert
-            v-for="(item, index) in draft.validation_errors"
-            :key="index"
-            :title="item"
-            type="warning"
-            show-icon
-            :closable="false"
-          />
-        </div>
-        <div v-if="draft" class="json-block">
-          <h4>data_profile</h4>
-          <pre>{{ formatJson(draft.data_profile) }}</pre>
+          <el-alert v-for="(item, index) in draft.validation_errors" :key="index" :title="item" type="warning" show-icon :closable="false" />
         </div>
       </el-card>
 
       <el-card class="panel-card">
+        <template #header>业务目标</template>
+        <div v-if="draft?.business_objective?.metric_key" class="objective-editor">
+          <el-form label-width="60px" size="small">
+            <el-form-item label="指标">
+              <span>{{ draft.business_objective.metric_key }}</span>
+            </el-form-item>
+            <el-form-item label="目标值">
+              <el-input-number v-model="editableTarget" :min="0" :step="1000" controls-position="right" style="width:160px" @change="onTargetChange" />
+              <span style="margin-left:6px">{{ draft.business_objective.unit || 'ms' }}</span>
+            </el-form-item>
+            <el-form-item label="约束">
+              <el-tag size="small">{{ draft.business_objective.operator || '<=' }}</el-tag>
+            </el-form-item>
+          </el-form>
+        </div>
+        <el-empty v-else description="从对话中提取业务目标" :image-size="60" />
+      </el-card>
+
+      <el-card class="panel-card">
+        <template #header>输入文件（可选）</template>
+        <el-upload
+          :action="uploadAction"
+          :headers="uploadHeaders"
+          :on-success="onUploadSuccess"
+          :file-list="uploadedFiles"
+          :disabled="!conversation"
+          drag
+          multiple
+        >
+          <div class="upload-tip">拖拽文件到此处，或点击上传</div>
+        </el-upload>
+        <p class="file-hint">文件将作为 Worker 输入数据，不影响业务目标和路由决策。</p>
+      </el-card>
+
+      <el-card class="panel-card">
         <template #header>
-          路由状态
-          <el-tag v-if="routing" :type="routingStatusType(routing.status)" size="small" style="margin-left:8px">
-            {{ formatRoutingStatus(routing.status) }}
-          </el-tag>
+          操作
+          <el-tag v-if="routing" :type="routingStatusType(routing.status)" size="small" style="margin-left:8px">{{ formatRoutingStatus(routing.status) }}</el-tag>
         </template>
-        <el-descriptions v-if="routing" :column="1" border size="small">
-          <el-descriptions-item label="策略">{{ routing.selected_strategy || routing.strategy }}</el-descriptions-item>
-          <el-descriptions-item label="source 节点">{{ routing.placements?.source || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="compute 节点">{{ routing.placements?.compute || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="sink 节点">{{ routing.placements?.sink || '-' }}</el-descriptions-item>
-          <el-descriptions-item v-if="routing.source_name" label="源">{{ routing.source_name }}</el-descriptions-item>
-          <el-descriptions-item v-if="routing.destination_name" label="目的">{{ routing.destination_name }}</el-descriptions-item>
-        </el-descriptions>
+        <div v-if="routing" class="routing-summary">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="节点分配">{{ routing.placements ? `${routing.placements.source} → ${routing.placements.compute} → ${routing.placements.sink}` : '-' }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
         <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
           <el-icon class="is-loading"><i class="el-icon-loading" /></el-icon>
-          <span>等待外部路由系统计算...</span>
-        </div>
-        <el-empty v-if="!routing" description="确认意图后自动发起路由" />
-        <div v-if="routing?.estimated_metric" class="json-block">
-          <h4>预估指标</h4>
-          <pre>{{ formatJson(routing.estimated_metric) }}</pre>
-        </div>
-        <div v-if="routing?.input_payload" class="json-block">
-          <h4>路由 DAG Payload</h4>
-          <pre>{{ formatJson(routing.input_payload) }}</pre>
-        </div>
-        <div v-if="conversation?.materialized_order_id" class="order-info">
-          <el-tag type="info" size="small">工单 ID: {{ conversation.materialized_order_id.slice(0, 8) }}...</el-tag>
+          <span>等待路由计算...</span>
         </div>
         <div class="actions">
-          <el-button :disabled="!canConfirm" type="primary" @click="confirmIntent">确认意图并创建工单</el-button>
-          <el-button type="success" :disabled="!canSubmit" @click="submitTask">确认提交部署</el-button>
+          <el-button v-if="canConfirm" type="primary" @click="confirmIntent">确认参数并创建工单</el-button>
+          <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
+          <el-button v-if="conversation?.status === 'submitted'" type="info" text>已提交</el-button>
         </div>
       </el-card>
     </aside>
@@ -135,7 +143,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { conversationApi } from '@/api'
@@ -149,12 +157,20 @@ const conversation = ref(null)
 const utterance = ref('')
 const loading = ref(false)
 const messagesRef = ref(null)
+const editableTarget = ref(null)
+const uploadedFiles = ref([])
 let routingTimer = null
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
 const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting')
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
+
+const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
+const uploadHeaders = computed(() => {
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+})
 
 function formatJson(value) {
   return JSON.stringify(value || {}, null, 2)
@@ -176,6 +192,17 @@ function routingStatusType(status) {
 
 function formatRoutingStatus(status) {
   return { pending: '等待计算', computing: '计算中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] || status
+}
+
+function onTargetChange(val) {
+  if (!conversation.value || !draft.value) return
+  const updated = { ...draft.value.business_objective, target_value: val }
+  conversationApi.updateDraft(conversation.value.id, { business_objective: updated })
+}
+
+function onUploadSuccess(response) {
+  uploadedFiles.value.push({ name: response.filename, url: response.uri })
+  ElMessage.success(`${response.filename} 上传成功`)
 }
 
 function formatStatus(status) {
@@ -299,6 +326,12 @@ onMounted(async () => {
     await loadConversation(conversations.value[0].id)
   } else {
     await startNewConversation()
+  }
+})
+
+watch(draft, (d) => {
+  if (d?.business_objective?.target_value != null) {
+    editableTarget.value = d.business_objective.target_value
   }
 })
 
@@ -454,6 +487,10 @@ onBeforeUnmount(stopRoutingPolling)
   margin-bottom: 16px;
 }
 
+.panel-card.valid-border {
+  border-color: var(--el-color-success);
+}
+
 .actions {
   margin-top: 12px;
   display: flex;
@@ -466,6 +503,34 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.objective-editor {
+  padding: 4px 0;
+}
+
+.file-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 8px;
+}
+
+.upload-tip {
+  font-size: 13px;
+  color: var(--el-text-color-placeholder);
+  padding: 8px 0;
+}
+
+.routing-summary {
+  margin-bottom: 12px;
+}
+
+.routing-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-secondary);
+  padding: 12px 0;
 }
 
 .json-block h4 {

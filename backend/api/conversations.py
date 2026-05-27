@@ -92,7 +92,7 @@ async def send_message(
 
     latest_draft = await _get_latest_draft(db, conversation.id)
     existing = _draft_to_dict(latest_draft) if latest_draft else None
-    parsed, _trace = run_intent_workflow(payload.content, existing)
+    parsed, _trace = await run_intent_workflow(payload.content, existing)
 
     version = (latest_draft.version + 1) if latest_draft else 1
     draft = IntentDraft(
@@ -112,6 +112,8 @@ async def send_message(
         parse_status=ParseStatus(parsed.parse_status),
         parser_name=parsed.parser_name,
         parser_version=parsed.parser_version,
+        raw_llm_response=_trace.get("raw_llm_response"),
+        confidence=_trace.get("raw_llm_response", {}).get("confidence") if isinstance(_trace.get("raw_llm_response"), dict) else None,
     )
     db.add(draft)
 
