@@ -1,5 +1,5 @@
 export const TASK_TYPE_LABELS = {
-  high_throughput_matmul: '科学计算矩阵乘法',
+  high_throughput_matmul: '矩阵乘法计算任务',
   low_latency_video_pipeline: '低时延视频链路',
 }
 

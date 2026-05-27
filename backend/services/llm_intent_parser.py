@@ -19,60 +19,77 @@ from services.intent_parser import ParseResult, validate_draft_fields
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是一个计算任务部署平台的意图解析助手。用户会用自然语言描述他们想要部署的计算任务，你需要从中提取结构化参数。
+SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一任务是从用户对话中提取结构化参数。
 
-## 支持的任务类型
-- high_throughput_matmul：高吞吐矩阵计算（关键词：矩阵、matmul、乘法、吞吐、科学计算）
-- low_latency_video_pipeline：低时延视频转发（关键词：视频、video、转发、H264、编码、流媒体）
-- llm_text_generation：大模型文本生成（关键词：大模型、LLM、文本生成、推理、inference）
+## 支持的业务类型
 
-## 模态映射
-- high_throughput_matmul → high_throughput_compute
-- low_latency_video_pipeline → low_latency_stream
-- llm_text_generation → inference_serving
+当前系统仅支持一种业务：
+- 矩阵乘法计算任务（task_type: "high_throughput_matmul"）
 
-## 输出要求
-你必须输出一个严格的 JSON 对象，包含以下字段：
+如果用户描述的不是矩阵乘法相关任务，task_type 设为 null 并在 assistant_message 中告知用户当前仅支持矩阵乘法计算任务。
+
+## 必填参数
+
+| 参数 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| 源节点 | source_name | string | 数据源节点名称 |
+| 目的节点 | destination_name | string | 计算结果目的节点 |
+| 开始时间 | start_time | string | "now" 表示立即，或 ISO 格式 |
+| 结束时间/时长 | duration_hours | number | 运行时长（小时） |
+| 矩阵规模 | matrix_size | int | N×N 矩阵的 N 值 |
+| 批次数 | batch_count | int | 计算批次数量 |
+| 路由策略 | routing_strategy | string | 见下方选项 |
+
+## 路由策略选项（必须是以下之一）
+
+- resource_guarantee — 资源保障（默认，用户未明确偏好时使用）
+- fastest_completion — 完成时间优先（用户要求更快、高性能）
+- load_balance — 负载均衡（用户希望放在空闲服务器、竞争少）
+- cost_priority — 成本优先（用户希望便宜、省钱）
+
+## 输出 JSON 格式（严格遵守，不得添加额外字段）
 
 {
-  "task_type": "string|null",
-  "modality": "string|null",
-  "source_name": "string|null",
-  "destination_name": "string|null",
-  "duration_hours": "number|null - 运行时长（小时）",
-  "data_profile": {"matrix_size": null, "batch_count": null, ...},
-  "business_objective": {
-    "metric_key": "string|null",
-    "operator": "string - <=或>=",
-    "target_value": "number|null",
-    "unit": "string|null"
-  },
+  "task_type": "high_throughput_matmul" 或 null,
+  "source_name": "string 或 null",
+  "destination_name": "string 或 null",
+  "duration_hours": number 或 null,
+  "matrix_size": number 或 null,
+  "batch_count": number 或 null,
+  "routing_strategy": "resource_guarantee|fastest_completion|load_balance|cost_priority" 或 null,
   "assistant_message": "string - 用中文回复用户",
-  "confidence": "number 0-1"
+  "confidence": number 0-1
 }
 
 ## 解析规则
-1. "现在开始"/"立即" → 标记为立即启动
-2. "跑N小时/分钟" → duration_hours = N (或 N/60)
-3. "从X到Y" / "源X目的Y" / "source:X dest:Y" → source_name=X, destination_name=Y
-4. 业务目标：
-   - "延迟/耗时不超过Nms" → metric_key="compute_latency_ms", operator="<=", target_value=N, unit="ms"
-   - "吞吐不低于N" → metric_key="throughput_gflops", operator=">=", target_value=N, unit="GFLOPS"
-   - "端到端时延Nms" → metric_key="end_to_end_latency_ms", operator="<=", target_value=N, unit="ms"
+
+1. "现在开始"/"立即" → start_time = "now"
+2. "跑N小时" → duration_hours = N
+3. "跑N分钟" → duration_hours = N/60
+4. "从X到Y" / "源X目的Y" → source_name=X, destination_name=Y
+5. "N阶矩阵" / "NxN" / "规模N" → matrix_size = N
+6. "N批" / "N次" / "batch N" → batch_count = N
+7. 路由策略推断：
+   - "快/高性能/尽快完成" → fastest_completion
+   - "空闲/负载低/竞争少" → load_balance
+   - "便宜/省钱/成本低" → cost_priority
+   - 其他/未提及 → resource_guarantee
 
 ## assistant_message 规则
-- 如果所有必填字段都已提取到（task_type, source_name, destination_name, duration, business_objective），用自然语言确认已识别的参数
-- 如果缺少必填字段，用友好的中文询问用户补充，不要生硬列举字段名
-- 保持简洁，2-3句话即可
+
+- 如果 task_type 为 null：告知用户当前仅支持矩阵乘法计算任务
+- 如果有缺失参数：用自然语言询问缺失的参数（按优先级：源节点→目的节点→时长→矩阵规模→批次数→路由策略）
+- 如果所有参数完整：总结所有参数并告知用户"参数已完整，请确认提交"
+- 保持简洁，2-3句话
+- 不要自由发挥，不要提及系统不支持的功能
 
 ## 多轮对话
-你会收到已有的 draft 信息，代表之前轮次已经提取到的字段。本轮只需提取用户新补充的信息，null 表示本轮未提及（保留旧值）。"""
+
+你会收到已有的 draft 信息。本轮只需提取用户新补充的信息，null 表示本轮未提及（保留旧值）。"""
 
 
 MODALITY_MAP = {
     "high_throughput_matmul": "high_throughput_compute",
-    "low_latency_video_pipeline": "low_latency_stream",
-    "llm_text_generation": "inference_serving",
 }
 
 
@@ -138,11 +155,32 @@ async def stream_qwen_tokens(messages: list[dict]) -> AsyncGenerator[str, None]:
                     continue
 
 
-CHAT_SYSTEM_PROMPT = """你是智算意图解析助手，帮助用户描述和确认计算任务部署需求。
+CHAT_SYSTEM_PROMPT = """你是智算意图解析助手，帮助用户配置矩阵乘法计算任务的部署参数。
 
-用自然、友好的中文回复用户。如果用户描述了计算任务，确认你理解的参数（任务类型、源节点、目标节点、运行时长、性能目标）。如果信息不完整，用自然语言询问缺少的关键信息。
+## 你的职责
+- 引导用户提供矩阵乘法计算任务所需的全部参数
+- 当前系统仅支持"矩阵乘法计算任务"一种业务类型
+- 如果用户询问其他类型任务，礼貌告知当前仅支持矩阵乘法计算
 
-保持简洁，2-3句话。不要输出JSON或技术格式。"""
+## 需要收集的参数（按优先级）
+1. 源节点（数据从哪个节点来）
+2. 目的节点（计算结果发往哪个节点）
+3. 运行时长（跑多久）
+4. 矩阵规模（N×N 的 N 值）
+5. 批次数（计算多少批）
+6. 路由策略：
+   - 资源保障（默认）
+   - 完成时间优先（追求速度）
+   - 负载均衡（选空闲节点）
+   - 成本优先（省钱）
+
+## 回复规则
+- 用自然、友好的中文回复
+- 每次只问1-2个缺失参数，不要一次全问
+- 当所有参数都已收集完毕时，列出参数摘要并告知"参数已完整，请点击确认提交"
+- 保持简洁，2-3句话
+- 不要输出JSON或技术格式
+- 不要自由联想系统不支持的功能"""
 
 
 def _build_chat_messages(utterance: str, existing_draft: dict | None) -> list[dict]:
@@ -156,6 +194,14 @@ def _build_chat_messages(utterance: str, existing_draft: dict | None) -> list[di
             parts.append(f"源节点: {existing_draft['source_name']}")
         if existing_draft.get("destination_name"):
             parts.append(f"目标节点: {existing_draft['destination_name']}")
+        dp = existing_draft.get("data_profile") or {}
+        if dp.get("matrix_size"):
+            parts.append(f"矩阵规模: {dp['matrix_size']}")
+        if dp.get("batch_count"):
+            parts.append(f"批次数: {dp['batch_count']}")
+        rp = existing_draft.get("runtime_plan") or {}
+        if rp.get("routing_strategy"):
+            parts.append(f"路由策略: {rp['routing_strategy']}")
         if parts:
             msgs.append({"role": "system", "content": f"已知信息: {', '.join(parts)}"})
     msgs.append({"role": "user", "content": utterance})
@@ -178,9 +224,9 @@ def _build_messages(utterance: str, existing_draft: dict[str, Any] | None) -> li
     if existing_draft:
         draft_summary = {
             k: v for k, v in existing_draft.items()
-            if k in ("task_type", "modality", "source_name", "destination_name",
+            if k in ("task_type", "source_name", "destination_name",
                      "business_start_time", "business_end_time", "data_profile",
-                     "business_objective") and v
+                     "runtime_plan") and v
         }
         if draft_summary:
             ctx = json.dumps(draft_summary, ensure_ascii=False, default=str)
@@ -201,11 +247,18 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
         end_time = now + timedelta(hours=float(duration))
 
     task_type = raw.get("task_type")
-    modality = raw.get("modality") or MODALITY_MAP.get(task_type or "")
+    modality = MODALITY_MAP.get(task_type or "")
 
-    data_profile = raw.get("data_profile") or {}
-    if task_type and not any(v for v in data_profile.values() if v is not None):
-        data_profile = _default_data_profile(task_type)
+    # Build data_profile from top-level matrix_size / batch_count
+    data_profile = {
+        "matrix_size": raw.get("matrix_size"),
+        "batch_count": raw.get("batch_count"),
+    }
+
+    # Build runtime_plan from routing_strategy
+    runtime_plan = {
+        "routing_strategy": raw.get("routing_strategy"),
+    }
 
     result = ParseResult(
         task_type=task_type,
@@ -214,10 +267,10 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
         destination_name=raw.get("destination_name"),
         business_start_time=start_time,
         business_end_time=end_time,
-        data_profile=raw.get("data_profile") or {},
-        business_objective=raw.get("business_objective") or {},
-        runtime_plan=raw.get("runtime_plan") or {},
-        resource_requirement=raw.get("resource_requirement") or {},
+        data_profile=data_profile,
+        business_objective={},
+        runtime_plan=runtime_plan,
+        resource_requirement={},
         assistant_message=raw.get("assistant_message", ""),
         parser_name="llm_qwen",
         parser_version=settings.dashscope_model,
@@ -230,8 +283,8 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
         "destination_name": result.destination_name,
         "business_start_time": result.business_start_time,
         "business_end_time": result.business_end_time,
-        "business_objective": result.business_objective,
         "data_profile": result.data_profile,
+        "runtime_plan": result.runtime_plan,
     }
     result.validation_errors = validate_draft_fields(draft_dict)
     result.parse_status = "valid" if not result.validation_errors else "incomplete"
@@ -253,10 +306,18 @@ def _merge_with_draft(existing: dict[str, Any] | None, new: ParseResult) -> Pars
         new.business_start_time = existing["business_start_time"]
     if not new.business_end_time and existing.get("business_end_time"):
         new.business_end_time = existing["business_end_time"]
-    if not new.business_objective and existing.get("business_objective"):
-        new.business_objective = existing["business_objective"]
-    if not new.data_profile and existing.get("data_profile"):
-        new.data_profile = existing["data_profile"]
+    # Merge data_profile (matrix_size, batch_count)
+    existing_dp = existing.get("data_profile") or {}
+    if existing_dp:
+        for k, v in existing_dp.items():
+            if v is not None and not new.data_profile.get(k):
+                new.data_profile[k] = v
+    # Merge runtime_plan (routing_strategy)
+    existing_rp = existing.get("runtime_plan") or {}
+    if existing_rp:
+        for k, v in existing_rp.items():
+            if v is not None and not new.runtime_plan.get(k):
+                new.runtime_plan[k] = v
     return new
 
 

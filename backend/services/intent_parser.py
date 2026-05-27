@@ -287,17 +287,20 @@ def validate_draft_fields(draft: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not draft.get("task_type"):
         errors.append("task_type 不能为空")
-    if not draft.get("data_profile"):
-        errors.append("data_profile 不能为空")
-    objective = draft.get("business_objective") or {}
-    if not objective.get("metric_key") or objective.get("target_value") is None:
-        errors.append("business_objective 不完整")
+    dp = draft.get("data_profile") or {}
+    if not dp.get("matrix_size"):
+        errors.append("矩阵规模(matrix_size)不能为空")
+    if not dp.get("batch_count"):
+        errors.append("批次数(batch_count)不能为空")
     if not draft.get("source_name"):
-        errors.append("source_name 不能为空")
+        errors.append("源节点不能为空")
     if not draft.get("destination_name"):
-        errors.append("destination_name 不能为空")
+        errors.append("目的节点不能为空")
     if not draft.get("business_start_time"):
-        errors.append("business_start_time 不能为空")
+        errors.append("开始时间不能为空")
     if not draft.get("business_end_time"):
-        errors.append("business_end_time 不能为空")
+        errors.append("结束时间不能为空")
+    rp = draft.get("runtime_plan") or {}
+    if not rp.get("routing_strategy"):
+        errors.append("路由策略不能为空")
     return errors

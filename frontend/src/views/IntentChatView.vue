@@ -175,6 +175,17 @@
             <div class="avatar user-avatar">{{ (auth.username || 'U')[0].toUpperCase() }}</div>
           </template>
         </div>
+
+        <div v-if="draft?.parse_status === 'valid' && conversation?.status !== 'submitted' && !isStreaming" class="confirm-card">
+          <div class="confirm-card-inner">
+            <el-icon class="confirm-icon"><CircleCheck /></el-icon>
+            <div class="confirm-text">
+              <strong>参数已完整</strong>
+              <p>所有必填参数已收集完毕，确认后将创建工单</p>
+            </div>
+            <el-button type="success" @click="confirmIntent">确认提交工单</el-button>
+          </div>
+        </div>
       </section>
 
       <footer class="composer">
@@ -182,8 +193,8 @@
           v-model="utterance"
           type="textarea"
           :rows="4"
-          :disabled="isStreaming"
-          placeholder="描述您的计算任务，例如：矩阵计算从A节点到B节点，运行2小时..."
+          :disabled="isStreaming || conversation?.status === 'submitted'"
+          :placeholder="conversation?.status === 'submitted' ? '工单已提交，对话已结束' : '描述您的计算任务，例如：矩阵计算从A节点到B节点，运行2小时...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -273,7 +284,9 @@
           <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
-          <el-descriptions-item label="解析引擎">{{ draft.parser_name || 'rule_based' }}</el-descriptions-item>
+          <el-descriptions-item label="矩阵规模">{{ draft.data_profile?.matrix_size || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="批次数">{{ draft.data_profile?.batch_count || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draft?.validation_errors?.length" class="errors">
@@ -282,22 +295,13 @@
       </el-card>
 
       <el-card class="panel-card">
-        <template #header>业务目标</template>
-        <div v-if="draft?.business_objective?.metric_key" class="objective-editor">
-          <el-form label-width="60px" size="small">
-            <el-form-item label="指标">
-              <span>{{ draft.business_objective.metric_key }}</span>
-            </el-form-item>
-            <el-form-item label="目标值">
-              <el-input-number v-model="editableTarget" :min="0" :step="1000" controls-position="right" style="width:160px" @change="onTargetChange" />
-              <span style="margin-left:6px">{{ draft.business_objective.unit || 'ms' }}</span>
-            </el-form-item>
-            <el-form-item label="约束">
-              <el-tag size="small">{{ draft.business_objective.operator || '<=' }}</el-tag>
-            </el-form-item>
-          </el-form>
+        <template #header>路由策略</template>
+        <div v-if="draft?.runtime_plan?.routing_strategy" class="objective-editor">
+          <el-descriptions :column="1" size="small">
+            <el-descriptions-item label="当前策略">{{ formatRoutingStrategy(draft.runtime_plan.routing_strategy) }}</el-descriptions-item>
+          </el-descriptions>
         </div>
-        <el-empty v-else description="从对话中提取业务目标" :image-size="60" />
+        <el-empty v-else description="从对话中提取路由策略" :image-size="60" />
       </el-card>
 
       <el-card class="panel-card">
@@ -352,7 +356,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi, instancesApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
@@ -431,6 +435,16 @@ function routingStatusType(status) {
 
 function formatRoutingStatus(status) {
   return { pending: '等待计算', computing: '计算中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] || status
+}
+
+function formatRoutingStrategy(strategy) {
+  if (!strategy) return '-'
+  return {
+    resource_guarantee: '资源保障',
+    fastest_completion: '完成时间优先',
+    load_balance: '负载均衡',
+    cost_priority: '成本优先',
+  }[strategy] || strategy
 }
 
 function orderStatusType(status) {
@@ -1117,6 +1131,7 @@ onBeforeUnmount(stopRoutingPolling)
   flex-direction: column;
   min-width: 0;
   height: 100%;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -1131,6 +1146,7 @@ onBeforeUnmount(stopRoutingPolling)
 
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1297,8 +1313,32 @@ onBeforeUnmount(stopRoutingPolling)
   50% { opacity: 0; }
 }
 
+/* ── Confirm card ── */
+.confirm-card {
+  margin: 16px 28px;
+  padding: 16px 20px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 12px;
+}
+.confirm-card-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.confirm-icon {
+  font-size: 24px;
+  color: #22c55e;
+}
+.confirm-text p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #666;
+}
+
 /* ── Composer ── */
 .composer {
+  flex-shrink: 0;
   padding: 18px 28px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
