@@ -134,7 +134,7 @@
       <template v-else>
         <section class="messages" ref="messagesRef">
         <!-- Empty state welcome screen -->
-        <div v-if="!conversation?.messages?.length" class="empty-state">
+        <div v-if="!displayMessages.length" class="empty-state">
           <div class="empty-avatar">智</div>
           <h2 class="empty-title">智算意图解析助手</h2>
           <p class="empty-subtitle">请描述您想要部署的计算任务</p>
@@ -149,7 +149,7 @@
         </div>
 
         <div
-          v-for="(message, idx) in conversation?.messages || []"
+          v-for="(message, idx) in displayMessages"
           :key="message.id || idx"
           class="message-row"
           :class="message.role"
@@ -361,6 +361,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const conversations = ref([])
 const conversation = ref(null)
+const localMessages = ref([])  // temporary messages during streaming only
 const utterance = ref('')
 const loading = ref(false)
 const isStreaming = ref(false)
@@ -382,6 +383,11 @@ let abortController = null
 const filteredOrders = computed(() => {
   if (!orderStatusFilter.value) return myOrders.value
   return myOrders.value.filter(o => o.status === orderStatusFilter.value)
+})
+
+const displayMessages = computed(() => {
+  const backendMsgs = conversation.value?.messages || []
+  return [...backendMsgs, ...localMessages.value]
 })
 
 function toggleOrders() { showOrders.value = !showOrders.value }
@@ -488,6 +494,7 @@ async function refreshConversation() {
 }
 
 async function loadConversation(id) {
+  localMessages.value = []  // clear any streaming state
   const { data } = await conversationApi.get(id)
   conversation.value = data
   utterance.value = ''
@@ -501,6 +508,7 @@ function selectConversation(id) {
 }
 
 async function startNewConversation() {
+  localMessages.value = []
   const { data } = await conversationApi.create({})
   conversation.value = data
   utterance.value = ''
@@ -594,10 +602,9 @@ async function sendMessage() {
       await startNewConversation()
     }
 
-    if (!conversation.value.messages) conversation.value.messages = []
-    conversation.value.messages = [
-      ...conversation.value.messages,
-      { role: 'user', content: text, id: '_user_' + Date.now() },
+    // Add to LOCAL messages only — never touch conversation.value.messages
+    localMessages.value = [
+      { role: 'user', content: text, id: '_local_user_' + Date.now() },
       { role: 'assistant', content: '', id: '_stream', streaming: true },
     ]
     await nextTick()
@@ -617,9 +624,7 @@ async function sendMessage() {
       signal: abortController.signal,
     })
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -638,78 +643,60 @@ async function sendMessage() {
         try {
           const event = JSON.parse(raw)
           if (event.type === 'token') {
-            const msgs = conversation.value.messages
-            const idx = msgs.findIndex(m => m.id === '_stream')
+            // Update the streaming placeholder in localMessages
+            const idx = localMessages.value.findIndex(m => m.id === '_stream')
             if (idx !== -1) {
-              conversation.value.messages = [
-                ...msgs.slice(0, idx),
-                { ...msgs[idx], content: msgs[idx].content + event.content },
-                ...msgs.slice(idx + 1),
+              localMessages.value = [
+                ...localMessages.value.slice(0, idx),
+                { ...localMessages.value[idx], content: localMessages.value[idx].content + event.content },
+                ...localMessages.value.slice(idx + 1),
               ]
             }
             await scrollToBottom()
           } else if (event.type === 'done') {
             isStreaming.value = false
+            // Clear local messages BEFORE loading from backend to avoid flash
+            localMessages.value = []
             await loadConversation(conversation.value.id)
             await refreshList()
           } else if (event.type === 'error') {
-            const msgs = conversation.value.messages
-            const idx = msgs.findIndex(m => m.id === '_stream')
+            const idx = localMessages.value.findIndex(m => m.id === '_stream')
             if (idx !== -1) {
-              conversation.value.messages = [
-                ...msgs.slice(0, idx),
-                { ...msgs[idx], content: msgs[idx].content || '解析失败，请重试', streaming: false },
-                ...msgs.slice(idx + 1),
+              localMessages.value = [
+                ...localMessages.value.slice(0, idx),
+                { ...localMessages.value[idx], content: localMessages.value[idx].content || '解析失败，请重试', streaming: false },
+                ...localMessages.value.slice(idx + 1),
               ]
             }
           }
-        } catch {
-          // ignore malformed SSE lines
-        }
+        } catch { /* ignore malformed SSE */ }
       }
     }
 
-    // Stream ended naturally — ensure streaming state is cleared
+    // Stream ended naturally without 'done' event
     isStreaming.value = false
-    // Mark placeholder as done if still present (no 'done' event received)
-    if (conversation.value?.messages) {
-      const msgs = conversation.value.messages
-      const idx = msgs.findIndex(m => m.id === '_stream')
-      if (idx !== -1) {
-        conversation.value.messages = [
-          ...msgs.slice(0, idx),
-          { ...msgs[idx], streaming: false },
-          ...msgs.slice(idx + 1),
-        ]
-        await loadConversation(conversation.value.id)
-        await refreshList()
-      }
+    if (localMessages.value.some(m => m.id === '_stream')) {
+      localMessages.value = []
+      await loadConversation(conversation.value.id)
+      await refreshList()
     }
+
   } catch (err) {
+    isStreaming.value = false
     if (err.name === 'AbortError') {
-      if (conversation.value?.messages) {
-        const msgs = conversation.value.messages
-        const idx = msgs.findIndex(m => m.id === '_stream')
-        if (idx !== -1) {
-          conversation.value.messages = [
-            ...msgs.slice(0, idx),
-            { ...msgs[idx], streaming: false },
-            ...msgs.slice(idx + 1),
-          ]
-        }
+      // User stopped — keep accumulated content, mark as done
+      localMessages.value = localMessages.value.map(m =>
+        m.id === '_stream' ? { ...m, streaming: false } : m
+      )
+      // Reload to get persisted state
+      if (conversation.value?.id) {
+        await loadConversation(conversation.value.id)
+        localMessages.value = []
       }
     } else {
-      if (conversation.value?.messages) {
-        const msgs = conversation.value.messages
-        const idx = msgs.findIndex(m => m.id === '_stream')
-        if (idx !== -1) {
-          conversation.value.messages = [
-            ...msgs.slice(0, idx),
-            { ...msgs[idx], content: msgs[idx].content || '解析失败，请重试', streaming: false },
-            ...msgs.slice(idx + 1),
-          ]
-        }
-      }
+      localMessages.value = localMessages.value.map(m =>
+        m.id === '_stream' ? { ...m, content: m.content || '解析失败，请重试', streaming: false } : m
+      )
     }
   } finally {
     loading.value = false
