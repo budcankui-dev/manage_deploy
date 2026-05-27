@@ -1,6 +1,9 @@
+import json
 from datetime import datetime
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,6 +26,7 @@ from schemas import (
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
+from services.llm_intent_parser import _build_messages, stream_qwen_tokens, parse_intent_llm
 from services.routing_payload_builder import build_routing_payload
 
 from .business_tasks import create_business_task
@@ -132,6 +136,116 @@ async def send_message(
     conversation.updated_at = datetime.utcnow()
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+
+@router.post("/{conversation_id}/messages/stream")
+async def send_message_stream(
+    conversation_id: str,
+    payload: ConversationMessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream assistant reply token-by-token via SSE, then persist the full
+    intent parse and draft after streaming completes."""
+    conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+    if conversation.status in {ConversationStatus.SUBMITTED, ConversationStatus.REJECTED}:
+        raise HTTPException(status_code=400, detail="Conversation is closed")
+
+    if not conversation.title:
+        conversation.title = payload.content[:80]
+
+    db.add(
+        ConversationMessage(
+            conversation_id=conversation.id,
+            role=MessageRole.USER,
+            content=payload.content,
+        )
+    )
+    await db.flush()
+
+    latest_draft = await _get_latest_draft(db, conversation.id)
+    existing = _draft_to_dict(latest_draft) if latest_draft else None
+    llm_messages = _build_messages(payload.content, existing)
+
+    async def _event_stream() -> AsyncGenerator[str, None]:
+        accumulated = ""
+        try:
+            async for token in stream_qwen_tokens(llm_messages):
+                accumulated += token
+                yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("SSE token stream error")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
+
+        # After streaming: run structured parse then persist
+        try:
+            parsed, _trace = await run_intent_workflow(payload.content, existing)
+
+            version = (latest_draft.version + 1) if latest_draft else 1
+            draft = IntentDraft(
+                conversation_id=conversation.id,
+                version=version,
+                task_type=parsed.task_type,
+                modality=parsed.modality,
+                source_name=parsed.source_name,
+                destination_name=parsed.destination_name,
+                business_start_time=parsed.business_start_time,
+                business_end_time=parsed.business_end_time,
+                data_profile=parsed.data_profile or None,
+                business_objective=parsed.business_objective or None,
+                runtime_plan=parsed.runtime_plan or None,
+                resource_requirement=parsed.resource_requirement or None,
+                validation_errors=parsed.validation_errors or None,
+                parse_status=ParseStatus(parsed.parse_status),
+                parser_name=parsed.parser_name,
+                parser_version=parsed.parser_version,
+                raw_llm_response=_trace.get("raw_llm_response"),
+                confidence=(
+                    _trace.get("raw_llm_response", {}).get("confidence")
+                    if isinstance(_trace.get("raw_llm_response"), dict)
+                    else None
+                ),
+            )
+            db.add(draft)
+
+            if parsed.parse_status == "rejected":
+                conversation.status = ConversationStatus.REJECTED
+            else:
+                conversation.status = ConversationStatus.DRAFTING
+
+            assistant_content = accumulated if accumulated else parsed.assistant_message
+            db.add(
+                ConversationMessage(
+                    conversation_id=conversation.id,
+                    role=MessageRole.ASSISTANT,
+                    content=assistant_content,
+                )
+            )
+            conversation.updated_at = datetime.utcnow()
+            await db.flush()
+
+            done_payload = {
+                "type": "done",
+                "draft": {
+                    "task_type": parsed.task_type,
+                    "modality": parsed.modality,
+                    "source_name": parsed.source_name,
+                    "destination_name": parsed.destination_name,
+                    "parse_status": parsed.parse_status,
+                    "validation_errors": parsed.validation_errors or [],
+                    "assistant_message": assistant_content,
+                },
+                "conversation_status": conversation.status.value,
+            }
+            yield f"data: {json.dumps(done_payload, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("SSE post-stream parse error")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 @router.patch("/{conversation_id}/draft", response_model=ConversationResponse)
@@ -247,6 +361,17 @@ async def confirm_intent(
     conversation.updated_at = datetime.utcnow()
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+
+@router.delete("/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+    await db.delete(conversation)
+    await db.flush()
 
 
 @router.post("/{conversation_id}/submit", response_model=ConversationSubmitResponse)

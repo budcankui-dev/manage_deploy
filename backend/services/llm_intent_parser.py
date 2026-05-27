@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, UTC
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import httpx
 
@@ -99,6 +99,43 @@ async def call_qwen(messages: list[dict[str, str]]) -> dict[str, Any]:
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         return json.loads(content)
+
+
+async def stream_qwen_tokens(messages: list[dict]) -> AsyncGenerator[str, None]:
+    """Stream assistant_message tokens from Qwen, yield each text chunk."""
+    payload = {
+        "model": settings.dashscope_model,
+        "messages": messages,
+        "temperature": settings.dashscope_temperature,
+        "stream": True,
+        # No response_format for streaming — parse JSON separately after
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.dashscope_api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            f"{settings.dashscope_base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=60.0,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0]["delta"].get("content", "")
+                    if delta:
+                        yield delta
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
 
 
 async def parse_intent_llm(

@@ -103,6 +103,7 @@ export const conversationApi = {
   create: (data) => api.post('/conversations', data),
   list: () => api.get('/conversations'),
   get: (id) => api.get(`/conversations/${id}`),
+  delete: (id) => api.delete(`/conversations/${id}`),
   sendMessage: (id, data) => api.post(`/conversations/${id}/messages`, data),
   updateDraft: (id, data) => api.patch(`/conversations/${id}/draft`, data),
   confirmIntent: (id) => api.post(`/conversations/${id}/confirm-intent`),

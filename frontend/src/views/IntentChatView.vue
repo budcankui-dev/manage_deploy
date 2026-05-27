@@ -8,17 +8,56 @@
       <el-button type="primary" @click="startNewConversation">新建对话</el-button>
       <div class="history-title">历史对话</div>
       <div class="conversation-list">
-        <button
+        <div
           v-for="item in conversations"
           :key="item.id"
           class="conversation-item"
           :class="{ active: item.id === conversation?.id }"
           @click="loadConversation(item.id)"
         >
-          <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
-          <small>{{ formatStatus(item.status) }}</small>
-        </button>
+          <div class="conversation-item-body">
+            <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
+            <small>{{ formatStatus(item.status) }}</small>
+          </div>
+          <el-button
+            class="delete-btn"
+            link
+            type="danger"
+            :icon="DeleteIcon"
+            size="small"
+            @click.stop="deleteConversation(item)"
+            title="删除对话"
+          />
+        </div>
       </div>
+
+      <!-- 我的工单 -->
+      <div class="orders-section">
+        <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
+          <span>我的工单</span>
+          <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
+        </div>
+        <div v-show="ordersExpanded" class="orders-list">
+          <div v-if="ordersLoading" class="orders-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+          <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
+          <div
+            v-else
+            v-for="order in myOrders"
+            :key="order.id"
+            class="order-item"
+          >
+            <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
+            <div class="order-meta">
+              <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
+              <span class="order-time">{{ formatTime(order.created_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="account-tools">
         <el-tag v-if="auth.isBypass" size="small" type="warning">开发绕过登录</el-tag>
         <el-button text @click="logout">退出登录</el-button>
@@ -43,7 +82,7 @@
           :class="message.role"
         >
           <strong>{{ message.role === 'user' ? '我' : '助手' }}</strong>
-          <p>{{ message.content }}</p>
+          <p>{{ message.content }}<span v-if="message.streaming" class="streaming-cursor" /></p>
         </div>
       </section>
 
@@ -129,7 +168,7 @@
           </el-descriptions>
         </div>
         <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
-          <el-icon class="is-loading"><i class="el-icon-loading" /></el-icon>
+          <el-icon class="is-loading"><Loading /></el-icon>
           <span>等待路由计算...</span>
         </div>
         <div class="actions">
@@ -145,10 +184,11 @@
 <script setup>
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { conversationApi } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete as DeleteIcon, ArrowRight, Loading } from '@element-plus/icons-vue'
+import { conversationApi, ordersApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import { formatObjectiveSentence, taskTypeLabel } from '@/constants/businessTaskDisplay'
+import { taskTypeLabel } from '@/constants/businessTaskDisplay'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -159,6 +199,9 @@ const loading = ref(false)
 const messagesRef = ref(null)
 const editableTarget = ref(null)
 const uploadedFiles = ref([])
+const ordersExpanded = ref(false)
+const myOrders = ref([])
+const ordersLoading = ref(false)
 let routingTimer = null
 
 const draft = computed(() => conversation.value?.latest_draft || null)
@@ -171,10 +214,6 @@ const uploadHeaders = computed(() => {
   const token = localStorage.getItem('access_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
 })
-
-function formatJson(value) {
-  return JSON.stringify(value || {}, null, 2)
-}
 
 function formatTime(value) {
   if (!value) return '-'
@@ -192,6 +231,14 @@ function routingStatusType(status) {
 
 function formatRoutingStatus(status) {
   return { pending: '等待计算', computing: '计算中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] || status
+}
+
+function orderStatusType(status) {
+  return { pending: 'info', materialized: 'warning', running: 'success', failed: 'danger', cancelled: '' }[status] || 'info'
+}
+
+function formatOrderStatus(status) {
+  return { pending: '待处理', materialized: '已物化', running: '运行中', failed: '失败', cancelled: '已取消', completed: '已完成' }[status] || status || '-'
 }
 
 function onTargetChange(val) {
@@ -253,20 +300,122 @@ async function startNewConversation() {
   updateRoutingPolling()
 }
 
+async function deleteConversation(item) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除对话「${item.title || item.id.slice(0, 8)}」？`,
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  await conversationApi.delete(item.id)
+  const wasActive = item.id === conversation.value?.id
+  await refreshList()
+  if (wasActive) {
+    if (conversations.value.length) {
+      await loadConversation(conversations.value[0].id)
+    } else {
+      await startNewConversation()
+    }
+  }
+  ElMessage.success('对话已删除')
+}
+
+async function loadOrders() {
+  ordersLoading.value = true
+  try {
+    const { data } = await ordersApi.list({ reconcile: false })
+    myOrders.value = data
+  } catch {
+    myOrders.value = []
+  } finally {
+    ordersLoading.value = false
+  }
+}
+
+watch(ordersExpanded, (val) => {
+  if (val && !myOrders.value.length) loadOrders()
+})
+
 async function sendMessage() {
-  if (!utterance.value.trim()) return
+  if (!utterance.value.trim() || loading.value) return
   loading.value = true
+  const text = utterance.value.trim()
+  utterance.value = ''
+
   try {
     if (!conversation.value?.id) {
       await startNewConversation()
     }
-    const { data } = await conversationApi.sendMessage(conversation.value.id, {
-      content: utterance.value.trim(),
-    })
-    conversation.value = data
-    utterance.value = ''
-    await refreshList()
+
+    // Add user message immediately
+    conversation.value.messages = conversation.value.messages || []
+    conversation.value.messages.push({ role: 'user', content: text, id: Date.now() })
+
+    // Add empty assistant placeholder
+    const placeholder = { role: 'assistant', content: '', id: Date.now() + 1, streaming: true }
+    conversation.value.messages.push(placeholder)
+    await nextTick()
     await scrollToBottom()
+
+    const token = localStorage.getItem('access_token')
+    const response = await fetch(`/api/conversations/${conversation.value.id}/messages/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ content: text }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue
+        const data = line.slice(5).trim()
+        try {
+          const event = JSON.parse(data)
+          if (event.type === 'token') {
+            placeholder.content += event.content
+            await scrollToBottom()
+          } else if (event.type === 'done') {
+            placeholder.streaming = false
+            // Reload full conversation to get updated draft and persisted messages
+            await loadConversation(conversation.value.id)
+            await refreshList()
+          } else if (event.type === 'error') {
+            placeholder.content = placeholder.content || '解析失败，请重试'
+            placeholder.streaming = false
+          }
+        } catch {
+          // ignore malformed SSE lines
+        }
+      }
+    }
+  } catch (err) {
+    // Fallback: mark placeholder as failed if it exists
+    if (conversation.value?.messages) {
+      const last = conversation.value.messages[conversation.value.messages.length - 1]
+      if (last?.streaming) {
+        last.content = last.content || '解析失败，请重试'
+        last.streaming = false
+      }
+    }
   } finally {
     loading.value = false
   }
@@ -279,6 +428,7 @@ async function confirmIntent() {
     await refreshList()
     ElMessage.success('工单已创建，等待外部路由系统计算路径')
     updateRoutingPolling()
+    if (ordersExpanded.value) loadOrders()
   } catch (err) {
     const detail = err.response?.data?.detail
     if (detail?.validation_errors) {
@@ -292,6 +442,7 @@ async function confirmIntent() {
 async function submitTask() {
   const { data: result } = await conversationApi.submit(conversation.value.id, { auto_start: false })
   await refreshConversation()
+  if (ordersExpanded.value) loadOrders()
   if (auth.isAdmin && result.order_id) {
     ElMessage.success('任务已提交，正在打开业务任务中心…')
     await router.push({ path: '/business-tasks', query: { orderId: result.order_id } })
@@ -341,7 +492,7 @@ onBeforeUnmount(stopRoutingPolling)
 <style scoped>
 .intent-workspace {
   display: grid;
-  grid-template-columns: 260px minmax(420px, 1fr) 420px;
+  grid-template-columns: 260px minmax(420px, 1fr) 380px;
   height: 100vh;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -384,26 +535,125 @@ onBeforeUnmount(stopRoutingPolling)
 }
 
 .conversation-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   padding: 10px;
-  text-align: left;
   background: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
+}
+
+.conversation-item:hover {
+  border-color: var(--el-color-primary-light-5);
 }
 
 .conversation-item.active {
   border-color: var(--accent-primary);
 }
 
-.conversation-item span,
-.conversation-item small {
+.conversation-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-item-body span,
+.conversation-item-body small {
   display: block;
 }
 
-.conversation-item small {
+.conversation-item-body span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item-body small {
   margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.delete-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.conversation-item:hover .delete-btn {
+  opacity: 1;
+}
+
+/* orders section */
+.orders-section {
+  margin-top: 20px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+.orders-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  user-select: none;
+}
+
+.orders-header:hover {
+  color: var(--text-primary);
+}
+
+.orders-arrow {
+  transition: transform 0.2s;
+}
+
+.orders-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.orders-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.orders-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.order-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+}
+
+.order-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.order-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-time {
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -468,6 +718,21 @@ onBeforeUnmount(stopRoutingPolling)
   white-space: pre-wrap;
 }
 
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .composer {
   padding: 18px 28px;
   border-top: 1px solid var(--border-subtle);
@@ -529,39 +794,12 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--el-text-color-secondary);
-  padding: 12px 0;
-}
-
-.json-block h4 {
-  margin: 12px 0 6px;
-}
-
-.json-block pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--bg-tertiary);
-  padding: 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.routing-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 0;
   color: var(--text-secondary);
+  padding: 12px 0;
   font-size: 13px;
 }
 
-.order-info {
-  margin-top: 10px;
-}
-
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .intent-workspace {
     grid-template-columns: 220px 1fr;
   }
@@ -570,3 +808,4 @@ onBeforeUnmount(stopRoutingPolling)
   }
 }
 </style>
+
