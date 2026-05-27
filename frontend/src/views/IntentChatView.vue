@@ -35,8 +35,8 @@
             v-for="item in conversations"
             :key="item.id"
             class="conversation-item"
-            :class="{ active: item.id === conversation?.id }"
-            @click="loadConversation(item.id)"
+            :class="{ active: !showOrders && item.id === conversation?.id }"
+            @click="selectConversation(item.id)"
           >
             <div class="conversation-item-body">
               <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
@@ -66,7 +66,7 @@
     </aside>
 
     <main class="chat-column">
-      <header class="chat-header">
+      <header v-if="!showOrders" class="chat-header">
         <div>
           <h1>{{ conversation?.title || '新任务对话' }}</h1>
           <p>任务 ID：<code>{{ conversation?.task_id || conversation?.id || '-' }}</code></p>
@@ -495,6 +495,11 @@ async function loadConversation(id) {
   updateRoutingPolling()
 }
 
+function selectConversation(id) {
+  showOrders.value = false
+  loadConversation(id)
+}
+
 async function startNewConversation() {
   const { data } = await conversationApi.create({})
   conversation.value = data
@@ -661,6 +666,23 @@ async function sendMessage() {
         } catch {
           // ignore malformed SSE lines
         }
+      }
+    }
+
+    // Stream ended naturally — ensure streaming state is cleared
+    isStreaming.value = false
+    // Mark placeholder as done if still present (no 'done' event received)
+    if (conversation.value?.messages) {
+      const msgs = conversation.value.messages
+      const idx = msgs.findIndex(m => m.id === '_stream')
+      if (idx !== -1) {
+        conversation.value.messages = [
+          ...msgs.slice(0, idx),
+          { ...msgs[idx], streaming: false },
+          ...msgs.slice(idx + 1),
+        ]
+        await loadConversation(conversation.value.id)
+        await refreshList()
       }
     }
   } catch (err) {
