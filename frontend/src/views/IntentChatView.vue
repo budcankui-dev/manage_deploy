@@ -1,5 +1,20 @@
 <template>
-  <div class="intent-workspace">
+  <div class="intent-app">
+    <!-- Top navigation bar -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <span class="top-logo">智联计算系统</span>
+      </div>
+      <div class="top-bar-center">
+        <span v-if="conversation?.title" class="top-conv-title">{{ conversation.title }}</span>
+      </div>
+      <div class="top-bar-right">
+        <el-tag size="small" type="info" class="model-badge">Qwen (通义千问)</el-tag>
+        <div class="user-chip">{{ auth.username || 'user' }}</div>
+      </div>
+    </header>
+
+    <div class="intent-workspace">
     <aside class="conversation-sidebar">
       <div class="sidebar-top">
         <div class="brand">
@@ -38,9 +53,9 @@
 
           <!-- 我的工单 -->
           <div class="orders-section">
-            <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
+            <div class="orders-header" @click="router.push('/my-orders')">
               <span>我的工单</span>
-              <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
+              <el-icon class="orders-arrow"><ArrowRight /></el-icon>
             </div>
             <div v-show="ordersExpanded" class="orders-list">
               <div v-if="ordersLoading" class="orders-loading">
@@ -231,6 +246,13 @@
         </div>
       </el-card>
     </aside>
+  </div>
+
+    <!-- Bottom status bar -->
+    <footer class="bottom-bar">
+      <span class="bottom-left">智联计算系统意图解析模块 v1.0</span>
+      <span class="bottom-right">模型: qwen-plus · DashScope API</span>
+    </footer>
   </div>
 </template>
 
@@ -600,10 +622,71 @@ onBeforeUnmount(stopRoutingPolling)
 </script>
 
 <style scoped>
+/* ── App shell (top bar + workspace + bottom bar) ── */
+.intent-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Top bar ── */
+.top-bar {
+  flex-shrink: 0;
+  height: 48px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 16px;
+  z-index: 10;
+}
+
+.top-bar-left { display: flex; align-items: center; width: 260px; flex-shrink: 0; }
+.top-logo { font-size: 15px; font-weight: 700; color: var(--text-primary); letter-spacing: 0.02em; }
+
+.top-bar-center { flex: 1; min-width: 0; text-align: center; }
+.top-conv-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 400px;
+}
+
+.top-bar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.model-badge { font-size: 11px; }
+.user-chip {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+
+/* ── Bottom status bar ── */
+.bottom-bar {
+  flex-shrink: 0;
+  height: 32px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .intent-workspace {
   display: grid;
   grid-template-columns: 260px minmax(420px, 1fr) 380px;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   background: var(--bg-primary);
   color: var(--text-primary);
 }
@@ -614,7 +697,7 @@ onBeforeUnmount(stopRoutingPolling)
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -794,7 +877,7 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100vh;
+  height: 100%;
 }
 
 .chat-header {

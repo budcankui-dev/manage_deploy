@@ -138,6 +138,30 @@ async def stream_qwen_tokens(messages: list[dict]) -> AsyncGenerator[str, None]:
                     continue
 
 
+CHAT_SYSTEM_PROMPT = """你是智算意图解析助手，帮助用户描述和确认计算任务部署需求。
+
+用自然、友好的中文回复用户。如果用户描述了计算任务，确认你理解的参数（任务类型、源节点、目标节点、运行时长、性能目标）。如果信息不完整，用自然语言询问缺少的关键信息。
+
+保持简洁，2-3句话。不要输出JSON或技术格式。"""
+
+
+def _build_chat_messages(utterance: str, existing_draft: dict | None) -> list[dict]:
+    """Build messages for conversational streaming (no JSON schema)."""
+    msgs = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+    if existing_draft:
+        parts = []
+        if existing_draft.get("task_type"):
+            parts.append(f"任务类型: {existing_draft['task_type']}")
+        if existing_draft.get("source_name"):
+            parts.append(f"源节点: {existing_draft['source_name']}")
+        if existing_draft.get("destination_name"):
+            parts.append(f"目标节点: {existing_draft['destination_name']}")
+        if parts:
+            msgs.append({"role": "system", "content": f"已知信息: {', '.join(parts)}"})
+    msgs.append({"role": "user", "content": utterance})
+    return msgs
+
+
 async def parse_intent_llm(
     utterance: str,
     existing_draft: dict[str, Any] | None = None,

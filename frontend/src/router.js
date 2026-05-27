@@ -38,6 +38,11 @@ const routes = [
     component: () => import('@/views/IntentChatView.vue'),
   },
   {
+    path: '/my-orders',
+    name: 'MyOrders',
+    component: () => import('@/views/MyOrdersView.vue'),
+  },
+  {
     path: '/nodes',
     name: 'Nodes',
     component: () => import('@/views/NodesView.vue'),

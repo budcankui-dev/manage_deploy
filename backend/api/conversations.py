@@ -26,7 +26,7 @@ from schemas import (
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
-from services.llm_intent_parser import _build_messages, stream_qwen_tokens, parse_intent_llm
+from services.llm_intent_parser import _build_messages, _build_chat_messages, stream_qwen_tokens, parse_intent_llm
 from services.routing_payload_builder import build_routing_payload
 
 from .business_tasks import create_business_task
@@ -177,8 +177,8 @@ async def send_message_stream(
     existing = _draft_to_dict(latest_draft) if latest_draft else None
     next_version = (latest_draft.version + 1) if latest_draft else 1
 
-    # Build LLM messages from primitives — no ORM objects cross into the generator
-    llm_messages = _build_messages(payload.content, existing)
+    # Build chat messages for streaming (natural language, no JSON schema)
+    chat_messages = _build_chat_messages(payload.content, existing)
 
     # Capture primitive IDs needed inside the generator
     conv_id = conversation.id
@@ -190,7 +190,7 @@ async def send_message_stream(
 
         accumulated = ""
         try:
-            async for token in stream_qwen_tokens(llm_messages):
+            async for token in stream_qwen_tokens(chat_messages):
                 accumulated += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
         except Exception as exc:
