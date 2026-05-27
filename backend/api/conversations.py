@@ -245,7 +245,14 @@ async def send_message_stream(
             logging.getLogger(__name__).exception("SSE post-stream parse error")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.patch("/{conversation_id}/draft", response_model=ConversationResponse)

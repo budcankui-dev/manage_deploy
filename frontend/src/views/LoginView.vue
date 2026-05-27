@@ -1,5 +1,13 @@
 <template>
   <div class="auth-page">
+    <div class="auth-branding">
+      <div class="brand-logo">智</div>
+      <h1 class="brand-title">智联计算系统</h1>
+      <p class="brand-subtitle">意图解析模块 · Intelligent Computing Intent Parser</p>
+      <p class="brand-desc">基于通义千问大模型，智能解析计算任务意图，自动完成任务路由与部署</p>
+      <div class="model-badge">Powered by Qwen (通义千问) via DashScope</div>
+    </div>
+
     <el-card class="auth-card">
       <template #header>
         <div>
@@ -63,8 +71,59 @@ async function handleBootstrap() {
 
 <style scoped>
 .auth-page {
-  max-width: 520px;
-  margin: 80px auto;
+  max-width: 480px;
+  margin: 60px auto;
+  padding: 0 16px;
+}
+
+.auth-branding {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.brand-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.brand-title {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+}
+
+.brand-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.brand-desc {
+  font-size: 13px;
+  color: var(--text-muted, #94a3b8);
+  margin: 0 0 14px;
+  line-height: 1.6;
+}
+
+.model-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #6366f1;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .auth-card h2 {

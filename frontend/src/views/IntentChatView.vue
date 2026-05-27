@@ -1,66 +1,72 @@
 <template>
   <div class="intent-workspace">
     <aside class="conversation-sidebar">
-      <div class="brand">
-        <strong>任务对话</strong>
-        <span>{{ auth.username || 'user' }}</span>
-      </div>
-      <el-button type="primary" @click="startNewConversation">新建对话</el-button>
-      <div class="history-title">历史对话</div>
-      <div class="conversation-list">
-        <div
-          v-for="item in conversations"
-          :key="item.id"
-          class="conversation-item"
-          :class="{ active: item.id === conversation?.id }"
-          @click="loadConversation(item.id)"
-        >
-          <div class="conversation-item-body">
-            <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
-            <small>{{ formatStatus(item.status) }}</small>
-          </div>
-          <el-button
-            class="delete-btn"
-            link
-            type="danger"
-            :icon="DeleteIcon"
-            size="small"
-            @click.stop="deleteConversation(item)"
-            title="删除对话"
-          />
+      <div class="sidebar-top">
+        <div class="brand">
+          <strong class="brand-title">智联计算系统</strong>
+          <span class="brand-subtitle">意图解析模块</span>
         </div>
-      </div>
-
-      <!-- 我的工单 -->
-      <div class="orders-section">
-        <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
-          <span>我的工单</span>
-          <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
-        </div>
-        <div v-show="ordersExpanded" class="orders-list">
-          <div v-if="ordersLoading" class="orders-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>加载中...</span>
-          </div>
-          <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
+        <el-button type="primary" @click="startNewConversation">新建对话</el-button>
+        <div class="history-title">历史对话</div>
+        <div class="conversation-list">
           <div
-            v-else
-            v-for="order in myOrders"
-            :key="order.id"
-            class="order-item"
+            v-for="item in conversations"
+            :key="item.id"
+            class="conversation-item"
+            :class="{ active: item.id === conversation?.id }"
+            @click="loadConversation(item.id)"
           >
-            <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
-            <div class="order-meta">
-              <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
-              <span class="order-time">{{ formatTime(order.created_at) }}</span>
+            <div class="conversation-item-body">
+              <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
+              <small>{{ formatStatus(item.status) }}</small>
+            </div>
+            <el-button
+              class="delete-btn"
+              link
+              type="danger"
+              :icon="DeleteIcon"
+              size="small"
+              @click.stop="deleteConversation(item)"
+              title="删除对话"
+            />
+          </div>
+        </div>
+
+        <!-- 我的工单 -->
+        <div class="orders-section">
+          <div class="orders-header" @click="ordersExpanded = !ordersExpanded">
+            <span>我的工单</span>
+            <el-icon class="orders-arrow" :class="{ expanded: ordersExpanded }"><ArrowRight /></el-icon>
+          </div>
+          <div v-show="ordersExpanded" class="orders-list">
+            <div v-if="ordersLoading" class="orders-loading">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>加载中...</span>
+            </div>
+            <el-empty v-else-if="!myOrders.length" description="暂无工单" :image-size="40" />
+            <div
+              v-else
+              v-for="order in myOrders"
+              :key="order.id"
+              class="order-item"
+            >
+              <div class="order-name">{{ order.name || order.id.slice(0, 12) }}</div>
+              <div class="order-meta">
+                <el-tag :type="orderStatusType(order.status)" size="small">{{ formatOrderStatus(order.status) }}</el-tag>
+                <span class="order-time">{{ formatTime(order.created_at) }}</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="account-tools">
+      <div class="sidebar-bottom">
         <el-tag v-if="auth.isBypass" size="small" type="warning">开发绕过登录</el-tag>
-        <el-button text @click="logout">退出登录</el-button>
+        <div class="user-info">
+          <div class="user-avatar-sm">{{ (auth.username || 'U')[0].toUpperCase() }}</div>
+          <span class="username-label">{{ auth.username || 'user' }}</span>
+        </div>
+        <el-button text @click="logout" class="logout-btn">退出登录</el-button>
       </div>
     </aside>
 
@@ -76,13 +82,29 @@
       <section class="messages" ref="messagesRef">
         <el-empty v-if="!conversation?.messages?.length" description="描述你的业务任务，系统会实时解析意图" />
         <div
-          v-for="message in conversation?.messages || []"
-          :key="message.id"
-          class="message"
+          v-for="(message, idx) in conversation?.messages || []"
+          :key="message.id || idx"
+          class="message-row"
           :class="message.role"
         >
-          <strong>{{ message.role === 'user' ? '我' : '助手' }}</strong>
-          <p>{{ message.content }}<span v-if="message.streaming" class="streaming-cursor" /></p>
+          <!-- Assistant message (left) -->
+          <template v-if="message.role === 'assistant'">
+            <div class="avatar assistant-avatar">智</div>
+            <div class="bubble-wrap">
+              <div class="bubble-name">智算助手</div>
+              <div class="bubble assistant-bubble">
+                <span class="bubble-text">{{ message.content }}</span><span v-if="message.streaming" class="streaming-cursor">▋</span>
+              </div>
+            </div>
+          </template>
+          <!-- User message (right) -->
+          <template v-else>
+            <div class="bubble-wrap user-bubble-wrap">
+              <div class="bubble-name user-name">{{ auth.username || '我' }}</div>
+              <div class="bubble user-bubble">{{ message.content }}</div>
+            </div>
+            <div class="avatar user-avatar">{{ (auth.username || 'U')[0].toUpperCase() }}</div>
+          </template>
         </div>
       </section>
 
@@ -91,12 +113,19 @@
           v-model="utterance"
           type="textarea"
           :rows="4"
+          :disabled="isStreaming"
           placeholder="例如：跑 64×64 矩阵乘法批处理，计算耗时不超过 60 秒"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
           <span>Ctrl + Enter 发送</span>
-          <el-button type="primary" :loading="loading" @click="sendMessage">发送</el-button>
+          <div class="composer-btns">
+            <el-button v-if="isStreaming" type="danger" @click="stopStreaming">
+              <el-icon><VideoPause /></el-icon>
+              停止
+            </el-button>
+            <el-button v-else type="primary" :loading="loading" :disabled="isStreaming" @click="sendMessage">发送</el-button>
+          </div>
         </div>
       </footer>
     </main>
@@ -185,7 +214,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, ArrowRight, Loading } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, ArrowRight, Loading, VideoPause } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
@@ -196,6 +225,7 @@ const conversations = ref([])
 const conversation = ref(null)
 const utterance = ref('')
 const loading = ref(false)
+const isStreaming = ref(false)
 const messagesRef = ref(null)
 const editableTarget = ref(null)
 const uploadedFiles = ref([])
@@ -203,6 +233,7 @@ const ordersExpanded = ref(false)
 const myOrders = ref([])
 const ordersLoading = ref(false)
 let routingTimer = null
+let abortController = null
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
@@ -340,7 +371,7 @@ watch(ordersExpanded, (val) => {
 })
 
 async function sendMessage() {
-  if (!utterance.value.trim() || loading.value) return
+  if (!utterance.value.trim() || loading.value || isStreaming.value) return
   loading.value = true
   const text = utterance.value.trim()
   utterance.value = ''
@@ -350,17 +381,20 @@ async function sendMessage() {
       await startNewConversation()
     }
 
-    // Add user message immediately
-    conversation.value.messages = conversation.value.messages || []
-    conversation.value.messages.push({ role: 'user', content: text, id: Date.now() })
-
-    // Add empty assistant placeholder
-    const placeholder = { role: 'assistant', content: '', id: Date.now() + 1, streaming: true }
-    conversation.value.messages.push(placeholder)
+    // Ensure messages array exists and is reactive
+    if (!conversation.value.messages) conversation.value.messages = []
+    conversation.value.messages = [
+      ...conversation.value.messages,
+      { role: 'user', content: text, id: '_user_' + Date.now() },
+      { role: 'assistant', content: '', id: '_stream', streaming: true },
+    ]
     await nextTick()
     await scrollToBottom()
 
     const token = localStorage.getItem('access_token')
+    abortController = new AbortController()
+    isStreaming.value = true
+
     const response = await fetch(`/api/conversations/${conversation.value.id}/messages/stream`, {
       method: 'POST',
       headers: {
@@ -368,6 +402,7 @@ async function sendMessage() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ content: text }),
+      signal: abortController.signal,
     })
 
     if (!response.ok) {
@@ -383,24 +418,37 @@ async function sendMessage() {
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
-      buffer = lines.pop() // keep incomplete line
+      buffer = lines.pop()
 
       for (const line of lines) {
         if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
+        const raw = line.slice(5).trim()
         try {
-          const event = JSON.parse(data)
+          const event = JSON.parse(raw)
           if (event.type === 'token') {
-            placeholder.content += event.content
+            const msgs = conversation.value.messages
+            const idx = msgs.findIndex(m => m.id === '_stream')
+            if (idx !== -1) {
+              conversation.value.messages = [
+                ...msgs.slice(0, idx),
+                { ...msgs[idx], content: msgs[idx].content + event.content },
+                ...msgs.slice(idx + 1),
+              ]
+            }
             await scrollToBottom()
           } else if (event.type === 'done') {
-            placeholder.streaming = false
-            // Reload full conversation to get updated draft and persisted messages
             await loadConversation(conversation.value.id)
             await refreshList()
           } else if (event.type === 'error') {
-            placeholder.content = placeholder.content || '解析失败，请重试'
-            placeholder.streaming = false
+            const msgs = conversation.value.messages
+            const idx = msgs.findIndex(m => m.id === '_stream')
+            if (idx !== -1) {
+              conversation.value.messages = [
+                ...msgs.slice(0, idx),
+                { ...msgs[idx], content: msgs[idx].content || '解析失败，请重试', streaming: false },
+                ...msgs.slice(idx + 1),
+              ]
+            }
           }
         } catch {
           // ignore malformed SSE lines
@@ -408,17 +456,41 @@ async function sendMessage() {
       }
     }
   } catch (err) {
-    // Fallback: mark placeholder as failed if it exists
-    if (conversation.value?.messages) {
-      const last = conversation.value.messages[conversation.value.messages.length - 1]
-      if (last?.streaming) {
-        last.content = last.content || '解析失败，请重试'
-        last.streaming = false
+    if (err.name === 'AbortError') {
+      // User stopped — mark placeholder as done (keep accumulated content)
+      if (conversation.value?.messages) {
+        const msgs = conversation.value.messages
+        const idx = msgs.findIndex(m => m.id === '_stream')
+        if (idx !== -1) {
+          conversation.value.messages = [
+            ...msgs.slice(0, idx),
+            { ...msgs[idx], streaming: false },
+            ...msgs.slice(idx + 1),
+          ]
+        }
+      }
+    } else {
+      if (conversation.value?.messages) {
+        const msgs = conversation.value.messages
+        const idx = msgs.findIndex(m => m.id === '_stream')
+        if (idx !== -1) {
+          conversation.value.messages = [
+            ...msgs.slice(0, idx),
+            { ...msgs[idx], content: msgs[idx].content || '解析失败，请重试', streaming: false },
+            ...msgs.slice(idx + 1),
+          ]
+        }
       }
     }
   } finally {
     loading.value = false
+    isStreaming.value = false
+    abortController = null
   }
+}
+
+function stopStreaming() {
+  abortController?.abort()
 }
 
 async function confirmIntent() {
@@ -498,33 +570,88 @@ onBeforeUnmount(stopRoutingPolling)
   color: var(--text-primary);
 }
 
-.conversation-sidebar,
-.intent-panel {
+/* ── Sidebar ── */
+.conversation-sidebar {
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-subtle);
-  padding: 20px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.intent-panel {
-  border-right: 0;
-  border-left: 1px solid var(--border-subtle);
+.sidebar-top {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.username-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logout-btn {
+  width: 100%;
+  justify-content: flex-start;
+  color: var(--text-secondary) !important;
+  font-size: 13px;
 }
 
 .brand {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   margin-bottom: 18px;
 }
 
-.brand span,
-.history-title {
+.brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.brand-subtitle {
+  font-size: 11px;
   color: var(--text-secondary);
-  font-size: 12px;
+  letter-spacing: 0.03em;
 }
 
 .history-title {
+  color: var(--text-secondary);
+  font-size: 12px;
   margin: 18px 0 10px;
 }
 
@@ -546,52 +673,31 @@ onBeforeUnmount(stopRoutingPolling)
   cursor: pointer;
 }
 
-.conversation-item:hover {
-  border-color: var(--el-color-primary-light-5);
-}
+.conversation-item:hover { border-color: var(--el-color-primary-light-5); }
+.conversation-item.active { border-color: var(--accent-primary); }
 
-.conversation-item.active {
-  border-color: var(--accent-primary);
-}
-
-.conversation-item-body {
-  flex: 1;
-  min-width: 0;
-}
-
+.conversation-item-body { flex: 1; min-width: 0; }
 .conversation-item-body span,
-.conversation-item-body small {
-  display: block;
-}
-
+.conversation-item-body small { display: block; }
 .conversation-item-body span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .conversation-item-body small {
   margin-top: 4px;
   color: var(--text-muted);
 }
 
-.delete-btn {
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
+.delete-btn { flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
+.conversation-item:hover .delete-btn { opacity: 1; }
 
-.conversation-item:hover .delete-btn {
-  opacity: 1;
-}
-
-/* orders section */
+/* orders */
 .orders-section {
   margin-top: 20px;
   border-top: 1px solid var(--border-subtle);
   padding-top: 12px;
 }
-
 .orders-header {
   display: flex;
   align-items: center;
@@ -602,26 +708,10 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 4px 0;
   user-select: none;
 }
-
-.orders-header:hover {
-  color: var(--text-primary);
-}
-
-.orders-arrow {
-  transition: transform 0.2s;
-}
-
-.orders-arrow.expanded {
-  transform: rotate(90deg);
-}
-
-.orders-list {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
+.orders-header:hover { color: var(--text-primary); }
+.orders-arrow { transition: transform 0.2s; }
+.orders-arrow.expanded { transform: rotate(90deg); }
+.orders-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .orders-loading {
   display: flex;
   align-items: center;
@@ -630,14 +720,12 @@ onBeforeUnmount(stopRoutingPolling)
   color: var(--text-secondary);
   padding: 8px 0;
 }
-
 .order-item {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 8px 10px;
   background: var(--bg-tertiary);
 }
-
 .order-name {
   font-size: 12px;
   overflow: hidden;
@@ -645,28 +733,10 @@ onBeforeUnmount(stopRoutingPolling)
   white-space: nowrap;
   margin-bottom: 4px;
 }
+.order-meta { display: flex; align-items: center; gap: 6px; }
+.order-time { font-size: 11px; color: var(--text-muted); }
 
-.order-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.order-time {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.account-tools {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-
+/* ── Chat column ── */
 .chat-column {
   display: flex;
   flex-direction: column;
@@ -681,51 +751,99 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 22px 28px;
   border-bottom: 1px solid var(--border-subtle);
 }
-
-.chat-header h1 {
-  font-size: 22px;
-  margin-bottom: 6px;
-}
-
-.chat-header p {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
+.chat-header h1 { font-size: 22px; margin-bottom: 6px; }
+.chat-header p { color: var(--text-secondary); font-size: 13px; }
 
 .messages {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   padding: 24px 28px;
 }
 
-.message {
-  max-width: 80%;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--bg-secondary);
+/* ── Message bubbles ── */
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 
-.message.user {
-  align-self: flex-end;
-  background: rgba(99, 102, 241, 0.2);
+.message-row.user {
+  flex-direction: row-reverse;
 }
 
-.message p {
-  margin: 6px 0 0;
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.assistant-avatar {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+}
+
+.user-avatar {
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  color: #fff;
+}
+
+.bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 75%;
+}
+
+.user-bubble-wrap {
+  align-items: flex-end;
+}
+
+.bubble-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
+.user-name {
+  text-align: right;
+}
+
+.bubble {
+  padding: 10px 14px;
+  border-radius: 14px;
+  line-height: 1.6;
   white-space: pre-wrap;
+  word-break: break-word;
 }
+
+.assistant-bubble {
+  background: #f0f4ff;
+  color: #1e293b;
+  border-top-left-radius: 4px;
+}
+
+.user-bubble {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  border-top-right-radius: 4px;
+}
+
+.bubble-text { display: inline; }
 
 .streaming-cursor {
   display: inline-block;
-  width: 2px;
-  height: 1em;
-  background: currentColor;
   margin-left: 2px;
-  vertical-align: text-bottom;
   animation: blink 0.8s step-end infinite;
+  color: #6366f1;
 }
 
 @keyframes blink {
@@ -733,6 +851,7 @@ onBeforeUnmount(stopRoutingPolling)
   50% { opacity: 0; }
 }
 
+/* ── Composer ── */
 .composer {
   padding: 18px 28px;
   border-top: 1px solid var(--border-subtle);
@@ -748,13 +867,21 @@ onBeforeUnmount(stopRoutingPolling)
   font-size: 12px;
 }
 
-.panel-card {
-  margin-bottom: 16px;
+.composer-btns {
+  display: flex;
+  gap: 8px;
 }
 
-.panel-card.valid-border {
-  border-color: var(--el-color-success);
+/* ── Right panel ── */
+.intent-panel {
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-subtle);
+  padding: 20px;
+  overflow-y: auto;
 }
+
+.panel-card { margin-bottom: 16px; }
+.panel-card.valid-border { border-color: var(--el-color-success); }
 
 .actions {
   margin-top: 12px;
@@ -770,9 +897,7 @@ onBeforeUnmount(stopRoutingPolling)
   gap: 8px;
 }
 
-.objective-editor {
-  padding: 4px 0;
-}
+.objective-editor { padding: 4px 0; }
 
 .file-hint {
   font-size: 12px;
@@ -786,9 +911,7 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 8px 0;
 }
 
-.routing-summary {
-  margin-bottom: 12px;
-}
+.routing-summary { margin-bottom: 12px; }
 
 .routing-waiting {
   display: flex;
@@ -803,9 +926,6 @@ onBeforeUnmount(stopRoutingPolling)
   .intent-workspace {
     grid-template-columns: 220px 1fr;
   }
-  .intent-panel {
-    display: none;
-  }
+  .intent-panel { display: none; }
 }
 </style>
-
