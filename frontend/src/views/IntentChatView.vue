@@ -14,7 +14,7 @@
       </div>
     </header>
 
-    <div class="intent-workspace">
+    <div class="intent-workspace" :style="showOrders ? 'grid-template-columns: 260px 1fr 0px' : ''">
     <aside class="conversation-sidebar">
       <div class="sidebar-top">
         <div class="sidebar-nav">
@@ -24,12 +24,12 @@
           </div>
         </div>
 
-        <el-button type="primary" class="new-conv-btn" @click="startNewConversation">
-          <el-icon><Plus /></el-icon>
-          新建对话
-        </el-button>
-
-        <div class="history-title">历史对话</div>
+        <div class="conv-list-header">
+          <span>对话列表</span>
+          <el-button size="small" circle @click="startNewConversation">
+            <el-icon><Plus /></el-icon>
+          </el-button>
+        </div>
         <div class="sidebar-conversations">
           <div
             v-for="item in conversations"
@@ -261,7 +261,7 @@
       </div>
     </el-drawer>
 
-    <aside class="intent-panel" v-show="!showOrders">
+    <aside class="intent-panel" v-show="!showOrders" :style="showOrders ? 'overflow: hidden; padding: 0;' : ''">
       <el-card class="panel-card" :class="{ 'valid-border': draft?.parse_status === 'valid' }">
         <template #header>
           意图参数
@@ -499,7 +499,8 @@ async function startNewConversation() {
   const { data } = await conversationApi.create({})
   conversation.value = data
   utterance.value = ''
-  await refreshList()
+  // Prepend to list immediately so it appears highlighted at the top
+  conversations.value = [data, ...conversations.value.filter(c => c.id !== data.id)]
   updateRoutingPolling()
 }
 
@@ -513,17 +514,28 @@ async function deleteConversation(item) {
   } catch {
     return
   }
-  await conversationApi.delete(item.id)
+
+  // Optimistic: remove from list immediately
+  conversations.value = conversations.value.filter(c => c.id !== item.id)
   const wasActive = item.id === conversation.value?.id
-  await refreshList()
-  if (wasActive) {
-    if (conversations.value.length) {
-      await loadConversation(conversations.value[0].id)
-    } else {
-      await startNewConversation()
+
+  try {
+    await conversationApi.delete(item.id)
+    ElMessage.success('对话已删除')
+
+    // If deleted the active conversation, switch to next or create new
+    if (wasActive) {
+      if (conversations.value.length) {
+        await loadConversation(conversations.value[0].id)
+      } else {
+        await startNewConversation()
+      }
     }
+  } catch (err) {
+    // Rollback: re-fetch list on error
+    await refreshList()
+    ElMessage.error('删除失败')
   }
-  ElMessage.success('对话已删除')
 }
 
 async function loadOrders() {
@@ -933,6 +945,16 @@ onBeforeUnmount(stopRoutingPolling)
   color: white;
 }
 
+.conv-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0 4px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.5);
+  margin: 18px 0 6px;
+}
+
 .history-title {
   color: var(--text-secondary);
   font-size: 12px;
@@ -958,7 +980,11 @@ onBeforeUnmount(stopRoutingPolling)
 }
 
 .conversation-item:hover { border-color: var(--el-color-primary-light-5); }
-.conversation-item.active { border-color: var(--accent-primary); }
+.conversation-item.active {
+  border-color: var(--accent-primary);
+  background: rgba(255,255,255,0.15);
+  border-left: 3px solid var(--el-color-primary);
+}
 
 .conversation-item-body { flex: 1; min-width: 0; }
 .conversation-item-body span,
@@ -1035,6 +1061,8 @@ onBeforeUnmount(stopRoutingPolling)
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  height: 100%;
+  background: var(--el-bg-color, white);
 }
 
 .orders-panel-toolbar {
