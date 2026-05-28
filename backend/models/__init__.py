@@ -244,6 +244,7 @@ class TaskOrder(Base):
     runtime_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[OrderStatus] = mapped_column(String(50), default=OrderStatus.PENDING)
     routing_status: Mapped[str] = mapped_column(String(50), default=RoutingStatus.NOT_REQUIRED)
+    routing_input_dag: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     materialized_instance_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -81,6 +81,7 @@ async def init_db() -> None:
         await _ensure_column(conn, "task_orders", "business_start_time", "DATETIME")
         await _ensure_column(conn, "task_orders", "business_end_time", "DATETIME")
         await _ensure_column(conn, "task_orders", "routing_status", "VARCHAR(50) DEFAULT 'not_required'")
+        await _ensure_column(conn, "task_orders", "routing_input_dag", "JSON")
         await _ensure_column(conn, "task_orders", "deleted_at", "DATETIME")
         # Phase 1: IntentDraft 扩展
         await _ensure_column(conn, "intent_drafts", "source_name", "VARCHAR(255)")

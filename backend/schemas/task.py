@@ -335,6 +335,12 @@ class TaskOrderResponse(BaseModel):
     keep_after_stop: bool = False
     runtime_config: Optional[dict] = None
     status: OrderStatus
+    routing_status: Optional[str] = None
+    source_name: Optional[str] = None
+    destination_name: Optional[str] = None
+    business_start_time: Optional[datetime] = None
+    business_end_time: Optional[datetime] = None
+    routing_input_dag: Optional[dict] = None
     materialized_instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None
     error_message: Optional[str] = None

@@ -106,21 +106,26 @@
           <el-table-column label="工单名称" min-width="160">
             <template #default="{ row }">{{ row.name || row.id.slice(0, 20) }}</template>
           </el-table-column>
-          <el-table-column label="任务类型" min-width="160">
-            <template #default="{ row }">{{ taskTypeLabel(row.task_type) }}</template>
-          </el-table-column>
-          <el-table-column label="路径" min-width="160">
+          <el-table-column label="路径" min-width="180">
             <template #default="{ row }">
               {{ row.source_name && row.destination_name ? `${row.source_name} → ${row.destination_name}` : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column label="时间" min-width="200">
+            <template #default="{ row }">
+              {{ row.business_start_time ? formatTime(row.business_start_time) : '-' }}
+              ~ {{ row.business_end_time ? formatTime(row.business_end_time) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="路由状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="routingStatusType(row.routing_status)" size="small">{{ formatRoutingStatus(row.routing_status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="工单状态" width="110">
             <template #default="{ row }">
               <el-tag :type="orderStatusType(row.status)" size="small">{{ formatOrderStatus(row.status) }}</el-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="创建时间" min-width="150">
-            <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
             <template #default="{ row }">
@@ -235,38 +240,34 @@
       <div v-else-if="selectedOrderDetail" class="orders-detail-content">
         <el-descriptions title="基本信息" :column="1" border size="small" class="detail-desc-block">
           <el-descriptions-item label="ID">{{ selectedOrderDetail.id?.slice(0, 8) || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
+          <el-descriptions-item label="工单状态">
             <el-tag :type="orderStatusType(selectedOrderDetail.status)" size="small">{{ formatOrderStatus(selectedOrderDetail.status) }}</el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="路由状态">
+            <el-tag :type="routingStatusType(selectedOrderDetail.routing_status)" size="small">{{ formatRoutingStatus(selectedOrderDetail.routing_status) }}</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatTime(selectedOrderDetail.created_at) }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">{{ formatTime(selectedOrderDetail.updated_at) }}</el-descriptions-item>
         </el-descriptions>
         <el-descriptions title="任务参数" :column="1" border size="small" class="detail-desc-block">
-          <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail.task_type) }}</el-descriptions-item>
-          <el-descriptions-item label="源节点→目标节点">
-            {{ selectedOrderDetail.source_name || '-' }} → {{ selectedOrderDetail.destination_name || '-' }}
-          </el-descriptions-item>
+          <el-descriptions-item label="任务名称">{{ selectedOrderDetail.name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="源节点">{{ selectedOrderDetail.source_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="目的节点">{{ selectedOrderDetail.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(selectedOrderDetail.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(selectedOrderDetail.business_end_time) }}</el-descriptions-item>
-          <el-descriptions-item v-if="selectedOrderDetail.business_objective?.metric_key" label="业务目标">
-            {{ selectedOrderDetail.business_objective.metric_key }}
-            {{ selectedOrderDetail.business_objective.operator || '<=' }}
-            {{ selectedOrderDetail.business_objective.target_value }}
-            {{ selectedOrderDetail.business_objective.unit || 'ms' }}
-          </el-descriptions-item>
         </el-descriptions>
-        <el-descriptions v-if="selectedOrderDetail.routing_request" title="路由结果" :column="1" border size="small" class="detail-desc-block">
-          <el-descriptions-item label="策略">{{ selectedOrderDetail.routing_request.selected_strategy || '-' }}</el-descriptions-item>
-          <el-descriptions-item v-if="selectedOrderDetail.routing_request.placements" label="节点分配">
-            {{ selectedOrderDetail.routing_request.placements.source }} →
-            {{ selectedOrderDetail.routing_request.placements.compute }} →
-            {{ selectedOrderDetail.routing_request.placements.sink }}
+        <el-descriptions v-if="selectedOrderDetail.routing_input_dag" title="路由 DAG" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item label="策略">{{ selectedOrderDetail.routing_input_dag?.policy_type || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="计算节点 GPU">{{ selectedOrderDetail.routing_input_dag?.nodes?.[1]?.resources?.gpu_units || 0 }} 卡</el-descriptions-item>
+          <el-descriptions-item label="计算节点内存">{{ selectedOrderDetail.routing_input_dag?.nodes?.[1]?.resources?.gpu_mem_mb || 0 }} MB</el-descriptions-item>
+        </el-descriptions>
+        <el-descriptions v-if="selectedOrderDetail.runtime_config?.routing_result" title="路由结果" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item v-for="p in selectedOrderDetail.runtime_config.routing_result.placements" :key="p.node_id" :label="p.node_id">
+            {{ p.worker_host }}{{ p.gpu_device ? ` (GPU: ${p.gpu_device})` : '' }}
           </el-descriptions-item>
         </el-descriptions>
         <el-descriptions v-if="orderInstances.length" title="部署实例" :column="1" border size="small" class="detail-desc-block">
           <el-descriptions-item v-for="inst in orderInstances" :key="inst.id" :label="inst.id?.slice(0, 8) || '-'">
             <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ inst.status }}</el-tag>
-            <span v-if="inst.started_at" style="margin-left: 8px; font-size: 12px; color: var(--text-muted)">{{ formatTime(inst.started_at) }}</span>
           </el-descriptions-item>
         </el-descriptions>
       </div>

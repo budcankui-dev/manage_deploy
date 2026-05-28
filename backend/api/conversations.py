@@ -29,6 +29,7 @@ from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
 from services.llm_intent_parser import _build_messages, _build_chat_messages, stream_qwen_tokens, parse_intent_llm
 from services.routing_payload_builder import build_routing_payload
+from services.dag_builder import build_matmul_dag
 
 from .business_tasks import create_business_task
 
@@ -373,6 +374,21 @@ async def confirm_intent(
     )
     db.add(order)
     await db.flush()
+
+    # 生成路由 DAG 并写入工单
+    dp = draft.data_profile or {}
+    rp = draft.runtime_plan or {}
+    dag = build_matmul_dag(
+        order_id=order.id,
+        source_name=draft.source_name,
+        destination_name=draft.destination_name,
+        business_start_time=draft.business_start_time,
+        business_end_time=draft.business_end_time,
+        matrix_size=dp.get("matrix_size"),
+        batch_count=dp.get("batch_count"),
+        routing_strategy=rp.get("routing_strategy"),
+    )
+    order.routing_input_dag = dag
 
     # 生成外部路由 DAG payload
     input_payload = build_routing_payload(

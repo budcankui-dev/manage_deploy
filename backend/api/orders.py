@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 
 from api.auth import get_current_user
 from database import get_db
@@ -241,3 +243,35 @@ async def materialize_pending_orders(db: AsyncSession = Depends(get_db)):
             failed[order.id] = str(exc)
         await db.commit()
     return {"succeeded": success, "failed": failed}
+
+
+class RoutingPlacement(BaseModel):
+    node_id: str
+    worker_host: str
+    gpu_device: Optional[str] = None
+
+
+class RoutingResultPayload(BaseModel):
+    placements: list[RoutingPlacement]
+
+
+@router.post("/{order_id}/routing-result")
+async def receive_routing_result(
+    order_id: str,
+    payload: RoutingResultPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    """接收外部路由系统的计算结果（节点放置 + GPU 分配）。"""
+    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order.routing_status = "completed"
+    rc = order.runtime_config or {}
+    rc["routing_result"] = {
+        "placements": [p.model_dump() for p in payload.placements]
+    }
+    order.runtime_config = rc
+    await db.commit()
+    return {"status": "ok", "order_id": order_id, "routing_status": "completed"}
