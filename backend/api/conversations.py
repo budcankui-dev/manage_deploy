@@ -359,6 +359,7 @@ async def confirm_intent(
 
     # 创建 TaskOrder（直接关联 user_id）
     order = TaskOrder(
+        id=conversation.id,
         user_id=current_user.id,
         conversation_id=conversation.id,
         intent_draft_id=draft.id,

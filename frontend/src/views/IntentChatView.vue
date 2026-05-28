@@ -39,7 +39,7 @@
             @click="selectConversation(item.id)"
           >
             <div class="conversation-item-body">
-              <span>{{ item.materialized_order_id ? `#${item.materialized_order_id.slice(0, 8)}` : (item.status === 'awaiting_routing' || item.status === 'submitted' ? '已提交' : '草稿 · 矩阵乘法') }}</span>
+              <span>#{{ item.id.slice(0, 8) }}</span>
               <small>{{ formatStatus(item.status) }}</small>
             </div>
             <el-button
@@ -69,7 +69,7 @@
       <header v-if="!showOrders" class="chat-header">
         <div>
           <h1>矩阵乘法计算任务</h1>
-          <p v-if="conversation?.materialized_order_id">工单 <code>#{{ conversation.materialized_order_id.slice(0, 8) }}</code></p>
+          <p v-if="conversation?.materialized_order_id">工单 <code>#{{ conversation.id.slice(0, 8) }}</code></p>
           <p v-else><el-tag type="info" size="small">草稿中</el-tag></p>
         </div>
         <div class="chat-header-right">
@@ -178,7 +178,7 @@
           </template>
         </div>
 
-        <div v-if="draft?.parse_status === 'valid' && conversation?.status !== 'submitted' && !isStreaming" class="confirm-card">
+        <div v-if="draft?.parse_status === 'valid' && !conversation?.materialized_order_id && !isStreaming" class="confirm-card">
           <div class="confirm-card-inner">
             <el-icon class="confirm-icon"><CircleCheck /></el-icon>
             <div class="confirm-text">
@@ -404,7 +404,7 @@ const exampleChips = [
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
-const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting')
+const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id)
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 
 const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
