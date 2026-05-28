@@ -333,6 +333,8 @@ async def confirm_intent(
 ):
     """确认意图后创建 TaskOrder + RoutingRequest（方案 B：先创建工单再路由）。"""
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+    if conversation.materialized_order_id or conversation.status == ConversationStatus.AWAITING_ROUTING:
+        raise HTTPException(status_code=409, detail="工单已创建，请勿重复提交")
     draft = await _get_latest_draft(db, conversation.id)
     if not draft:
         raise HTTPException(status_code=404, detail="Intent draft not found")

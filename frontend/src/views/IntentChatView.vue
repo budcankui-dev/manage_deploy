@@ -187,7 +187,7 @@
               <strong>参数已完整</strong>
               <p>所有必填参数已收集完毕，确认后将创建工单</p>
             </div>
-            <el-button type="success" @click="confirmIntent">确认提交工单</el-button>
+            <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交工单</el-button>
           </div>
         </div>
       </section>
@@ -336,7 +336,7 @@
           <span>等待路由计算...</span>
         </div>
         <div class="actions">
-          <el-button v-if="canConfirm" type="primary" @click="confirmIntent">确认参数并创建工单</el-button>
+          <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认参数并创建工单</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-button v-if="conversation?.status === 'submitted'" type="info" text>已提交</el-button>
         </div>
@@ -369,6 +369,7 @@ const localMessages = ref([])  // temporary messages during streaming only
 const utterance = ref('')
 const loading = ref(false)
 const isStreaming = ref(false)
+const isConfirming = ref(false)
 const messagesRef = ref(null)
 const editableTarget = ref(null)
 const uploadedFiles = ref([])
@@ -765,6 +766,8 @@ function stopStreaming() {
 }
 
 async function confirmIntent() {
+  if (isConfirming.value) return
+  isConfirming.value = true
   try {
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
@@ -779,6 +782,8 @@ async function confirmIntent() {
     } else {
       ElMessage.error(typeof detail === 'string' ? detail : '确认失败')
     }
+  } finally {
+    isConfirming.value = false
   }
 }
 
