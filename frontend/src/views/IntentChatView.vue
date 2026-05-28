@@ -83,12 +83,11 @@
           <div class="orders-toolbar-right">
             <el-select v-model="orderStatusFilter" placeholder="全部" clearable size="small" style="width: 130px">
               <el-option label="全部" value="" />
-              <el-option label="pending" value="pending" />
-              <el-option label="routing" value="routing" />
-              <el-option label="submitted" value="submitted" />
-              <el-option label="running" value="running" />
-              <el-option label="completed" value="completed" />
-              <el-option label="failed" value="failed" />
+              <el-option label="待路由" value="pending" />
+              <el-option label="已部署" value="materialized" />
+              <el-option label="已完成" value="completed" />
+              <el-option label="失败" value="failed" />
+              <el-option label="已取消" value="cancelled" />
             </el-select>
             <el-button size="small" @click="loadOrders">
               <el-icon><Refresh /></el-icon>
@@ -267,7 +266,7 @@
         </el-descriptions>
         <el-descriptions v-if="orderInstances.length" title="部署实例" :column="1" border size="small" class="detail-desc-block">
           <el-descriptions-item v-for="inst in orderInstances" :key="inst.id" :label="inst.id?.slice(0, 8) || '-'">
-            <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ inst.status }}</el-tag>
+            <el-tag :type="inst.status === 'running' ? 'success' : inst.status === 'failed' ? 'danger' : 'info'" size="small">{{ formatTaskStatus(inst.status) }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
       </div>
@@ -277,7 +276,7 @@
       <el-card class="panel-card" :class="{ 'valid-border': draft?.parse_status === 'valid' }">
         <template #header>
           意图参数
-          <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ draft.parse_status }}</el-tag>
+          <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ formatParseStatus(draft.parse_status) }}</el-tag>
         </template>
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
@@ -435,7 +434,7 @@ function routingStatusType(status) {
 }
 
 function formatRoutingStatus(status) {
-  return { pending: '等待计算', computing: '计算中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] || status
+  return ROUTING_STATUS_LABEL[status] || status || '-'
 }
 
 function formatRoutingStrategy(strategy) {
@@ -450,19 +449,60 @@ function formatRoutingStrategy(strategy) {
 
 function orderStatusType(status) {
   return {
-    pending: 'info',
-    routing: 'warning',
-    ready_to_submit: 'warning',
-    submitted: 'success',
-    running: 'success',
+    pending: 'warning',
+    awaiting_routing: 'warning',
+    materialized: 'primary',
     completed: 'success',
     failed: 'danger',
-    cancelled: 'info'
+    cancelled: 'info',
+    orphaned: 'info',
   }[status] || 'info'
 }
 
+const ORDER_STATUS_LABEL = {
+  pending: '待路由',
+  awaiting_routing: '路由中',
+  materialized: '已部署',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  orphaned: '孤立',
+}
+
+const ROUTING_STATUS_LABEL = {
+  pending: '待路由',
+  computing: '路由计算中',
+  completed: '路由完成',
+  failed: '路由失败',
+}
+
+const TASK_STATUS_LABEL = {
+  pending: '待启动',
+  scheduled: '已调度',
+  starting: '启动中',
+  running: '运行中',
+  stopping: '停止中',
+  stopped: '已停止',
+  failed: '失败',
+  expired: '已过期',
+}
+
+const PARSE_STATUS_LABEL = {
+  incomplete: '参数不全',
+  valid: '参数完整',
+  rejected: '已拒绝',
+}
+
 function formatOrderStatus(status) {
-  return { pending: '待处理', materialized: '已物化', running: '运行中', failed: '失败', cancelled: '已取消', completed: '已完成' }[status] || status || '-'
+  return ORDER_STATUS_LABEL[status] || status || '-'
+}
+
+function formatTaskStatus(status) {
+  return TASK_STATUS_LABEL[status] || status || '-'
+}
+
+function formatParseStatus(status) {
+  return PARSE_STATUS_LABEL[status] || status || '-'
 }
 
 function onTargetChange(val) {

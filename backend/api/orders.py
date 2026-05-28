@@ -6,12 +6,13 @@ from typing import Optional
 
 from api.auth import get_current_user
 from database import get_db
-from enums import OrderStatus
-from models import TaskInstance, TaskOrder, User
+from enums import DeploymentMode, OrderStatus
+from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
     BatchOperationResponse,
     TaskInstanceCreate,
+    TaskInstanceNodeOverride,
     TaskOrderCreate,
     TaskOrderDetailResponse,
     TaskOrderEvaluationSummary,
@@ -19,7 +20,9 @@ from schemas import (
     TaskOrderResponse,
 )
 from services.business_task_query import get_order_detail_context
+from services.order_materialize import _resolve_node_id
 from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
+from services.scheduler import TaskScheduler
 
 from .instances import _create_instance_from_template
 
@@ -261,17 +264,82 @@ async def receive_routing_result(
     payload: RoutingResultPayload,
     db: AsyncSession = Depends(get_db),
 ):
-    """接收外部路由系统的计算结果（节点放置 + GPU 分配）。"""
+    """接收外部路由系统的计算结果（节点放置 + GPU 分配），并自动物化实例。"""
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    # Persist routing result
     order.routing_status = "completed"
     rc = order.runtime_config or {}
-    rc["routing_result"] = {
-        "placements": [p.model_dump() for p in payload.placements]
-    }
+    rc["routing_result"] = {"placements": [p.model_dump() for p in payload.placements]}
     order.runtime_config = rc
+
+    # Resolve role -> template_node_name from catalog
+    catalog_row = await db.execute(
+        select(BusinessTemplateCatalog).where(
+            BusinessTemplateCatalog.template_id == order.template_id
+        )
+    )
+    catalog = catalog_row.scalar_one_or_none()
+    role_node_names = {
+        "source": catalog.source_node_name if catalog else None,
+        "compute": catalog.compute_node_name if catalog else None,
+        "sink": catalog.sink_node_name if catalog else None,
+    }
+
+    if order.materialized_instance_id:
+        raise HTTPException(status_code=409, detail="Routing result already processed")
+
+    # Build node_overrides from placements list
+    overrides: list[TaskInstanceNodeOverride] = []
+    for placement in payload.placements:
+        role = placement.node_id  # node_id field carries the role name from router
+        template_node_name = role_node_names.get(role) if catalog else role
+        if template_node_name is None:
+            template_node_name = role
+
+        try:
+            resolved_node_id = await _resolve_node_id(db, placement.worker_host)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        env: dict[str, str] = {
+            "TASK_ROLE": role,
+            "SOURCE_NAME": order.source_name or "",
+            "DESTINATION_NAME": order.destination_name or "",
+        }
+        if placement.gpu_device is not None:
+            env["GPU_DEVICE"] = placement.gpu_device
+
+        overrides.append(TaskInstanceNodeOverride(
+            template_node_name=template_node_name,
+            node_id=resolved_node_id,
+            env=env,
+        ))
+
+    # Create instance
+    instance_create = TaskInstanceCreate(
+        template_id=order.template_id,
+        name=order.name,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=order.business_start_time,
+        scheduled_end_time=order.business_end_time,
+        auto_start=False,
+        keep_after_stop=order.keep_after_stop,
+        node_overrides=overrides,
+    )
+    instance = await _create_instance_from_template(db, instance_create, source_order_id=order.id)
+
+    # Register scheduled jobs
+    ts = TaskScheduler()
+    if order.business_start_time:
+        await ts.schedule_task_start(instance.id, order.business_start_time)
+    if order.business_end_time:
+        await ts.schedule_task_end(instance.id, order.business_end_time)
+
+    order.materialized_instance_id = instance.id
+    order.status = OrderStatus.MATERIALIZED
+
     await db.commit()
-    return {"status": "ok", "order_id": order_id, "routing_status": "completed"}
+    return {"status": "ok", "order_id": order_id, "routing_status": "completed", "instance_id": instance.id}
