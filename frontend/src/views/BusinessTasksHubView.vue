@@ -108,6 +108,16 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="调度开始" min-width="150">
+          <template #default="{ row }">
+            {{ row.scheduled_start_time ? dayjs(row.scheduled_start_time).format('MM-DD HH:mm') : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="调度结束" min-width="150">
+          <template #default="{ row }">
+            {{ row.scheduled_end_time ? dayjs(row.scheduled_end_time).format('MM-DD HH:mm') : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" min-width="160">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>

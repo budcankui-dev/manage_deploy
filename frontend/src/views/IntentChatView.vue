@@ -141,6 +141,16 @@
               <span v-else>待评估</span>
             </template>
           </el-table-column>
+          <el-table-column label="调度开始" min-width="150">
+            <template #default="{ row }">
+              {{ row.scheduled_start_time ? formatTime(row.scheduled_start_time) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="调度结束" min-width="150">
+            <template #default="{ row }">
+              {{ row.scheduled_end_time ? formatTime(row.scheduled_end_time) : '-' }}
+            </template>
+          </el-table-column>
           <el-table-column label="创建时间" min-width="160">
             <template #default="{ row }">
               {{ row.created_at ? formatTime(row.created_at) : '-' }}
