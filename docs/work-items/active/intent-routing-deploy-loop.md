@@ -38,7 +38,7 @@ Last Updated: 2026-05-28
 
 ## Acceptance Criteria
 
-- [ ] 外部路由系统能扫到 routing_status=pending 的工单
+- [x] 外部路由系统能扫到 routing_status=pending 的工单
 - [x] 路由结果回写后 routing_status 变为 completed
 - [x] 物化实例时 GPU 编号正确传入容器
 - [ ] 任务执行后能采集业务指标并评估成功率
@@ -47,6 +47,15 @@ Last Updated: 2026-05-28
 
 - `cd /Users/yanjia/codes/manage_deploy/frontend && npm run build`: pass，1696 modules transformed，无编译错误（Integration Fix Agent 复验）
 - `git diff --check`: pass，无空白错误
+- `curl http://127.0.0.1:8000/health`: pass，`{"status":"healthy"}`
+- `curl /api/nodes`: pass，4 节点（compute-1/2/3, admin）
+- `POST /api/conversations + confirm-intent`（conv_id=c40bd656）: pass，对话状态变为 `awaiting_routing`，order_id=717eb67d
+- `GET /api/orders/717eb67d`: pass，`routing_status=pending`，`routing_input_dag` 有值，`source_name=compute-1`，`destination_name=compute-3`
+- `POST /api/orders/717eb67d/routing-result`（placements: compute-1/2/3）: pass，返回 `{"status":"ok","instance_id":"46cbe5ce"}`
+- `GET /api/orders/717eb67d`（物化后）: pass，`routing_status=completed`，`status=materialized`，`materialized_instance_id=46cbe5ce`
+- `GET /api/instances/46cbe5ce`: pass，`deployment_mode=scheduled`，3 节点，env 含 `TASK_ROLE`/`GPU_DEVICE`（compute 节点=0）/`SOURCE_NAME`/`DESTINATION_NAME`
+- `POST /api/orders/717eb67d/routing-result`（重复调用）: pass，返回 409
+- `POST /api/orders/fad74f87/routing-result`（worker_host=nonexistent-host）: pass，返回 422，`{"detail":"Node not found: nonexistent-host"}`
 
 ## Findings
 
@@ -55,14 +64,21 @@ Last Updated: 2026-05-28
 - `BusinessTemplateCatalog` 通过 `template_id` 关联，字段为 `source_node_name`/`compute_node_name`/`sink_node_name`。
 - 前端 `formatOrderStatus` 缺少 `orphaned` 映射；`draft.parse_status` 和实例状态直接显示英文枚举值；`el-select` 过滤选项全为英文。
 - **[Integration Fix]** Review finding "TaskScheduler singleton misuse" 经核查无效：`TaskScheduler` 所有方法均操作模块级 `scheduler` 对象（`services/scheduler.py:13`），`TaskScheduler()` 是无状态代理，`instances.py` 全文同样使用 `TaskScheduler()` 模式，行为一致，无需修改。
+- **[E2E Test 2026-05-28]** 完整闭环验证通过：confirm-intent → routing_status=pending → routing-result 回写 → status=materialized，instance deployment_mode=scheduled，3 节点 env 含 TASK_ROLE/GPU_DEVICE/SOURCE_NAME/DESTINATION_NAME。
+- **[E2E Test 2026-05-28]** 幂等性守卫正常：重复调用 routing-result 返回 409。
+- **[E2E Test 2026-05-28]** 无效节点守卫正常：worker_host=nonexistent-host 返回 422，detail="Node not found: nonexistent-host"。
+- **[E2E Test 2026-05-28]** routing-result 端点无需 auth token（外部路由系统直接回调），GET /api/orders/{id} 需要 token；422 测试时误用带 token 的 GET 路径导致初次误判为 404，实际直接 POST 无 token 返回 422 正确。
 
 ## Changes Made
 
 - `backend/api/orders.py`：
   - 新增 import：`BusinessTemplateCatalog`, `NodeModel`, `DeploymentMode`, `TaskInstanceNodeOverride`, `_resolve_node_id`, `TaskScheduler`
   - `receive_routing_result` 端点：收到 placements 后查 catalog 获取 role→template_node_name 映射，构建 `node_overrides`（含 `TASK_ROLE`/`GPU_DEVICE`/`SOURCE_NAME`/`DESTINATION_NAME` env），调用 `_create_instance_from_template` 物化实例，注册 `schedule_task_start`/`schedule_task_end`，更新 `order.materialized_instance_id` 和 `order.status = MATERIALIZED`
-  - **[Integration Fix]** 幂等性守卫：在端点体开头（fetch order 之后）添加 `if order.materialized_instance_id` 检查，重复调用返回 409
+  - **[Integration Fix]** 幂等性守卫前移：guard 移至 fetch order 之后、任何 mutation 之前，防止 autoflush 在 409 路径上持久化脏数据
+  - **[Integration Fix]** `order.routing_status` 改用 `RoutingStatus.COMPLETED.value`（新增 `RoutingStatus` import）
   - **[Integration Fix]** `_resolve_node_id` 调用包裹 `try/except ValueError`，抛出 HTTPException(422) 而非 500
+- `backend/api/conversations.py`：
+  - **[Integration Fix]** `confirm_intent` 中 `db.add(order)` + `await db.flush()` 包裹 try/except，捕获 Duplicate entry / UNIQUE constraint / IntegrityError，返回 409 而非 500
 - `frontend/src/views/IntentChatView.vue`：
   - 新增 `ORDER_STATUS_LABEL`/`ROUTING_STATUS_LABEL`/`TASK_STATUS_LABEL`/`PARSE_STATUS_LABEL` 常量
   - 新增 `formatTaskStatus`/`formatParseStatus` 函数，重写 `formatOrderStatus`/`formatRoutingStatus` 使用常量
@@ -71,6 +87,7 @@ Last Updated: 2026-05-28
   - 修复实例状态显示为中文（`formatTaskStatus`）
   - **[Integration Fix]** `ORDER_STATUS_LABEL` 补充 `awaiting_routing: '路由中'`
   - **[Integration Fix]** `orderStatusType` 更新为实际 `OrderStatus` 枚举值：`pending`/`awaiting_routing` → `warning`，`materialized` → `primary`，`completed` → `success`，`failed` → `danger`，`cancelled`/`orphaned` → `info`
+  - **[Integration Fix]** 工单详情抽屉中移除重复的截断 "ID" 描述项，保留完整 UUID 的 "工单 ID" 项
 
 ## Open Risks
 
@@ -80,23 +97,9 @@ Last Updated: 2026-05-28
 
 ## Next Agent Instructions
 
-E2E Deploy Test Agent 复测命令：
+**闭环 API 验证已全部通过（2026-05-28）。剩余工作：**
 
-```bash
-# 1. 验证幂等性守卫（第二次调用应返回 409）
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/api/orders/{order_id}/routing-result \
-  -H "Content-Type: application/json" \
-  -d '{"placements":[{"node_id":"source","worker_host":"127.0.0.1","gpu_device":null}]}'
-
-# 2. 验证无效 worker_host 返回 422（非 500）
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/api/orders/{order_id}/routing-result \
-  -H "Content-Type: application/json" \
-  -d '{"placements":[{"node_id":"source","worker_host":"nonexistent-host","gpu_device":null}]}'
-
-# 3. 前端构建验证
-cd /Users/yanjia/codes/manage_deploy/frontend && npm run build
-```
-
-其余待完成：
-- 验证外部路由系统回调格式：确认 `placements[].node_id` 字段确实传 role 名称（source/compute/sink）。
-- 实现业务目标成功率采集（参考 `docs/business-objective-success-rate-design.md`）。
+实现业务目标成功率采集（参考 `docs/business-objective-success-rate-design.md`）：
+- 任务执行完成后采集 `compute_latency_ms` 指标
+- 写入 `business_objective_evaluations` 表
+- `GET /api/orders/{id}` 的 `evaluation` 字段应有值

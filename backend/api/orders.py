@@ -6,7 +6,7 @@ from typing import Optional
 
 from api.auth import get_current_user
 from database import get_db
-from enums import DeploymentMode, OrderStatus
+from enums import DeploymentMode, OrderStatus, RoutingStatus
 from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
@@ -270,8 +270,11 @@ async def receive_routing_result(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    if order.materialized_instance_id:
+        raise HTTPException(status_code=409, detail="Routing result already processed")
+
     # Persist routing result
-    order.routing_status = "completed"
+    order.routing_status = RoutingStatus.COMPLETED.value
     rc = order.runtime_config or {}
     rc["routing_result"] = {"placements": [p.model_dump() for p in payload.placements]}
     order.runtime_config = rc
@@ -288,9 +291,6 @@ async def receive_routing_result(
         "compute": catalog.compute_node_name if catalog else None,
         "sink": catalog.sink_node_name if catalog else None,
     }
-
-    if order.materialized_instance_id:
-        raise HTTPException(status_code=409, detail="Routing result already processed")
 
     # Build node_overrides from placements list
     overrides: list[TaskInstanceNodeOverride] = []

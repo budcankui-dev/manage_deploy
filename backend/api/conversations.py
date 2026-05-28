@@ -375,8 +375,13 @@ async def confirm_intent(
         status=OrderStatus.PENDING,
         routing_status=RoutingStatus.PENDING,
     )
-    db.add(order)
-    await db.flush()
+    try:
+        db.add(order)
+        await db.flush()
+    except Exception as exc:
+        if "Duplicate entry" in str(exc) or "UNIQUE constraint" in str(exc) or "IntegrityError" in type(exc).__name__:
+            raise HTTPException(status_code=409, detail="工单已创建，请勿重复提交")
+        raise
 
     # 生成路由 DAG 并写入工单
     dp = draft.data_profile or {}

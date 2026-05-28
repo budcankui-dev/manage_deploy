@@ -237,7 +237,6 @@
       <div v-else-if="selectedOrderDetail" class="orders-detail-content">
         <el-descriptions title="基本信息" :column="1" border size="small" class="detail-desc-block">
           <el-descriptions-item label="工单 ID"><code>{{ selectedOrderDetail.id }}</code></el-descriptions-item>
-          <el-descriptions-item label="ID">{{ selectedOrderDetail.id?.slice(0, 8) || '-' }}</el-descriptions-item>
           <el-descriptions-item label="工单状态">
             <el-tag :type="orderStatusType(selectedOrderDetail.status)" size="small">{{ formatOrderStatus(selectedOrderDetail.status) }}</el-tag>
           </el-descriptions-item>
