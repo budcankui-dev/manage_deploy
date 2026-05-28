@@ -30,10 +30,17 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 
 def _order_to_response(order: TaskOrder, instance_exists: bool | None = None) -> TaskOrderResponse:
+    rc = order.runtime_config or {}
+    bt = rc.get("business_task") or {}
+    rp = bt.get("runtime_plan") or {}
     data = TaskOrderResponse.model_validate(order)
+    updates = {
+        "task_type": bt.get("task_type"),
+        "routing_policy": bt.get("routing_policy") or rp.get("routing_strategy"),
+    }
     if instance_exists is not None:
-        return data.model_copy(update={"instance_exists": instance_exists})
-    return data
+        updates["instance_exists"] = instance_exists
+    return data.model_copy(update=updates)
 
 
 async def _instance_exists(db: AsyncSession, instance_id: str | None) -> bool | None:

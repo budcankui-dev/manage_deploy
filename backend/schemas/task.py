@@ -346,6 +346,8 @@ class TaskOrderResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    task_type: Optional[str] = None
+    routing_policy: Optional[str] = None
 
 
 class TaskMetricReport(BaseModel):
