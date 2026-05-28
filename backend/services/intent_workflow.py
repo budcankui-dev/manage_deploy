@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 async def run_intent_workflow(
     utterance: str,
     existing_draft: dict[str, Any] | None = None,
+    valid_nodes: list[str] | None = None,
 ) -> tuple[ParseResult, dict[str, Any]]:
     if settings.intent_parser_engine == "llm" and settings.dashscope_api_key:
         try:
             from services.llm_intent_parser import parse_intent_llm
 
-            result, raw_response = await parse_intent_llm(utterance, existing_draft)
+            result, raw_response = await parse_intent_llm(utterance, existing_draft, valid_nodes)
             trace = {
                 "engine": "llm_qwen",
                 "model": settings.dashscope_model,

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # Management network (Task Manager -> Node Agent) - IPv4 only
     # Agent URL is constructed as: http://{management_ip}:{agent_port}
 
-    apscheduler_timezone: str = "UTC"
+    apscheduler_timezone: str = "Asia/Shanghai"
     service_api_token: str = "change-me-service-token"
     auth_secret: str = "change-me-auth-secret"
     access_token_expire_hours: int = 24
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     intent_parser_engine: str = "rule"  # "llm" or "rule"
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    dashscope_model: str = "qwen-plus"
+    dashscope_model: str = "qwen3-max"
     dashscope_timeout: float = 30.0
     dashscope_temperature: float = 0.1
 

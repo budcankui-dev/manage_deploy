@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from typing import AsyncGenerator
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -11,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from api.auth import get_current_user
 from database import async_session_maker, get_db
 from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
-from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, RoutingRequest, TaskOrder, User
+from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, Node, RoutingRequest, TaskOrder, User
 from schemas import (
     BusinessObjective,
     BusinessTaskCreate,
@@ -96,7 +97,14 @@ async def send_message(
 
     latest_draft = await _get_latest_draft(db, conversation.id)
     existing = _draft_to_dict(latest_draft) if latest_draft else None
-    parsed, _trace = await run_intent_workflow(payload.content, existing)
+
+    # Query available node names for validation
+    nodes_result = await db.execute(
+        select(Node.hostname).where(Node.deleted_at.is_(None))
+    )
+    valid_nodes = [row[0] for row in nodes_result.fetchall()]
+
+    parsed, _trace = await run_intent_workflow(payload.content, existing, valid_nodes)
 
     version = (latest_draft.version + 1) if latest_draft else 1
     draft = IntentDraft(
@@ -133,7 +141,7 @@ async def send_message(
             content=parsed.assistant_message,
         )
     )
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
@@ -179,8 +187,14 @@ async def send_message_stream(
     existing = _draft_to_dict(latest_draft) if latest_draft else None
     next_version = (latest_draft.version + 1) if latest_draft else 1
 
+    # Query available node names for validation
+    nodes_result = await db.execute(
+        select(Node.hostname).where(Node.deleted_at.is_(None))
+    )
+    valid_nodes = [row[0] for row in nodes_result.fetchall()]
+
     # Build chat messages for streaming (natural language, no JSON schema)
-    chat_messages = _build_chat_messages(payload.content, existing)
+    chat_messages = _build_chat_messages(payload.content, existing, valid_nodes)
 
     # Capture primitive IDs needed inside the generator
     conv_id = conversation.id
@@ -202,7 +216,7 @@ async def send_message_stream(
 
         # After streaming: run structured parse then persist using a FRESH session
         try:
-            parsed, _trace = await run_intent_workflow(user_content, existing)
+            parsed, _trace = await run_intent_workflow(user_content, existing, valid_nodes)
 
             async with async_session_maker() as session:
                 async with session.begin():
@@ -250,7 +264,7 @@ async def send_message_stream(
                     conv_row = await session.get(Conversation, conv_id)
                     if conv_row:
                         conv_row.status = new_status
-                        conv_row.updated_at = datetime.utcnow()
+                        conv_row.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 
             done_payload = {
                 "type": "done",
@@ -259,6 +273,10 @@ async def send_message_stream(
                     "modality": parsed.modality,
                     "source_name": parsed.source_name,
                     "destination_name": parsed.destination_name,
+                    "business_start_time": parsed.business_start_time.isoformat() if parsed.business_start_time else None,
+                    "business_end_time": parsed.business_end_time.isoformat() if parsed.business_end_time else None,
+                    "data_profile": parsed.data_profile,
+                    "runtime_plan": parsed.runtime_plan,
                     "parse_status": parsed.parse_status,
                     "validation_errors": parsed.validation_errors or [],
                     "assistant_message": assistant_content,
@@ -301,7 +319,7 @@ async def update_draft(
     if draft.parse_status != ParseStatus.REJECTED:
         draft.parse_status = ParseStatus.VALID if not errors else ParseStatus.INCOMPLETE
     conversation.status = ConversationStatus.DRAFTING
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
@@ -390,7 +408,7 @@ async def confirm_intent(
     order.routing_request_id = routing.id
     conversation.status = ConversationStatus.AWAITING_ROUTING
     conversation.materialized_order_id = order.id
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     await db.flush()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
@@ -454,7 +472,7 @@ async def submit_conversation(
     result: BusinessTaskResponse = await create_business_task(business_payload, db)
     conversation.status = ConversationStatus.SUBMITTED
     conversation.materialized_order_id = result.order_id
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     await db.flush()
 
     return ConversationSubmitResponse(

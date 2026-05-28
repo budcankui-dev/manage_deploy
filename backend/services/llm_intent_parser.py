@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -18,6 +19,8 @@ from config import settings
 from services.intent_parser import ParseResult, validate_draft_fields
 
 logger = logging.getLogger(__name__)
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一任务是从用户对话中提取结构化参数。
 
@@ -157,73 +160,197 @@ async def stream_qwen_tokens(messages: list[dict]) -> AsyncGenerator[str, None]:
                     continue
 
 
-CHAT_SYSTEM_PROMPT = """你是智算意图解析助手，帮助用户配置矩阵乘法计算任务的部署参数。
+CHAT_SYSTEM_PROMPT = """你是智算意图解析助手。你的任务是按照系统指令引导用户提供矩阵乘法计算任务的参数。
 
-## 你的职责
-- 引导用户提供矩阵乘法计算任务所需的全部参数
-- 当前系统仅支持"矩阵乘法计算任务"一种业务类型
-- 如果用户询问其他类型任务，礼貌告知当前仅支持矩阵乘法计算
-
-## 需要收集的参数（按优先级）
-1. 源节点（数据从哪个节点来）
-2. 目的节点（计算结果发往哪个节点）
-3. 开始时间（什么时候开始运行）
-4. 结束时间（什么时候结束）
-5. 矩阵规模（N×N 的 N 值）
-6. 批次数（计算多少批）
-7. 路由策略：
-   - 资源保障（默认）
-   - 完成时间优先（追求速度）
-   - 负载均衡（选空闲节点）
-   - 成本优先（省钱）
-
-## 回复规则
-- 用自然、友好的中文回复
-- 每次只问1-2个缺失参数，不要一次全问
-- 当所有参数都已收集完毕时，列出参数摘要并告知"参数已完整，请点击确认提交"
-- 保持简洁，2-3句话
+## 严格规则
+- 当前系统仅支持"矩阵乘法计算任务"
+- 你只能询问系统指令中要求你询问的参数，不要问其他内容
+- 不要提及"运行时长"这个概念，必须分别询问"开始时间"和"结束时间"
+- 用自然友好的中文回复，2-3句话
 - 不要输出JSON或技术格式
-- 不要自由联想系统不支持的功能"""
+- 不要自由联想系统不支持的功能
+- 如果用户询问非矩阵乘法任务，告知当前仅支持矩阵乘法计算任务"""
 
 
-def _build_chat_messages(utterance: str, existing_draft: dict | None) -> list[dict]:
-    """Build messages for conversational streaming (no JSON schema)."""
-    msgs = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+# Parameter definitions for deterministic workflow
+PARAM_QUESTIONS = {
+    "source_name": "源节点（数据从哪个节点发出）",
+    "destination_name": "目的节点（计算结果发往哪个节点）",
+    "business_start_time": "开始时间（什么时候开始，例如：明天上午9点、2025-06-01 08:00）",
+    "business_end_time": "结束时间（什么时候结束，例如：下午5点、2025-06-01 17:00）",
+    "matrix_size": "矩阵规模（N×N 矩阵的 N 值，例如：1024、2048）",
+    "batch_count": "批次数（计算多少批，例如：10、100）",
+    "routing_strategy": "路由策略（资源保障/完成时间优先/负载均衡/成本优先，默认资源保障）",
+}
+
+
+def _build_chat_messages(utterance: str, existing_draft: dict | None, valid_nodes: list[str] | None = None) -> list[dict]:
+    """Build messages for conversational streaming with deterministic parameter guidance."""
+    # Determine which parameters are already filled
+    filled = set()
     if existing_draft:
-        parts = []
-        if existing_draft.get("task_type"):
-            parts.append(f"任务类型: {existing_draft['task_type']}")
         if existing_draft.get("source_name"):
-            parts.append(f"源节点: {existing_draft['source_name']}")
+            filled.add("source_name")
         if existing_draft.get("destination_name"):
-            parts.append(f"目标节点: {existing_draft['destination_name']}")
+            filled.add("destination_name")
+        if existing_draft.get("business_start_time"):
+            filled.add("business_start_time")
+        if existing_draft.get("business_end_time"):
+            filled.add("business_end_time")
         dp = existing_draft.get("data_profile") or {}
         if dp.get("matrix_size"):
-            parts.append(f"矩阵规模: {dp['matrix_size']}")
+            filled.add("matrix_size")
         if dp.get("batch_count"):
-            parts.append(f"批次数: {dp['batch_count']}")
+            filled.add("batch_count")
         rp = existing_draft.get("runtime_plan") or {}
         if rp.get("routing_strategy"):
-            parts.append(f"路由策略: {rp['routing_strategy']}")
-        if parts:
-            msgs.append({"role": "system", "content": f"已知信息: {', '.join(parts)}"})
+            filled.add("routing_strategy")
+
+    # Determine missing parameters (in priority order)
+    all_params = ["source_name", "destination_name", "business_start_time",
+                  "business_end_time", "matrix_size", "batch_count", "routing_strategy"]
+    missing = [p for p in all_params if p not in filled]
+
+    # Build dynamic instruction
+    if not missing:
+        instruction = "所有参数已完整。请列出参数摘要并告知用户'参数已完整，请点击确认提交工单'。"
+    else:
+        # Ask for next 1-2 missing params
+        ask_params = missing[:2]
+        ask_desc = "、".join(PARAM_QUESTIONS[p] for p in ask_params)
+        instruction = f"请向用户询问以下缺失参数：{ask_desc}。只问这些，不要问其他参数。"
+        if ("source_name" in missing or "destination_name" in missing) and valid_nodes:
+            instruction += f" 可用节点有：{', '.join(valid_nodes)}。"
+
+    # Build filled summary
+    filled_parts = []
+    if existing_draft:
+        if existing_draft.get("source_name"):
+            filled_parts.append(f"源节点: {existing_draft['source_name']}")
+        if existing_draft.get("destination_name"):
+            filled_parts.append(f"目的节点: {existing_draft['destination_name']}")
+        if existing_draft.get("business_start_time"):
+            filled_parts.append(f"开始时间: {existing_draft['business_start_time']}")
+        if existing_draft.get("business_end_time"):
+            filled_parts.append(f"结束时间: {existing_draft['business_end_time']}")
+        dp = existing_draft.get("data_profile") or {}
+        if dp.get("matrix_size"):
+            filled_parts.append(f"矩阵规模: {dp['matrix_size']}")
+        if dp.get("batch_count"):
+            filled_parts.append(f"批次数: {dp['batch_count']}")
+        rp = existing_draft.get("runtime_plan") or {}
+        if rp.get("routing_strategy"):
+            filled_parts.append(f"路由策略: {rp['routing_strategy']}")
+
+    msgs = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+    if filled_parts:
+        msgs.append({"role": "system", "content": f"已收集的参数：{', '.join(filled_parts)}"})
+    msgs.append({"role": "system", "content": f"本轮指令：{instruction}"})
     msgs.append({"role": "user", "content": utterance})
     return msgs
+
+
+VALID_ROUTING_STRATEGIES = {"resource_guarantee", "fastest_completion", "load_balance", "cost_priority"}
+
+
+def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
+    """Validate LLM output fields. Invalid fields are set to None (won't overwrite existing draft)."""
+    cleaned = dict(raw)
+
+    # task_type: only allow high_throughput_matmul
+    if cleaned.get("task_type") not in (None, "high_throughput_matmul"):
+        cleaned["task_type"] = None
+
+    # source_name: must be in valid_nodes (if provided and nodes list is non-empty)
+    src = cleaned.get("source_name")
+    if src and valid_nodes and src not in valid_nodes:
+        cleaned["source_name"] = None
+
+    # destination_name: same
+    dst = cleaned.get("destination_name")
+    if dst and valid_nodes and dst not in valid_nodes:
+        cleaned["destination_name"] = None
+
+    # start_time: must be "now" or valid ISO datetime string
+    st = cleaned.get("start_time")
+    if st and st != "now":
+        try:
+            datetime.fromisoformat(str(st))
+        except (ValueError, TypeError):
+            cleaned["start_time"] = None
+
+    # end_time: must be valid ISO datetime string
+    et = cleaned.get("end_time")
+    if et:
+        try:
+            datetime.fromisoformat(str(et))
+        except (ValueError, TypeError):
+            cleaned["end_time"] = None
+
+    # matrix_size: must be positive integer
+    ms = cleaned.get("matrix_size")
+    if ms is not None:
+        try:
+            ms_int = int(ms)
+            if ms_int <= 0:
+                cleaned["matrix_size"] = None
+            else:
+                cleaned["matrix_size"] = ms_int
+        except (ValueError, TypeError):
+            cleaned["matrix_size"] = None
+
+    # batch_count: must be positive integer
+    bc = cleaned.get("batch_count")
+    if bc is not None:
+        try:
+            bc_int = int(bc)
+            if bc_int <= 0:
+                cleaned["batch_count"] = None
+            else:
+                cleaned["batch_count"] = bc_int
+        except (ValueError, TypeError):
+            cleaned["batch_count"] = None
+
+    # routing_strategy: must be one of the valid values
+    rs = cleaned.get("routing_strategy")
+    if rs and rs not in VALID_ROUTING_STRATEGIES:
+        cleaned["routing_strategy"] = None
+
+    # Validate end_time > start_time if both present
+    if cleaned.get("start_time") and cleaned.get("end_time"):
+        try:
+            now = datetime.now(SHANGHAI_TZ).replace(tzinfo=None)
+            s = now if cleaned["start_time"] == "now" else datetime.fromisoformat(str(cleaned["start_time"]))
+            e = datetime.fromisoformat(str(cleaned["end_time"]))
+            if e <= s:
+                cleaned["end_time"] = None
+        except Exception:
+            pass
+
+    return cleaned
 
 
 async def parse_intent_llm(
     utterance: str,
     existing_draft: dict[str, Any] | None = None,
+    valid_nodes: list[str] | None = None,
 ) -> tuple[ParseResult, dict[str, Any]]:
     """LLM 解析入口。返回 (ParseResult, raw_llm_response)。"""
-    messages = _build_messages(utterance, existing_draft)
+    messages = _build_messages(utterance, existing_draft, valid_nodes)
     raw = await call_qwen(messages)
+    raw = _validate_and_clean(raw, valid_nodes or [])
     result = _raw_to_parse_result(raw, existing_draft)
     return result, raw
 
 
-def _build_messages(utterance: str, existing_draft: dict[str, Any] | None) -> list[dict[str, str]]:
+def _build_messages(utterance: str, existing_draft: dict[str, Any] | None, valid_nodes: list[str] | None = None) -> list[dict[str, str]]:
+    now_str = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%dT%H:%M:%S")
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    context_parts = [f"当前时间: {now_str}。用户提到的相对时间（如'明天上午9点'）请转换为ISO格式输出。"]
+    if valid_nodes:
+        context_parts.append(f"系统中可用的节点: {', '.join(valid_nodes)}。source_name和destination_name必须是这些节点之一，否则设为null。")
+    msgs.append({"role": "system", "content": " ".join(context_parts)})
     if existing_draft:
         draft_summary = {
             k: v for k, v in existing_draft.items()
@@ -240,7 +367,7 @@ def _build_messages(utterance: str, existing_draft: dict[str, Any] | None) -> li
 
 def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | None) -> ParseResult:
     """将 LLM JSON 输出转为 ParseResult，合并已有 draft，执行确定性校验。"""
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now(SHANGHAI_TZ).replace(tzinfo=None)
 
     start_time = None
     end_time = None
