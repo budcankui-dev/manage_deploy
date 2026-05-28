@@ -39,7 +39,7 @@
             @click="selectConversation(item.id)"
           >
             <div class="conversation-item-body">
-              <span>{{ item.title || `任务 ${item.task_id?.slice(0, 8) || item.id.slice(0, 8)}` }}</span>
+              <span>{{ item.materialized_order_id ? `#${item.materialized_order_id.slice(0, 8)}` : (item.status === 'awaiting_routing' || item.status === 'submitted' ? '已提交' : '草稿 · 矩阵乘法') }}</span>
               <small>{{ formatStatus(item.status) }}</small>
             </div>
             <el-button
@@ -68,8 +68,9 @@
     <main class="chat-column">
       <header v-if="!showOrders" class="chat-header">
         <div>
-          <h1>{{ conversation?.title || '新任务对话' }}</h1>
-          <p>任务 ID：<code>{{ conversation?.task_id || conversation?.id || '-' }}</code></p>
+          <h1>矩阵乘法计算任务</h1>
+          <p v-if="conversation?.materialized_order_id">工单 <code>#{{ conversation.materialized_order_id.slice(0, 8) }}</code></p>
+          <p v-else><el-tag type="info" size="small">草稿中</el-tag></p>
         </div>
         <div class="chat-header-right">
           <el-tag>{{ formatStatus(conversation?.status) }}</el-tag>
@@ -102,8 +103,10 @@
           class="orders-table"
           @row-click="(row) => openOrderDetail(row)"
         >
-          <el-table-column label="工单名称" min-width="160">
-            <template #default="{ row }">{{ row.name || row.id.slice(0, 20) }}</template>
+          <el-table-column label="工单 ID" width="110">
+            <template #default="{ row }">
+              <code style="font-size:12px">{{ row.id.slice(0, 8) }}</code>
+            </template>
           </el-table-column>
           <el-table-column label="路径" min-width="180">
             <template #default="{ row }">
@@ -116,14 +119,9 @@
               ~ {{ row.business_end_time ? formatTime(row.business_end_time) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="路由状态" width="110">
+          <el-table-column label="状态" width="110">
             <template #default="{ row }">
-              <el-tag :type="routingStatusType(row.routing_status)" size="small">{{ formatRoutingStatus(row.routing_status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="工单状态" width="110">
-            <template #default="{ row }">
-              <el-tag :type="orderStatusType(row.status)" size="small">{{ formatOrderStatus(row.status) }}</el-tag>
+              <el-tag :type="combinedStatusType(row)" size="small">{{ combinedStatusLabel(row) }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
@@ -238,6 +236,7 @@
       </div>
       <div v-else-if="selectedOrderDetail" class="orders-detail-content">
         <el-descriptions title="基本信息" :column="1" border size="small" class="detail-desc-block">
+          <el-descriptions-item label="工单 ID"><code>{{ selectedOrderDetail.id }}</code></el-descriptions-item>
           <el-descriptions-item label="ID">{{ selectedOrderDetail.id?.slice(0, 8) || '-' }}</el-descriptions-item>
           <el-descriptions-item label="工单状态">
             <el-tag :type="orderStatusType(selectedOrderDetail.status)" size="small">{{ formatOrderStatus(selectedOrderDetail.status) }}</el-tag>
@@ -496,6 +495,24 @@ const PARSE_STATUS_LABEL = {
 
 function formatOrderStatus(status) {
   return ORDER_STATUS_LABEL[status] || status || '-'
+}
+
+function combinedStatusType(row) {
+  if (row.status === 'materialized') return 'primary'
+  if (row.status === 'completed') return 'success'
+  if (row.status === 'failed') return 'danger'
+  if (row.status === 'cancelled') return 'info'
+  if (row.routing_status === 'computing') return 'warning'
+  return 'warning'
+}
+
+function combinedStatusLabel(row) {
+  if (row.status === 'materialized') return '已部署'
+  if (row.status === 'completed') return '已完成'
+  if (row.status === 'failed') return '失败'
+  if (row.status === 'cancelled') return '已取消'
+  if (row.routing_status === 'computing') return '路由计算中'
+  return '待路由'
 }
 
 function formatTaskStatus(status) {
