@@ -38,7 +38,11 @@ def _routing_policy_from_order(order: TaskOrder) -> str | None:
     if not business_task:
         return None
     routing = business_task.get("routing_result") or {}
-    return routing.get("strategy") or routing.get("routing_policy")
+    return (
+        routing.get("strategy")
+        or routing.get("routing_policy")
+        or (business_task.get("runtime_plan") or {}).get("routing_strategy")
+    )
 
 
 def _matches_filters(

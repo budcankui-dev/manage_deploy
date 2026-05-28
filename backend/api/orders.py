@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -119,9 +120,7 @@ async def get_order(
 
     config = order.runtime_config or {}
     business_task = config.get("business_task")
-    routing_result = None
-    if isinstance(business_task, dict):
-        routing_result = business_task.get("routing_result")
+    routing_result = config.get("routing_result")
 
     instance_exists = await _instance_exists(db, order.materialized_instance_id)
     base = _order_to_response(order, instance_exists=instance_exists)
@@ -285,6 +284,7 @@ async def receive_routing_result(
     rc = order.runtime_config or {}
     rc["routing_result"] = {"placements": [p.model_dump() for p in payload.placements]}
     order.runtime_config = rc
+    flag_modified(order, "runtime_config")
 
     # Resolve role -> template_node_name from catalog
     catalog_row = await db.execute(
