@@ -39,7 +39,7 @@
             @click="selectConversation(item.id)"
           >
             <div class="conversation-item-body">
-              <span>#{{ item.id.slice(0, 8) }}</span>
+              <span>{{ (item.title || ('#' + item.id.slice(0, 8))).slice(0, 20) }}</span>
               <small>{{ formatStatus(item.status) }}</small>
             </div>
             <el-button
@@ -68,7 +68,7 @@
     <main class="chat-column">
       <header v-if="!showOrders" class="chat-header">
         <div>
-          <h1>矩阵乘法计算任务</h1>
+          <h1>{{ conversation?.title ? conversation.title.slice(0, 30) : '新对话' }}</h1>
           <p v-if="conversation?.materialized_order_id">工单 <code>#{{ conversation.id.slice(0, 8) }}</code></p>
           <p v-else><el-tag type="info" size="small">草稿中</el-tag></p>
         </div>
@@ -183,9 +183,9 @@
             <el-icon class="confirm-icon"><CircleCheck /></el-icon>
             <div class="confirm-text">
               <strong>参数已完整</strong>
-              <p>所有必填参数已收集完毕，确认后将创建工单</p>
+              <p>所有参数已就绪，确认后提交任务</p>
             </div>
-            <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交工单</el-button>
+            <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
           </div>
         </div>
       </section>
@@ -195,8 +195,8 @@
           v-model="utterance"
           type="textarea"
           :rows="4"
-          :disabled="isStreaming || conversation?.status === 'submitted'"
-          :placeholder="conversation?.status === 'submitted' ? '工单已提交，对话已结束' : '描述您的计算任务，例如：矩阵计算从A节点到B节点，运行2小时...'"
+          :disabled="isStreaming || conversation?.status === 'submitted' || conversation?.status === 'awaiting_routing' || !!conversation?.materialized_order_id"
+          :placeholder="conversation?.materialized_order_id ? '任务已提交，如需新任务请新建对话' : '描述您的计算任务需求，例如：从 A 节点到 B 节点运行矩阵计算...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -334,7 +334,7 @@
           <span>等待路由计算...</span>
         </div>
         <div class="actions">
-          <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认参数并创建工单</el-button>
+          <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-button v-if="conversation?.status === 'submitted'" type="info" text>已提交</el-button>
         </div>
@@ -576,6 +576,7 @@ async function loadConversation(id) {
 
 function selectConversation(id) {
   showOrders.value = false
+  localStorage.setItem('lastConversationId', id)
   loadConversation(id)
 }
 
@@ -600,16 +601,11 @@ async function deleteConversation(item) {
     return
   }
 
-  // Optimistic: remove from list immediately
-  conversations.value = conversations.value.filter(c => c.id !== item.id)
-  const wasActive = item.id === conversation.value?.id
-
   try {
     await conversationApi.delete(item.id)
+    conversations.value = conversations.value.filter(c => c.id !== item.id)
     ElMessage.success('对话已删除')
-
-    // If deleted the active conversation, switch to next or create new
-    if (wasActive) {
+    if (item.id === conversation.value?.id) {
       if (conversations.value.length) {
         await loadConversation(conversations.value[0].id)
       } else {
@@ -617,9 +613,7 @@ async function deleteConversation(item) {
       }
     }
   } catch (err) {
-    // Rollback: re-fetch list on error
-    await refreshList()
-    ElMessage.error('删除失败')
+    ElMessage.error('删除失败：' + (err.response?.data?.detail || '未知错误'))
   }
 }
 
@@ -788,7 +782,14 @@ async function confirmIntent() {
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
     await refreshList()
-    ElMessage.success('工单已创建，等待外部路由系统计算路径')
+    ElMessage.success('任务已提交，等待路由系统分配计算节点')
+    localMessages.value.push({
+      id: 'submit-success',
+      role: 'assistant',
+      content: `✅ 任务已提交，任务 ID：${data.id.slice(0, 8)}。路由系统将自动分配计算节点，完成后任务将按计划时间启动。`,
+      created_at: new Date().toISOString(),
+    })
+    await scrollToBottom()
     updateRoutingPolling()
     if (showOrders.value) loadOrders()
   } catch (err) {
@@ -838,7 +839,9 @@ function logout() {
 onMounted(async () => {
   await refreshList()
   if (conversations.value.length) {
-    await loadConversation(conversations.value[0].id)
+    const lastId = localStorage.getItem('lastConversationId')
+    const target = lastId && conversations.value.find(c => c.id === lastId)
+    await loadConversation(target ? lastId : conversations.value[0].id)
   } else {
     await startNewConversation()
   }
