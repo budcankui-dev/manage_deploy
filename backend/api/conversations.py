@@ -445,6 +445,11 @@ async def delete_conversation(
 ):
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
 
+    # 先删 routing_requests（其 intent_draft_id NOT NULL，无法置 null）
+    rr_rows = await db.execute(select(RoutingRequest).where(RoutingRequest.conversation_id == conversation_id))
+    for rr in rr_rows.scalars().all():
+        await db.delete(rr)
+
     # 保留工单，只解除 FK 引用
     orders = await db.execute(select(TaskOrder).where(TaskOrder.conversation_id == conversation_id))
     for order in orders.scalars().all():
