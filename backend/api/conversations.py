@@ -444,6 +444,13 @@ async def delete_conversation(
     current_user: User = Depends(get_current_user),
 ):
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+
+    # 保留工单，只解除 FK 引用
+    orders = await db.execute(select(TaskOrder).where(TaskOrder.conversation_id == conversation_id))
+    for order in orders.scalars().all():
+        order.conversation_id = None
+
+    await db.flush()
     await db.delete(conversation)
     await db.flush()
 
