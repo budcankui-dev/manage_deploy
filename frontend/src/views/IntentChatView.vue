@@ -312,6 +312,63 @@
             </template>
             <el-empty v-else description="暂未部署" :image-size="60" />
           </el-tab-pane>
+
+          <!-- Tab 4: 结果 -->
+          <el-tab-pane label="结果" name="result">
+            <template v-if="isMatmulDetail && detailEvaluation">
+              <p style="color:var(--el-text-color-secondary);font-size:13px;margin-bottom:12px">
+                {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
+              </p>
+              <div style="margin-bottom:12px">
+                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="i"
+                     style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
+                  <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
+                  <span>{{ step }}</span>
+                </div>
+              </div>
+              <div v-if="detailMatmulInputRows.length" style="margin-bottom:12px">
+                <div style="font-weight:500;font-size:13px;margin-bottom:6px">输入参数</div>
+                <el-descriptions :column="1" border size="small">
+                  <el-descriptions-item v-for="r in detailMatmulInputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+              <div v-if="detailMatmulOutputRows.length" style="margin-bottom:12px">
+                <div style="font-weight:500;font-size:13px;margin-bottom:6px">计算输出</div>
+                <el-descriptions :column="1" border size="small">
+                  <el-descriptions-item v-for="r in detailMatmulOutputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+              <div v-if="detailMatmulConsistency" style="margin-bottom:12px">
+                <el-tag :type="detailMatmulConsistency.ok ? 'success' : 'warning'" size="small">
+                  {{ detailMatmulConsistency.label }}
+                </el-tag>
+                <span v-if="detailMatmulConsistency.detail" style="font-size:12px;color:var(--el-text-color-secondary);margin-left:8px">{{ detailMatmulConsistency.detail }}</span>
+              </div>
+              <div v-if="detailMatmulVerdict" :class="['verdict-block', detailMatmulVerdict.statusClass]" style="padding:12px;border-radius:6px;margin-bottom:12px">
+                <div style="font-weight:600;font-size:14px">{{ detailMatmulVerdict.title }}</div>
+                <div style="font-size:12px;margin-top:4px">{{ detailMatmulVerdict.subtitle }}</div>
+              </div>
+            </template>
+            <template v-else-if="detailEvaluation">
+              <div :class="['verdict-block', detailEvaluation.business_success ? 'success' : 'danger']"
+                   style="padding:12px;border-radius:6px;margin-bottom:12px">
+                <div style="font-weight:600">{{ detailEvaluation.business_success ? '业务目标达成' : '业务目标未达成' }}</div>
+                <div v-if="detailEvaluation.failure_reason" style="font-size:12px;margin-top:4px">{{ detailEvaluation.failure_reason }}</div>
+              </div>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="指标">{{ detailEvaluation.metric_key || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="目标 / 实际">{{ detailEvaluation.target_value }} / {{ detailEvaluation.actual_value }} {{ detailEvaluation.unit }}</el-descriptions-item>
+              </el-descriptions>
+            </template>
+            <el-empty v-else description="任务尚未跑完或未上报业务指标" :image-size="60" />
+            <template v-if="orderResultObjects.length">
+              <div style="font-weight:500;font-size:13px;margin:12px 0 6px">结果文件</div>
+              <el-table :data="orderResultObjects" size="small" border>
+                <el-table-column label="名称" prop="name" />
+                <el-table-column label="URI" prop="uri" show-overflow-tooltip />
+              </el-table>
+            </template>
+          </el-tab-pane>
         </el-tabs>
       </div>
     </el-drawer>
@@ -403,7 +460,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import { taskTypeLabel, describeDataProfile } from '@/constants/businessTaskDisplay'
+import {
+  taskTypeLabel, describeDataProfile, taskTypeSummary,
+  buildMatmulInputRows, buildMatmulOutputRows,
+  buildMatmulParamConsistency, buildMatmulVerdict,
+  MATMUL_PIPELINE_STEPS
+} from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
 const router = useRouter()
@@ -427,6 +489,22 @@ const selectedOrderDetail = ref(null)
 const orderDetailLoading = ref(false)
 const orderStatusFilter = ref('')
 const orderDetailTab = ref('basic')
+const orderResultObjects = ref([])
+
+const isMatmulDetail = computed(() =>
+  selectedOrderDetail.value?.business_task?.task_type === 'high_throughput_matmul'
+)
+const detailEvaluation = computed(() => selectedOrderDetail.value?.evaluation)
+const detailDataProfile = computed(() => selectedOrderDetail.value?.business_task?.data_profile)
+const detailMatmulInputRows = computed(() => buildMatmulInputRows(detailDataProfile.value))
+const detailMatmulOutputRows = computed(() =>
+  buildMatmulOutputRows(detailEvaluation.value?.result_metadata, detailEvaluation.value)
+)
+const detailMatmulConsistency = computed(() =>
+  buildMatmulParamConsistency(detailDataProfile.value, detailEvaluation.value?.result_metadata)
+)
+const detailMatmulVerdict = computed(() => buildMatmulVerdict(detailEvaluation.value))
+
 let routingTimer = null
 let abortController = null
 
@@ -704,11 +782,18 @@ async function openOrderDetail(order) {
   selectedOrderId.value = id
   selectedOrderDetail.value = null
   orderDetailTab.value = 'basic'
+  orderResultObjects.value = []
   orderDrawerVisible.value = true
   orderDetailLoading.value = true
   try {
     const { data } = await ordersApi.get(id)
     selectedOrderDetail.value = data
+    if (data.instance?.id) {
+      try {
+        const { data: objs } = await businessApi.results(data.instance.id)
+        orderResultObjects.value = objs || []
+      } catch { /* ignore */ }
+    }
   } catch {
     // keep null
   } finally {
@@ -1538,6 +1623,10 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 12px 0;
   font-size: 13px;
 }
+
+.verdict-block.success { background: var(--el-color-success-light-9); border: 1px solid var(--el-color-success-light-5); }
+.verdict-block.danger  { background: var(--el-color-danger-light-9);  border: 1px solid var(--el-color-danger-light-5); }
+.verdict-block.warning { background: var(--el-color-warning-light-9); border: 1px solid var(--el-color-warning-light-5); }
 
 @media (max-width: 900px) {
   .intent-workspace {
