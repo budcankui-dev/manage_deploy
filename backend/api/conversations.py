@@ -375,6 +375,17 @@ async def confirm_intent(
         status=OrderStatus.PENDING,
         routing_status=RoutingStatus.PENDING,
     )
+    order.runtime_config = {
+        "business_task": {
+            "task_type": draft.task_type,
+            "modality": draft.modality,
+            "source_name": draft.source_name,
+            "destination_name": draft.destination_name,
+            "data_profile": draft.data_profile,
+            "runtime_plan": draft.runtime_plan,
+            "business_objective": draft.business_objective,
+        }
+    }
     try:
         db.add(order)
         await db.flush()

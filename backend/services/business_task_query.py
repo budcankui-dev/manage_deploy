@@ -138,6 +138,7 @@ async def _instances_by_ids(db: AsyncSession, instance_ids: list[str]) -> dict[s
 async def list_business_tasks(
     db: AsyncSession,
     filters: BusinessTaskListFilters,
+    user_id: str | None = None,
 ) -> BusinessTaskListResponse:
     """
     列出业务工单。
@@ -153,6 +154,8 @@ async def list_business_tasks(
         .where(TaskOrder.runtime_config.isnot(None))
         .order_by(TaskOrder.created_at.desc())
     )
+    if user_id is not None:
+        query = query.where(TaskOrder.user_id == user_id)
     if filters.order_status:
         query = query.where(TaskOrder.status == filters.order_status)
     elif not filters.include_cancelled:

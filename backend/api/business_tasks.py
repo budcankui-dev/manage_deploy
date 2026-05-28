@@ -16,7 +16,9 @@ from models import (
     Node as NodeModel,
     TaskOrder,
     TaskResultObject,
+    User,
 )
+from api.auth import get_current_user
 from schemas import (
     BusinessObjective,
     BusinessObjectiveEvaluationResponse,
@@ -231,7 +233,9 @@ async def list_business_tasks_api(
     q: str | None = None,
     include_cancelled: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    user_id = None if current_user.role == "admin" else current_user.id
     filters = BusinessTaskListFilters(
         page=page,
         page_size=page_size,
@@ -243,7 +247,7 @@ async def list_business_tasks_api(
         q=q,
         include_cancelled=include_cancelled,
     )
-    return await list_business_tasks(db, filters)
+    return await list_business_tasks(db, filters, user_id=user_id)
 
 
 @router.get("/business-tasks/{instance_id}/evaluation", response_model=BusinessObjectiveEvaluationResponse)

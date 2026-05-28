@@ -103,17 +103,12 @@
           class="orders-table"
           @row-click="(row) => openOrderDetail(row)"
         >
-          <el-table-column label="工单 ID" width="110">
+          <el-table-column label="任务 ID" width="110">
             <template #default="{ row }">
-              <code style="font-size:12px">{{ row.id.slice(0, 8) }}</code>
+              <code style="font-size:12px">{{ row.order_id ? row.order_id.slice(0, 8) : '-' }}</code>
             </template>
           </el-table-column>
-          <el-table-column label="路径" min-width="160">
-            <template #default="{ row }">
-              {{ row.source_name && row.destination_name ? `${row.source_name} → ${row.destination_name}` : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="任务类型" min-width="140">
+          <el-table-column label="任务类型" min-width="150">
             <template #default="{ row }">
               {{ taskTypeLabel(row.task_type) || row.task_type || '-' }}
             </template>
@@ -123,15 +118,32 @@
               {{ routingPolicyLabel(row.routing_policy) || row.routing_policy || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="时间" min-width="180">
+          <el-table-column label="工单状态" width="110">
             <template #default="{ row }">
-              {{ row.business_start_time ? formatTime(row.business_start_time) : '-' }}
-              ~ {{ row.business_end_time ? formatTime(row.business_end_time) : '-' }}
+              <el-tag :type="orderStatusType(row.order_status)" size="small">{{ ORDER_STATUS_LABELS[row.order_status] || row.order_status || '-' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column label="部署状态" width="110">
             <template #default="{ row }">
-              <el-tag :type="combinedStatusType(row)" size="small">{{ combinedStatusLabel(row) }}</el-tag>
+              <el-tag v-if="row.deployment_status" :type="deploymentStatusTag(row.deployment_status)" size="small">{{ DEPLOYMENT_STATUS_LABELS[row.deployment_status] || row.deployment_status }}</el-tag>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="业务指标" min-width="140">
+            <template #default="{ row }">
+              {{ row.actual_value ?? '-' }} / {{ row.target_value ?? '-' }} {{ row.unit || '' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="达标" width="90">
+            <template #default="{ row }">
+              <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
+              <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+              <span v-else>待评估</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="创建时间" min-width="160">
+            <template #default="{ row }">
+              {{ row.created_at ? formatTime(row.created_at) : '-' }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
@@ -389,10 +401,10 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck } from '@element-plus/icons-vue'
-import { conversationApi, ordersApi } from '@/api'
+import { conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { taskTypeLabel, describeDataProfile } from '@/constants/businessTaskDisplay'
-import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS } from '@/constants/routingPolicy'
+import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -420,7 +432,7 @@ let abortController = null
 
 const filteredOrders = computed(() => {
   if (!orderStatusFilter.value) return myOrders.value
-  return myOrders.value.filter(o => o.status === orderStatusFilter.value)
+  return myOrders.value.filter(o => o.order_status === orderStatusFilter.value)
 })
 
 const orderPlacementRows = computed(() => {
@@ -673,9 +685,10 @@ async function deleteConversation(item) {
 async function loadOrders() {
   ordersLoading.value = true
   try {
-    const { data } = await ordersApi.list({ include_cancelled: true, reconcile: false })
-    myOrders.value = data
-  } catch {
+    const { data } = await businessApi.list({ include_cancelled: true, page: 1, page_size: 100 })
+    myOrders.value = data.items || data
+  } catch (e) {
+    ElMessage.error('加载任务列表失败')
     myOrders.value = []
   } finally {
     ordersLoading.value = false
@@ -687,13 +700,14 @@ watch(showOrders, (val) => {
 })
 
 async function openOrderDetail(order) {
-  selectedOrderId.value = order.id
+  const id = order.order_id || order.id
+  selectedOrderId.value = id
   selectedOrderDetail.value = null
   orderDetailTab.value = 'basic'
   orderDrawerVisible.value = true
   orderDetailLoading.value = true
   try {
-    const { data } = await ordersApi.get(order.id)
+    const { data } = await ordersApi.get(id)
     selectedOrderDetail.value = data
   } catch {
     // keep null
