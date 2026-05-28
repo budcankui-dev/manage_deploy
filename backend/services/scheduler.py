@@ -46,17 +46,13 @@ class TaskScheduler:
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
 
-        def _run_start():
-            import asyncio
+        async def _run_start():
             from database import async_session_maker
             from services.dag_executor import DAGExecutor
 
-            async def _do_start():
-                async with async_session_maker() as db:
-                    executor = DAGExecutor(db)
-                    await executor.execute_dag_start(instance_id)
-
-            asyncio.create_task(_do_start())
+            async with async_session_maker() as db:
+                executor = DAGExecutor(db)
+                await executor.execute_dag_start(instance_id)
 
         scheduler.add_job(
             _run_start,
@@ -74,42 +70,38 @@ class TaskScheduler:
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
 
-        def _run_stop():
-            import asyncio
+        async def _run_stop():
             from database import async_session_maker
             from services.dag_executor import DAGExecutor
             from services.instance_lifecycle import auto_cleanup_instance
             from services.order_sync import mark_orders_completed_for_instance
 
-            async def _do_stop():
-                async with async_session_maker() as db:
+            async with async_session_maker() as db:
+                try:
+                    executor = DAGExecutor(db)
+                    await executor.execute_dag_stop(instance_id)
+
+                    result = await db.execute(
+                        select(TaskInstance)
+                        .options(selectinload(TaskInstance.nodes))
+                        .where(TaskInstance.id == instance_id)
+                    )
+                    instance = result.scalar_one_or_none()
+                    if instance is None:
+                        return
+
+                    await mark_orders_completed_for_instance(db, instance_id)
+                    if not instance.keep_after_stop:
+                        await auto_cleanup_instance(db, instance)
+                    await db.commit()
+                except Exception:
+                    logger.exception(
+                        "schedule_task_end._run_stop failed for %s", instance_id
+                    )
                     try:
-                        executor = DAGExecutor(db)
-                        await executor.execute_dag_stop(instance_id)
-
-                        result = await db.execute(
-                            select(TaskInstance)
-                            .options(selectinload(TaskInstance.nodes))
-                            .where(TaskInstance.id == instance_id)
-                        )
-                        instance = result.scalar_one_or_none()
-                        if instance is None:
-                            return
-
-                        await mark_orders_completed_for_instance(db, instance_id)
-                        if not instance.keep_after_stop:
-                            await auto_cleanup_instance(db, instance)
-                        await db.commit()
+                        await db.rollback()
                     except Exception:
-                        logger.exception(
-                            "schedule_task_end._do_stop failed for %s", instance_id
-                        )
-                        try:
-                            await db.rollback()
-                        except Exception:
-                            logger.exception("rollback failed")
-
-            asyncio.create_task(_do_stop())
+                        logger.exception("rollback failed")
 
         scheduler.add_job(
             _run_stop,
