@@ -17,7 +17,7 @@
 - **TaskTemplate**：DAG 蓝图，包含模板节点、边、镜像、命令、端口、健康检查和资源限制。
 - **TaskInstance**：模板的一次具体运行，实例节点会绑定到实际 Node。
 - **TaskOrder**：业务层工单，关联业务输入、路由结果和物化后的实例。
-- **BusinessObjectiveEvaluation**：业务目标评估结果，例如 `compute_latency_ms <= target_value`。
+- **BusinessObjectiveEvaluation**：业务目标评估结果。当前统一口径见 `docs/business-objective-success-rate-design.md`，按业务类型采集过程性指标并与节点历史基准比较。
 - **Conversation / IntentDraft / RoutingRequest**：普通用户从自然语言到部署请求的前置工作流。
 
 ## DAG 生命周期

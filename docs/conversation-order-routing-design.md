@@ -401,6 +401,9 @@ POST /api/admin/intent-parser/evaluate
   - 定义外部路由 DAG JSON。
   - 增加 `input_payload`、`result_payload`、策略和错误字段。
 
+- `business-objective-success-rate.md`
+  - 定义业务目标成功率、过程性指标、历史基准能力和路由结果接收接口。
+
 - `conversation-ui-order-flow.md`
   - 普通用户对话 UI、参数确认、路由结果、自动部署状态展示。
 
