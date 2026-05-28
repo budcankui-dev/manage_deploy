@@ -6,28 +6,36 @@
 
 开始前阅读：
 
-- `AGENTS.md`
-- `README.md`
 - `docs/architecture.md`
-- `docs/testing.md`
+- `docs/roadmap.md`
+- `docs/business-objective-success-rate-design.md`
 - 当前 work item：`docs/work-items/active/*.md`
 
 按任务需要阅读：
 
-- `docs/scientific-matmul-demo.md`
-- `workers/contracts/worker-env.md`
-- 相关代码目录下的测试
+- `docs/conversation-order-routing-design.md`
+- `docs/worker-data-io-design.md`
+- `docs/deployment/test-lab.md`
+
+## 项目现状
+
+- 唯一业务类型：矩阵乘法计算任务 (`high_throughput_matmul`)
+- 意图解析：qwen3-max + 确定性验证层 + 节点名校验
+- 时区：全部使用 Asia/Shanghai
+- DAG 拓扑：source → compute → sink（三节点）
+- 路由：外部系统扫 `routing_status=pending`，回写 placements
+- 前端：Vue3 + Element Plus，聊天式交互
 
 ## 工作规则
 
 - 先确认当前 work item 的目标、非目标和验收标准。
-- 不扩大任务范围；发现新问题时记录到 work item 的 `Open Risks` 或 `Next Agent Instructions`。
-- 运行过的命令必须记录命令和结论，不粘贴超长日志。
+- 不扩大任务范围；发现新问题时记录到 work item 的 `Open Risks`。
+- 运行过的命令必须记录命令和结论。
 - 不覆盖其他人的未提交改动。
-- 不恢复旧的三镜像 matmul 构建。
-- 不重新引入 `/scratch` 作为业务数据传递路径。
-- 不把 DAG 拓扑启动顺序当成业务选路证明；matmul 和后续测试业务必须验证 source -> 中间业务节点 -> sink 的网络数据流。
-- 新文档不要引用已删除的历史文档。
+- 不新增业务类型（当前只做矩阵乘法）。
+- 不使用 UTC 时间，统一 Asia/Shanghai。
+- 不让 LLM 自由发挥参数——所有业务参数必须通过确定性验证层。
+- 业务数据必须沿 source → compute → sink 网络链路流转。
 
 ## 交接格式
 
@@ -49,12 +57,3 @@
 ## Next Agent Instructions
 - 下一位 agent 的明确动作
 ```
-
-## 完成定义
-
-任务只有在以下条件满足时才可标记为 `done`：
-
-- 验收标准全部满足，或明确写出无法满足的阻塞原因。
-- 相关测试已执行并记录。
-- work item 中没有含糊的“待确认”。
-- 当前工作树状态已说明。
