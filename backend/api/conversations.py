@@ -448,6 +448,33 @@ async def confirm_intent(
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 
+@router.post("/{conversation_id}/cancel", response_model=ConversationResponse)
+async def cancel_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+
+    allowed = {ConversationStatus.AWAITING_ROUTING, ConversationStatus.READY_TO_SUBMIT}
+    if conversation.status not in allowed:
+        raise HTTPException(status_code=400, detail=f"当前状态不可取消：{conversation.status}")
+
+    conversation.status = ConversationStatus.CANCELLED
+
+    if conversation.materialized_order_id:
+        order_row = await db.execute(
+            select(TaskOrder).where(TaskOrder.id == conversation.materialized_order_id)
+        )
+        order = order_row.scalar_one_or_none()
+        if order:
+            order.status = OrderStatus.CANCELLED
+            order.routing_status = RoutingStatus.CANCELLED.value
+
+    await db.commit()
+    return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+
 @router.delete("/{conversation_id}", status_code=204)
 async def delete_conversation(
     conversation_id: str,

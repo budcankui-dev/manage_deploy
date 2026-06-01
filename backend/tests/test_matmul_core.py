@@ -12,6 +12,7 @@ from matmul_core import run_matmul  # noqa: E402
 
 
 def test_run_matmul_returns_positive_latency():
-    latency_ms, checksum = run_matmul(64, 1, 7)
-    assert latency_ms > 0
-    assert checksum
+    result = run_matmul(64, 1, 7)
+    assert result["elapsed_ms"] > 0
+    assert result["effective_gflops"] > 0
+    assert result["checksum"]

@@ -40,19 +40,20 @@ def main() -> int:
     job = wait_for_data_handler(port, timeout_sec=120.0)
     print(f"COMPUTE_GOT_JOB matrix_size={job['matrix_size']}", flush=True)
 
-    latency_ms, result_preview = run_matmul(
+    metrics = run_matmul(
         int(job["matrix_size"]),
         int(job["batch_count"]),
         int(job["seed"]),
     )
     result = {
-        "compute_latency_ms": latency_ms,
+        "compute_latency_ms": metrics["elapsed_ms"],
+        "effective_gflops": metrics["effective_gflops"],
         "matrix_size": job["matrix_size"],
         "batch_count": job["batch_count"],
         "seed": job["seed"],
-        "result_preview": result_preview,
+        "result_preview": metrics["checksum"],
     }
-    print(f"COMPUTE_DONE latency_ms={latency_ms:.2f} result_preview={result_preview}", flush=True)
+    print(f"COMPUTE_DONE elapsed_ms={metrics['elapsed_ms']:.2f} gflops={metrics['effective_gflops']:.2f}", flush=True)
 
     # POST result 给 sink
     post_json_to_peer("compute", "/data", result, timeout_sec=120.0)

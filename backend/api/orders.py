@@ -296,6 +296,7 @@ async def receive_routing_result(
     role_node_names = {
         "source": catalog.source_node_name if catalog else None,
         "compute": catalog.compute_node_name if catalog else None,
+        "worker": catalog.compute_node_name if catalog else None,
         "sink": catalog.sink_node_name if catalog else None,
     }
 

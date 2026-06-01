@@ -8,6 +8,7 @@ from database import init_db
 from api import (
     admin_router,
     auth_router,
+    baselines_router,
     business_tasks_router,
     conversations_router,
     instances_router,
@@ -67,6 +68,7 @@ app.include_router(conversations_router)
 app.include_router(routing_router)
 app.include_router(admin_router)
 app.include_router(uploads_router)
+app.include_router(baselines_router)
 
 
 @app.get("/health")

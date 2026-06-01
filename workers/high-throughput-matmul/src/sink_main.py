@@ -65,16 +65,20 @@ def main() -> int:
 
     # 等待 compute POST result
     result = wait_for_data_handler(port, timeout_sec=180.0)
-    print(f"SINK_GOT_RESULT latency_ms={result.get('compute_latency_ms')}", flush=True)
+    print(f"SINK_GOT_RESULT gflops={result.get('effective_gflops')} latency_ms={result.get('compute_latency_ms')}", flush=True)
 
     objective = _parse_objective()
-    metric_key = objective.get("metric_key") or "compute_latency_ms"
-    latency_ms = float(result["compute_latency_ms"])
+    metric_key = objective.get("metric_key") or "effective_gflops"
     instance_id = os.environ["TASK_INSTANCE_ID"]
 
+    # Determine metric value based on key
+    if metric_key == "effective_gflops":
+        metric_value = float(result.get("effective_gflops", 0))
+    else:
+        metric_value = float(result.get(metric_key, result.get("compute_latency_ms", 0)))
+
     # 上报 metric（业务验收关键路径），MinIO 上传失败不阻塞
-    # 白名单字段进入 metric.tags.result，用于前端展示
-    METRIC_METADATA_KEYS = ("compute_latency_ms", "matrix_size", "batch_count", "seed", "result_preview")
+    METRIC_METADATA_KEYS = ("compute_latency_ms", "effective_gflops", "matrix_size", "batch_count", "seed", "result_preview")
     result_meta = {k: result[k] for k in METRIC_METADATA_KEYS if k in result}
 
     # MinIO 上传完整 result（用于前端展示），上传失败不阻塞
@@ -87,8 +91,8 @@ def main() -> int:
 
     report_metric(
         metric_key,
-        latency_ms,
-        unit=objective.get("unit") or "ms",
+        metric_value,
+        unit=objective.get("unit") or "GFLOPS",
         tags={
             "objects": [
                 {
@@ -100,7 +104,7 @@ def main() -> int:
             "result": result_meta,
         },
     )
-    print(f"SINK_DONE metric={metric_key} value={latency_ms}", flush=True)
+    print(f"SINK_DONE metric={metric_key} value={metric_value}", flush=True)
 
     while True:
         time.sleep(3600)

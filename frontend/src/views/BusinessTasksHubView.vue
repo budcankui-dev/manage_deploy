@@ -34,6 +34,32 @@
       </el-collapse-item>
     </el-collapse>
 
+    <el-collapse v-model="baselineOpen" style="margin-bottom: 16px">
+      <el-collapse-item title="节点基线性能" name="baseline">
+        <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center">
+          <el-select v-model="baselineFilter.node_id" placeholder="筛选节点" clearable style="width: 180px" @change="loadBaselines">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname || n.display_name" :value="n.id" />
+          </el-select>
+          <el-button size="small" type="primary" plain @click="showBaselineDialog = true">新增基线</el-button>
+        </div>
+        <el-table :data="baselines" size="small" v-loading="baselinesLoading" empty-text="暂无基线数据">
+          <el-table-column prop="node_hostname" label="节点" width="140" />
+          <el-table-column prop="task_type" label="任务类型" width="200" />
+          <el-table-column prop="metric_key" label="指标" width="160" />
+          <el-table-column label="基线值" width="120">
+            <template #default="{ row }">{{ row.baseline_value?.toFixed(2) }} {{ row.unit || '' }}</template>
+          </el-table-column>
+          <el-table-column prop="operator" label="方向" width="60" />
+          <el-table-column prop="run_count" label="测试次数" width="80" />
+          <el-table-column label="操作" width="100">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" text @click="deleteBaseline(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-collapse-item>
+    </el-collapse>
+
     <section class="card">
       <div class="card-header">
         <h2>工单列表</h2>
@@ -134,9 +160,15 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row.order_id)">详情</el-button>
+            <el-button
+              v-if="row.order_status === 'pending' && !row.instance_id"
+              link
+              type="warning"
+              @click="openManualRouting(row)"
+            >手动路由</el-button>
             <el-button
               v-if="row.instance_id && row.instance_exists !== false && canStart(row.deployment_status)"
               link
@@ -334,6 +366,68 @@
         </el-tab-pane>
       </el-tabs>
     </el-drawer>
+
+    <!-- 手动路由对话框 -->
+    <el-dialog v-model="manualRoutingVisible" title="手动分配路由" width="520px" destroy-on-close>
+      <p style="margin-bottom:12px">为任务 <strong>{{ manualRoutingOrder?.name || '未命名' }}</strong> 分配计算节点</p>
+      <el-form label-width="100px" size="small">
+        <el-form-item label="Source 节点">
+          <el-select v-model="manualPlacements.source.worker_host" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+          </el-select>
+          <el-checkbox v-model="manualPlacements.source.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
+        </el-form-item>
+        <el-form-item label="Worker 节点">
+          <el-select v-model="manualPlacements.worker.worker_host" placeholder="选择节点" style="width:200px">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+          </el-select>
+          <el-input v-model="manualPlacements.worker.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
+        </el-form-item>
+        <el-form-item label="Sink 节点">
+          <el-select v-model="manualPlacements.sink.worker_host" placeholder="选择节点" :disabled="manualPlacements.sink.skip_deploy" clearable style="width:200px">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+          </el-select>
+          <el-checkbox v-model="manualPlacements.sink.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="manualRoutingVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualRoutingLoading" @click="submitManualRouting">确认分配</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新增基线对话框 -->
+    <el-dialog v-model="showBaselineDialog" title="新增节点基线" width="440px" destroy-on-close>
+      <el-form :model="newBaseline" label-width="90px" size="small">
+        <el-form-item label="节点">
+          <el-select v-model="newBaseline.node_id" placeholder="选择节点" style="width:100%">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="任务类型">
+          <el-input v-model="newBaseline.task_type" placeholder="如 high_throughput_matmul" />
+        </el-form-item>
+        <el-form-item label="指标">
+          <el-input v-model="newBaseline.metric_key" placeholder="如 effective_gflops" />
+        </el-form-item>
+        <el-form-item label="基线值">
+          <el-input-number v-model="newBaseline.baseline_value" :precision="2" :min="0" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="方向">
+          <el-select v-model="newBaseline.operator" style="width:100%">
+            <el-option label=">= (越大越好)" value=">=" />
+            <el-option label="<= (越小越好)" value="<=" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="单位">
+          <el-input v-model="newBaseline.unit" placeholder="如 GFLOPS" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showBaselineDialog = false">取消</el-button>
+        <el-button type="primary" @click="createBaseline">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -342,7 +436,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
+import { businessApi, baselinesApi, instancesApi, nodesApi, ordersApi } from '@/api'
 import {
   DEPLOYMENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -367,6 +461,11 @@ const route = useRoute()
 const router = useRouter()
 const demoRunning = ref(false)
 const summaryOpen = ref(['summary'])
+const baselineOpen = ref([])
+const baselines = ref([])
+const baselinesLoading = ref(false)
+const baselineFilter = reactive({ node_id: '' })
+const showBaselineDialog = ref(false)
 const summary = ref([])
 const summaryLoading = ref(false)
 const listLoading = ref(false)
@@ -400,6 +499,24 @@ const taskTypeOptions = computed(() => {
 })
 
 const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
+
+const manualRoutingVisible = ref(false)
+const manualRoutingOrder = ref(null)
+const manualRoutingLoading = ref(false)
+const manualPlacements = ref({
+  source: { worker_host: '', gpu_device: null, skip_deploy: false },
+  worker: { worker_host: '', gpu_device: '0', skip_deploy: false },
+  sink: { worker_host: '', gpu_device: null, skip_deploy: false },
+})
+
+const newBaseline = reactive({
+  node_id: '',
+  task_type: 'high_throughput_matmul',
+  metric_key: 'effective_gflops',
+  baseline_value: 0,
+  operator: '>=',
+  unit: 'GFLOPS',
+})
 
 const placementRows = computed(() => {
   const placements = orderDetail.value?.routing_result?.placements || {}
@@ -478,6 +595,12 @@ watch(
   }
 )
 
+watch(baselineOpen, (val) => {
+  if (val.includes('baseline') && baselines.value.length === 0) {
+    loadBaselines()
+  }
+})
+
 function percent(value) {
   return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`
 }
@@ -497,6 +620,9 @@ function metricMeaningLabel(row) {
   const METRIC_LABELS = {
     compute_latency_ms: '计算耗时',
     end_to_end_latency_ms: '端到端时延',
+    effective_gflops: '有效算力',
+    tokens_per_second: '推理吞吐',
+    frame_latency_p90_ms: '帧延迟P90',
   }
   return METRIC_LABELS[row.metric_key] || row.metric_key || '指标'
 }
@@ -533,6 +659,42 @@ function canStart(status) {
 
 async function refreshAll() {
   await Promise.all([loadSummary(), loadList(), loadNodes()])
+}
+
+async function loadBaselines() {
+  baselinesLoading.value = true
+  try {
+    const params = {}
+    if (baselineFilter.node_id) params.node_id = baselineFilter.node_id
+    const { data } = await baselinesApi.list(params)
+    baselines.value = data
+  } finally {
+    baselinesLoading.value = false
+  }
+}
+
+async function deleteBaseline(row) {
+  await ElMessageBox.confirm(`确认删除 ${row.node_hostname} / ${row.task_type} 的基线？`, '删除确认')
+  await baselinesApi.delete(row.id)
+  ElMessage.success('已删除')
+  await loadBaselines()
+}
+
+async function createBaseline() {
+  if (!newBaseline.node_id || !newBaseline.task_type || !newBaseline.metric_key) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  try {
+    await baselinesApi.create({ ...newBaseline })
+    ElMessage.success('基线已创建')
+    showBaselineDialog.value = false
+    await loadBaselines()
+  } catch (e) {
+    if (e.response?.status === 409) {
+      ElMessage.warning('该节点/任务类型/指标的基线已存在')
+    }
+  }
 }
 
 async function loadSummary() {
@@ -634,6 +796,41 @@ async function deleteOrder(row) {
   await refreshAll()
 }
 
+function openManualRouting(row) {
+  manualRoutingOrder.value = row
+  manualPlacements.value = {
+    source: { worker_host: '', gpu_device: null, skip_deploy: false },
+    worker: { worker_host: '', gpu_device: '0', skip_deploy: false },
+    sink: { worker_host: '', gpu_device: null, skip_deploy: false },
+  }
+  manualRoutingVisible.value = true
+}
+
+async function submitManualRouting() {
+  if (!manualPlacements.value.worker.worker_host) {
+    ElMessage.warning('Worker 节点必须选择')
+    return
+  }
+  manualRoutingLoading.value = true
+  try {
+    const placements = ['source', 'worker', 'sink']
+      .filter(role => !manualPlacements.value[role].skip_deploy && manualPlacements.value[role].worker_host)
+      .map(role => ({
+        node_id: role,
+        worker_host: manualPlacements.value[role].worker_host,
+        gpu_device: manualPlacements.value[role].gpu_device || null,
+      }))
+    await ordersApi.submitRoutingResult(manualRoutingOrder.value.order_id, { placements })
+    ElMessage.success('路由分配成功，实例已创建')
+    manualRoutingVisible.value = false
+    await refreshAll()
+  } catch (err) {
+    ElMessage.error(err.response?.data?.detail || '路由分配失败')
+  } finally {
+    manualRoutingLoading.value = false
+  }
+}
+
 async function waitForEvaluation(instanceId, maxAttempts = 80, intervalMs = 3000) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
@@ -670,10 +867,10 @@ async function submitSample() {
       seed: 42,
     },
     business_objective: {
-      metric_key: 'compute_latency_ms',
-      operator: '<=',
-      target_value: 60000,
-      unit: 'ms',
+      metric_key: 'effective_gflops',
+      operator: '>=',
+      target_value: 100,
+      unit: 'GFLOPS',
     },
     runtime_plan: {
       algorithm: 'batched_matmul',
@@ -687,7 +884,7 @@ async function submitSample() {
         compute: nodes.value[1].id,
         sink: nodes.value[2].id,
       },
-      estimated_metric: { metric_key: 'compute_latency_ms', metric_value: 5000, unit: 'ms' },
+      estimated_metric: { metric_key: 'effective_gflops', metric_value: 200, unit: 'GFLOPS' },
     },
     result_storage: { backend: 'minio', bucket: 'task-results' },
     auto_start: true,

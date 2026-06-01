@@ -55,6 +55,7 @@ class ConversationStatus(str, Enum):
     SUBMITTED = "submitted"
     REJECTED = "rejected"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class ParseStatus(str, Enum):

@@ -114,3 +114,119 @@ def test_evaluate_business_objective_rejects_metric_key_mismatch():
 
     assert evaluation.business_success is False
     assert "Metric key mismatch" in evaluation.failure_reason
+
+
+def test_evaluate_higher_is_better_success():
+    """effective_gflops >= target passes."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="effective_gflops",
+            operator=">=",
+            target_value=100,
+            unit="GFLOPS",
+        ),
+        actual_metric_key="effective_gflops",
+        actual_value=120,
+        object_uris=["s3://results/run-1/output.json"],
+    )
+
+    assert evaluation.business_success is True
+    assert evaluation.failure_reason is None
+
+
+def test_evaluate_higher_is_better_failure():
+    """effective_gflops < target fails."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="effective_gflops",
+            operator=">=",
+            target_value=100,
+            unit="GFLOPS",
+        ),
+        actual_metric_key="effective_gflops",
+        actual_value=80,
+        object_uris=["s3://results/run-2/output.json"],
+    )
+
+    assert evaluation.business_success is False
+    assert evaluation.failure_reason is not None
+
+
+def test_evaluate_with_baseline_higher_is_better():
+    """With baseline=200, actual=170 should pass (170 >= 200*0.8=160)."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="effective_gflops",
+            operator=">=",
+            target_value=100,
+            unit="GFLOPS",
+        ),
+        actual_metric_key="effective_gflops",
+        actual_value=170,
+        object_uris=["s3://results/run-3/output.json"],
+        baseline_value=200,
+    )
+
+    assert evaluation.business_success is True
+    assert evaluation.failure_reason is None
+    assert evaluation.target_value == 160.0  # 200 * 0.8
+
+
+def test_evaluate_with_baseline_higher_is_better_fail():
+    """With baseline=200, actual=150 should fail (150 < 200*0.8=160)."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="effective_gflops",
+            operator=">=",
+            target_value=100,
+            unit="GFLOPS",
+        ),
+        actual_metric_key="effective_gflops",
+        actual_value=150,
+        object_uris=["s3://results/run-4/output.json"],
+        baseline_value=200,
+    )
+
+    assert evaluation.business_success is False
+    assert evaluation.failure_reason is not None
+    assert evaluation.target_value == 160.0  # 200 * 0.8
+
+
+def test_evaluate_with_baseline_lower_is_better():
+    """With baseline=100, actual=110 should pass (110 <= 100*1.2=120)."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="end_to_end_latency_ms",
+            operator="<=",
+            target_value=200,
+            unit="ms",
+        ),
+        actual_metric_key="end_to_end_latency_ms",
+        actual_value=110,
+        object_uris=["s3://results/run-5/output.json"],
+        baseline_value=100,
+    )
+
+    assert evaluation.business_success is True
+    assert evaluation.failure_reason is None
+    assert evaluation.target_value == 120.0  # 100 * 1.2
+
+
+def test_evaluate_with_baseline_lower_is_better_fail():
+    """With baseline=100, actual=130 should fail (130 > 100*1.2=120)."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="end_to_end_latency_ms",
+            operator="<=",
+            target_value=200,
+            unit="ms",
+        ),
+        actual_metric_key="end_to_end_latency_ms",
+        actual_value=130,
+        object_uris=["s3://results/run-6/output.json"],
+        baseline_value=100,
+    )
+
+    assert evaluation.business_success is False
+    assert evaluation.failure_reason is not None
+    assert evaluation.target_value == 120.0  # 100 * 1.2

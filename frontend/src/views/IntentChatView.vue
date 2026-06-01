@@ -69,7 +69,11 @@
       <header v-if="!showOrders" class="chat-header">
         <div>
           <h1>{{ conversation?.title ? conversation.title.slice(0, 30) : '新对话' }}</h1>
-          <p v-if="conversation?.materialized_order_id">工单 <code>#{{ conversation.id.slice(0, 8) }}</code></p>
+          <p v-if="conversation?.materialized_order_id">
+            <el-tooltip :content="conversation.id" placement="top">
+              <span>任务 <code>#{{ conversation.id.slice(0, 8) }}...</code></span>
+            </el-tooltip>
+          </p>
           <p v-else><el-tag type="info" size="small">草稿中</el-tag></p>
         </div>
         <div class="chat-header-right">
@@ -105,7 +109,10 @@
         >
           <el-table-column label="任务 ID" width="110">
             <template #default="{ row }">
-              <code style="font-size:12px">{{ row.order_id ? row.order_id.slice(0, 8) : '-' }}</code>
+              <el-tooltip v-if="row.order_id" :content="row.order_id" placement="top">
+                <code style="font-size:12px;cursor:pointer">{{ row.order_id.slice(0, 8) }}...</code>
+              </el-tooltip>
+              <span v-else>-</span>
             </template>
           </el-table-column>
           <el-table-column label="任务类型" min-width="150">
@@ -210,14 +217,22 @@
           </template>
         </div>
 
-        <div v-if="draft?.parse_status === 'valid' && !conversation?.materialized_order_id && !isStreaming" class="confirm-card">
-          <div class="confirm-card-inner">
+        <div v-if="draft?.parse_status === 'valid'" class="confirm-card">
+          <div v-if="!conversation?.materialized_order_id && !isStreaming" class="confirm-card-inner">
             <el-icon class="confirm-icon"><CircleCheck /></el-icon>
             <div class="confirm-text">
               <strong>参数已完整</strong>
               <p>所有参数已就绪，确认后提交任务</p>
             </div>
             <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
+          </div>
+          <div v-else-if="conversation?.materialized_order_id" class="confirm-card-inner submitted">
+            <el-icon class="confirm-icon" style="color:var(--el-color-success)"><SuccessFilled /></el-icon>
+            <div class="confirm-text">
+              <strong>任务已提交</strong>
+              <p>{{ conversationStatusLabel }}</p>
+            </div>
+            <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
       </section>
@@ -257,7 +272,10 @@
       class="order-detail-drawer"
     >
       <template #header>
-        <span>{{ selectedOrderDetail?.name || (selectedOrderId ? selectedOrderId.slice(0, 8) : '工单详情') }}</span>
+        <el-tooltip v-if="selectedOrderId && !selectedOrderDetail?.name" :content="selectedOrderId" placement="top">
+          <span>{{ selectedOrderId.slice(0, 8) }}...</span>
+        </el-tooltip>
+        <span v-else>{{ selectedOrderDetail?.name || '任务详情' }}</span>
         <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small" style="margin-left: 8px">
           {{ formatOrderStatus(selectedOrderDetail.status) }}
         </el-tag>
@@ -388,6 +406,7 @@
         <template #header>
           意图参数
           <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ formatParseStatus(draft.parse_status) }}</el-tag>
+          <el-tag v-if="conversation?.materialized_order_id" type="success" size="small" style="margin-left:8px">已提交</el-tag>
         </template>
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
@@ -449,7 +468,10 @@
         <div class="actions">
           <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
-          <el-button v-if="conversation?.status === 'submitted'" type="info" text>已提交</el-button>
+          <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
+          <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待路由</el-tag>
+          <el-tag v-else-if="conversation?.status === 'ready_to_submit'" type="info">路由完成</el-tag>
+          <el-tag v-else-if="conversation?.status === 'cancelled'" type="danger">已取消</el-tag>
         </div>
       </el-card>
     </aside>
@@ -467,7 +489,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled } from '@element-plus/icons-vue'
 import { conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -554,6 +576,14 @@ const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
 const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id)
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
+const conversationStatusLabel = computed(() => {
+  const s = conversation.value?.status
+  return { drafting: '草稿', awaiting_routing: '待路由', ready_to_submit: '路由完成', submitted: '已部署', failed: '失败', cancelled: '已取消' }[s] || s || ''
+})
+const canCancelOrder = computed(() => {
+  const s = conversation.value?.status
+  return s === 'awaiting_routing' || s === 'ready_to_submit'
+})
 
 const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
 const uploadHeaders = computed(() => {
@@ -944,7 +974,7 @@ async function confirmIntent() {
     localMessages.value.push({
       id: 'submit-success',
       role: 'assistant',
-      content: `✅ 任务已提交，任务 ID：${data.id.slice(0, 8)}。路由系统将自动分配计算节点，完成后任务将按计划时间启动。`,
+      content: `✅ 任务已提交，任务 ID：${data.id.slice(0, 8)}...（完整 ID：${data.id}）。路由系统将自动分配计算节点，完成后任务将按计划时间启动。`,
       created_at: new Date().toISOString(),
     })
     await scrollToBottom()
@@ -959,6 +989,21 @@ async function confirmIntent() {
     }
   } finally {
     isConfirming.value = false
+  }
+}
+
+async function cancelOrder() {
+  try {
+    await ElMessageBox.confirm('确认取消该任务？取消后不可恢复。', '取消任务', { type: 'warning' })
+  } catch { return }
+  try {
+    const { data } = await conversationApi.cancel(conversation.value.id)
+    conversation.value = data
+    ElMessage.success('任务已取消')
+    await refreshList()
+    if (showOrders.value) loadOrders()
+  } catch (err) {
+    ElMessage.error(err.response?.data?.detail || '取消失败')
   }
 }
 

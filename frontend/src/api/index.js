@@ -26,6 +26,14 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('access_token')
+      const currentPath = window.location.pathname
+      if (currentPath !== '/login' && currentPath !== '/register') {
+        window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`
+      }
+      return Promise.reject(error)
+    }
     const message = error.response?.data?.detail || error.message || '请求失败'
     ElMessage.error(message)
     return Promise.reject(error)
@@ -78,7 +86,8 @@ export const ordersApi = {
   delete: (id) => api.delete(`/orders/${id}`),
   batchDelete: (ids) => api.post('/orders/batch/delete', { instance_ids: ids }),
   materialize: (id) => api.post(`/orders/${id}/materialize`),
-  materializePending: () => api.post('/orders/materialize/pending')
+  materializePending: () => api.post('/orders/materialize/pending'),
+  submitRoutingResult: (id, data) => api.post(`/orders/${id}/routing-result`, data),
 }
 
 export const businessApi = {
@@ -89,6 +98,13 @@ export const businessApi = {
   results: (instanceId) => api.get(`/business-tasks/${instanceId}/results`),
   catalog: () => api.get('/business-template-catalog'),
   createCatalog: (data) => api.post('/business-template-catalog', data)
+}
+
+export const baselinesApi = {
+  list: (params = {}) => api.get('/baselines', { params }),
+  create: (data) => api.post('/baselines', data),
+  update: (id, data) => api.put(`/baselines/${id}`, data),
+  delete: (id) => api.delete(`/baselines/${id}`),
 }
 
 export const authApi = {
@@ -107,6 +123,7 @@ export const conversationApi = {
   sendMessage: (id, data) => api.post(`/conversations/${id}/messages`, data),
   updateDraft: (id, data) => api.patch(`/conversations/${id}/draft`, data),
   confirmIntent: (id) => api.post(`/conversations/${id}/confirm-intent`),
+  cancel: (id) => api.post(`/conversations/${id}/cancel`),
   submit: (id, params = {}) =>
     api.post(`/conversations/${id}/submit`, null, {
       params: { auto_start: params.auto_start ?? false }

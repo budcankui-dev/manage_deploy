@@ -14,6 +14,7 @@ from models import (
     BusinessObjectiveEvaluation,
     BusinessTemplateCatalog,
     Node as NodeModel,
+    NodeBaseline,
     TaskOrder,
     TaskResultObject,
     User,
@@ -278,6 +279,40 @@ async def business_task_summary(db: AsyncSession = Depends(get_db)):
     return await summarize_business_tasks(db)
 
 
+async def _lookup_baseline(
+    db: AsyncSession,
+    routing_result: dict[str, Any],
+    task_type: str | None,
+    metric_key: str,
+) -> float | None:
+    """Look up baseline value for the worker node used in this task."""
+    if not task_type:
+        return None
+    placements = routing_result.get("placements") or {}
+    # Find the worker node hostname from placements (key "worker" or "compute")
+    worker_host = placements.get("worker") or placements.get("compute")
+    if not worker_host:
+        return None
+    # Resolve hostname to node_id
+    node = (
+        await db.execute(
+            select(NodeModel).where(NodeModel.hostname == worker_host)
+        )
+    ).scalar_one_or_none()
+    if not node:
+        return None
+    baseline = (
+        await db.execute(
+            select(NodeBaseline).where(
+                NodeBaseline.node_id == node.id,
+                NodeBaseline.task_type == task_type,
+                NodeBaseline.metric_key == metric_key,
+            )
+        )
+    ).scalar_one_or_none()
+    return baseline.baseline_value if baseline else None
+
+
 async def evaluate_and_store_business_metric(
     db: AsyncSession,
     instance_id: str,
@@ -304,6 +339,14 @@ async def evaluate_and_store_business_metric(
     object_uris = _extract_object_uris(tags)
     result_metadata = _extract_result_metadata(tags)
 
+    # Look up baseline value for the worker node
+    baseline_value = await _lookup_baseline(
+        db,
+        routing_result=routing_result,
+        task_type=business_task.get("task_type"),
+        metric_key=metric_key,
+    )
+
     existing = (
         await db.execute(
             select(BusinessObjectiveEvaluation).where(
@@ -322,6 +365,7 @@ async def evaluate_and_store_business_metric(
         object_uris=object_uris,
         task_type=business_task.get("task_type"),
         estimated_value=estimated_value,
+        baseline_value=baseline_value,
     )
     row = BusinessObjectiveEvaluation(
         instance_id=instance_id,

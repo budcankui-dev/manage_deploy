@@ -384,7 +384,7 @@ class TemplateMetricSummary(BaseModel):
 
 class BusinessObjective(BaseModel):
     metric_key: str
-    operator: str = "<="
+    operator: str = ">="
     target_value: float
     unit: Optional[str] = None
 

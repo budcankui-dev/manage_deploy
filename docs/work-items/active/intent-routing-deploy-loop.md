@@ -97,9 +97,41 @@ Last Updated: 2026-05-28
 
 ## Next Agent Instructions
 
-**闭环 API 验证已全部通过（2026-05-28）。剩余工作：**
+**[E2E Test 2026-05-29] 完整闭环跑通，发现两个阻塞 bug，需 Implementation Agent 修复：**
 
-实现业务目标成功率采集（参考 `docs/business-objective-success-rate-design.md`）：
-- 任务执行完成后采集 `compute_latency_ms` 指标
+### Bug 1（阻塞）：APScheduler 调度回调中 asyncio.create_task 失败
+
+文件：`backend/services/scheduler.py` 第 59 行、第 112 行
+
+根因：`AsyncIOScheduler` 对 sync 函数使用 `run_in_executor`（线程池），线程中调用 `asyncio.create_task()` 抛 `RuntimeError: no running event loop`，DAG start/stop 静默丢弃，实例永远停在 `scheduled` 状态，也不会自动停止。
+
+修复方案：将 `_run_start` / `_run_stop` 改为 async 协程，APScheduler 会用 `AsyncIOExecutor` 在事件循环中直接 `create_task`：
+
+```python
+# scheduler.py schedule_task_start 中
+async def _run_start():
+    from database import async_session_maker
+    from services.dag_executor import DAGExecutor
+    async with async_session_maker() as db:
+        executor = DAGExecutor(db)
+        await executor.execute_dag_start(instance_id)
+
+scheduler.add_job(_run_start, trigger=DateTrigger(run_date=run_time), id=job_id, replace_existing=True)
+```
+
+`_run_stop` 同理。
+
+### Bug 2（已知）：业务指标采集未实现
+
+`GET /api/orders/{id}` 的 `evaluation` 字段为 null，`GET /api/business-tasks/results/{instance_id}` 返回 404。
+
+实现参考 `docs/business-objective-success-rate-design.md`：
+- 任务停止后采集 `compute_latency_ms` 指标
 - 写入 `business_objective_evaluations` 表
 - `GET /api/orders/{id}` 的 `evaluation` 字段应有值
+
+### 验收标准（修复后重跑）
+
+1. routing-result 回写后，实例在 `business_start_time` 自动进入 `running`
+2. 实例在 `business_end_time` 自动进入 `stopped`
+3. 停止后 `evaluation` 字段有 `metric_key`、`actual_value`、`target_value`、`business_success`

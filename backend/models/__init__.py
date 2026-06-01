@@ -450,3 +450,22 @@ class RoutingRequest(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="routing_requests")
+
+
+class NodeBaseline(Base):
+    """节点基线性能表：每个节点 + task_type + metric_key 的基准值（3次取中位数）。"""
+    __tablename__ = "node_baselines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    node_id: Mapped[str] = mapped_column(String(36), ForeignKey("nodes.id"), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    metric_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    baseline_value: Mapped[float] = mapped_column(nullable=False)
+    operator: Mapped[str] = mapped_column(String(8), default=">=")
+    unit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    run_count: Mapped[int] = mapped_column(default=3)
+    raw_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, onupdate=func.now(), nullable=True
+    )

@@ -57,7 +57,7 @@ def main():
 
     # Step 3: 发送消息
     print("\n[3/6] 发送消息（含 source/dest/time）...")
-    msg = "我要做矩阵计算任务，从 compute-1 到 compute-3，现在开始跑2小时，延迟目标 60000ms"
+    msg = "我要做矩阵计算任务，从 compute-1 到 compute-3，现在开始跑2小时，算力目标 500 GFLOPS"
     r = s.post(f"{base}/api/conversations/{conv_id}/messages", json={"content": msg})
     assert r.status_code == 200, f"Send message failed: {r.text}"
     conv = r.json()
@@ -116,7 +116,7 @@ def main():
         "status": "completed",
         "placements": {"source": "compute-1", "compute": "compute-2", "sink": "compute-3"},
         "selected_strategy": "resource_guarantee",
-        "estimated_metric": {"compute_latency_ms": 45000},
+        "estimated_metric": {"effective_gflops": 520.0},
         "external_routing_id": "ext-routing-e2e-001",
         "result_payload": {
             "path": ["compute-1", "compute-2", "compute-3"],

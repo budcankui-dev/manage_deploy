@@ -198,8 +198,8 @@ def parse_intent(utterance: str, existing_draft: dict[str, Any] | None = None) -
         ])
         if throughput is not None:
             result.business_objective = {
-                "metric_key": "throughput_gflops",
-                "operator": "<=",
+                "metric_key": "effective_gflops",
+                "operator": ">=",
                 "target_value": throughput,
                 "unit": "GFLOPS",
             }
