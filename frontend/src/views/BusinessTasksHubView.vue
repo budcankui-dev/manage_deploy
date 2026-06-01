@@ -13,11 +13,14 @@
       </div>
     </header>
 
-    <div class="success-rate-card" v-if="totalEvaluated > 0">
-      <div class="rate-number" :class="{ pass: totalSuccessRate >= 90, fail: totalSuccessRate < 90 }">
-        {{ totalSuccessRate.toFixed(1) }}%
+    <div class="success-rate-cards" v-if="totalEvaluated > 0">
+      <div v-for="item in successRateByType" :key="item.task_type" class="success-rate-card">
+        <div class="rate-number" :class="{ pass: item.rate >= 90, fail: item.rate < 90 }">
+          {{ item.rate.toFixed(1) }}%
+        </div>
+        <div class="rate-label">{{ taskTypeLabel(item.task_type) }}</div>
+        <div class="rate-detail">{{ item.success }}/{{ item.evaluated }} 达标</div>
       </div>
-      <div class="rate-label">业务目标成功率（{{ totalSuccessCount }}/{{ totalEvaluated }}）</div>
     </div>
 
     <el-collapse v-model="summaryOpen">
@@ -567,6 +570,16 @@ const taskTypeOptions = computed(() => {
 const totalEvaluated = computed(() => summary.value.reduce((s, r) => s + (r.evaluated_count || 0), 0))
 const totalSuccessCount = computed(() => summary.value.reduce((s, r) => s + (r.success_count || 0), 0))
 const totalSuccessRate = computed(() => totalEvaluated.value > 0 ? (totalSuccessCount.value / totalEvaluated.value) * 100 : 0)
+const successRateByType = computed(() => {
+  const map = {}
+  summary.value.forEach(row => {
+    const t = row.task_type || 'unknown'
+    if (!map[t]) map[t] = { task_type: t, evaluated: 0, success: 0 }
+    map[t].evaluated += row.evaluated_count || 0
+    map[t].success += row.success_count || 0
+  })
+  return Object.values(map).filter(x => x.evaluated > 0).map(x => ({ ...x, rate: (x.success / x.evaluated) * 100 }))
+})
 
 const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
 
@@ -1219,13 +1232,25 @@ async function submitSample() {
   border: 1px solid var(--border-subtle);
 }
 
+.success-rate-cards {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
 .success-rate-card {
   text-align: center;
-  padding: 24px;
-  margin-bottom: 16px;
+  padding: 20px 32px;
   background: #f8f9fa;
   border-radius: 8px;
   border: 1px solid #e4e7ed;
+  flex: 1;
+  min-width: 180px;
+}
+.rate-detail {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 .rate-number {
   font-size: 48px;
