@@ -96,6 +96,11 @@
             <el-descriptions-item label="状态">
               <el-tag :type="instanceStatusType(detail.instance.status)" size="small">{{ detail.instance.status }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item v-if="detail?.instance?.port_access_urls" label="端口访问">
+              <div v-for="(url, role) in detail.instance.port_access_urls" :key="role" style="font-family: monospace; font-size: 12px">
+                {{ role }}: {{ url }}
+              </div>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
 

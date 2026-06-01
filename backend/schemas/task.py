@@ -153,6 +153,7 @@ class TaskInstanceNodeResponse(BaseModel):
     container_id: Optional[str] = None
     container_name: Optional[str] = None
     error_message: Optional[str] = None
+    business_address: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -463,6 +464,7 @@ class TaskOrderInstanceSummary(BaseModel):
     status: TaskStatus
     node_count: int
     error_message: Optional[str] = None
+    port_access_urls: Optional[dict[str, str]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

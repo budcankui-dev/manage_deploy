@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -8,7 +9,7 @@ from typing import Optional
 from api.auth import get_current_user
 from database import get_db
 from enums import DeploymentMode, OrderStatus, RoutingStatus
-from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskOrder, User
+from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskInstanceNode, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
     BatchOperationResponse,
@@ -23,6 +24,7 @@ from schemas import (
 from services.business_task_query import get_order_detail_context
 from services.order_materialize import _resolve_node_id
 from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
+from services.port_plan import format_service_url, get_business_address
 from services.scheduler import TaskScheduler
 
 from .instances import _create_instance_from_template
@@ -129,11 +131,35 @@ async def get_order(
     detail.routing_result = routing_result if isinstance(routing_result, dict) else None
 
     if instance:
+        # Build port_access_urls from instance nodes
+        port_access_urls: dict[str, str] = {}
+        inst_nodes_result = await db.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance.id)
+        )
+        inst_nodes = inst_nodes_result.scalars().all()
+        for inst_node in inst_nodes:
+            if not inst_node.port_values:
+                continue
+            machine = (await db.execute(
+                select(NodeModel).where(NodeModel.id == inst_node.node_id)
+            )).scalar_one_or_none()
+            if not machine:
+                continue
+            biz_addr = get_business_address(machine)
+            for port_name, port_val in inst_node.port_values.items():
+                try:
+                    port_int = int(port_val)
+                except (TypeError, ValueError):
+                    continue
+                key = f"{inst_node.name}/{port_name}"
+                port_access_urls[key] = format_service_url(biz_addr, port_int)
+
         detail.instance = TaskOrderInstanceSummary(
             id=instance.id,
             status=instance.status,
             node_count=len(instance.nodes or []),
             error_message=instance.error_message,
+            port_access_urls=port_access_urls or None,
             created_at=instance.created_at,
             updated_at=instance.updated_at,
         )

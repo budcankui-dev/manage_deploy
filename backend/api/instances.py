@@ -47,7 +47,9 @@ from services.port_plan import (
     extract_host_ports,
     find_running_port_conflict_records,
     format_running_port_conflict_message,
+    get_business_address,
 )
+from services.auto_port_allocator import auto_allocate_ports
 from services.instance_builder import resolve_port_values
 
 logger = logging.getLogger(__name__)
@@ -433,9 +435,27 @@ async def _create_instance_from_template(
     for t_node in template_nodes:
         override = _find_override(t_node, instance.node_overrides)
         legacy_ports = pick_override(t_node, override, "ports")
+
+        # Auto-allocate ports for port_defs with auto=true
+        user_port_values = override.port_values if override else None
+        if t_node.port_defs and any(
+            isinstance(pd, dict) and pd.get("auto") for pd in t_node.port_defs
+        ):
+            target_node_id = (override.node_id if override and override.node_id else t_node.node_id)
+            machine = (await db.execute(
+                select(NodeModel).where(NodeModel.id == target_node_id)
+            )).scalar_one_or_none()
+            if machine:
+                agent_addr = machine.agent_address or f"http://{machine.management_ip}:8001"
+                user_port_values = await auto_allocate_ports(
+                    agent_address=agent_addr,
+                    port_defs=t_node.port_defs,
+                    existing_port_values=user_port_values,
+                )
+
         resolved_ports, normalized_port_values = resolve_port_values(
             t_node.port_defs,
-            override.port_values if override else None,
+            user_port_values,
             legacy_ports,
         )
         db_node = TaskInstanceNode(
@@ -562,6 +582,17 @@ async def get_instance(
     instance = result.scalar_one_or_none()
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
+
+    # Enrich nodes with business_address
+    for inst_node in instance.nodes:
+        machine = (await db.execute(
+            select(NodeModel).where(NodeModel.id == inst_node.node_id)
+        )).scalar_one_or_none()
+        if machine:
+            object.__setattr__(inst_node, "business_address", get_business_address(machine))
+        else:
+            object.__setattr__(inst_node, "business_address", None)
+
     return instance
 
 

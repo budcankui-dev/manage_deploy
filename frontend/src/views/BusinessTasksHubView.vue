@@ -41,6 +41,7 @@
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname || n.display_name" :value="n.id" />
           </el-select>
           <el-button size="small" type="primary" plain @click="showBaselineDialog = true">新增基线</el-button>
+          <el-button size="small" type="success" plain @click="showRunBaselineDialog = true">运行基线测试</el-button>
         </div>
         <el-table :data="baselines" size="small" v-loading="baselinesLoading" empty-text="暂无基线数据">
           <el-table-column prop="node_hostname" label="节点" width="140" />
@@ -293,6 +294,18 @@
               <el-table-column prop="image" label="镜像" min-width="180" />
               <el-table-column prop="container_id" label="容器" min-width="160" />
             </el-table>
+            <div v-if="instanceDetail?.nodes?.length" style="margin-top: 12px">
+              <h4 style="margin-bottom: 8px">端口访问</h4>
+              <el-table :data="portAccessRows" size="small" border>
+                <el-table-column prop="nodeName" label="子任务" width="100" />
+                <el-table-column prop="portName" label="端口名" width="100" />
+                <el-table-column label="访问地址" min-width="240">
+                  <template #default="{ row }">
+                    <code style="font-size: 12px">{{ row.accessUrl }}</code>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
           </template>
           <el-empty v-else description="尚未部署实例" />
         </el-tab-pane>
@@ -396,6 +409,32 @@
       </template>
     </el-dialog>
 
+    <!-- 运行基线测试对话框 -->
+    <el-dialog v-model="showRunBaselineDialog" title="运行基线测试" width="440px" destroy-on-close>
+      <el-alert type="info" :closable="false" style="margin-bottom:16px">
+        在后端本地运行基准测试（矩阵乘法），计算 effective_gflops 中位数作为基线值。
+      </el-alert>
+      <el-form :model="runBaselineForm" label-width="90px" size="small">
+        <el-form-item label="节点">
+          <el-select v-model="runBaselineForm.node_id" placeholder="选择节点" style="width:100%">
+            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="任务类型">
+          <el-select v-model="runBaselineForm.task_type" style="width:100%">
+            <el-option label="high_throughput_matmul" value="high_throughput_matmul" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="运行次数">
+          <el-input-number v-model="runBaselineForm.runs" :min="1" :max="10" style="width:100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showRunBaselineDialog = false">取消</el-button>
+        <el-button type="primary" :loading="runBaselineLoading" @click="runBaseline">开始测试</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新增基线对话框 -->
     <el-dialog v-model="showBaselineDialog" title="新增节点基线" width="440px" destroy-on-close>
       <el-form :model="newBaseline" label-width="90px" size="small">
@@ -466,6 +505,13 @@ const baselines = ref([])
 const baselinesLoading = ref(false)
 const baselineFilter = reactive({ node_id: '' })
 const showBaselineDialog = ref(false)
+const showRunBaselineDialog = ref(false)
+const runBaselineLoading = ref(false)
+const runBaselineForm = reactive({
+  node_id: '',
+  task_type: 'high_throughput_matmul',
+  runs: 3,
+})
 const summary = ref([])
 const summaryLoading = ref(false)
 const listLoading = ref(false)
@@ -521,6 +567,22 @@ const newBaseline = reactive({
 const placementRows = computed(() => {
   const placements = orderDetail.value?.routing_result?.placements || {}
   return Object.entries(placements).map(([role, node_id]) => ({ role, node_id }))
+})
+
+const portAccessRows = computed(() => {
+  if (!instanceDetail.value?.nodes) return []
+  const rows = []
+  for (const node of instanceDetail.value.nodes) {
+    const addr = node.business_address || ''
+    for (const [name, port] of Object.entries(node.port_values || {})) {
+      rows.push({
+        nodeName: node.name,
+        portName: name,
+        accessUrl: addr ? (addr.includes(':') ? `http://[${addr}]:${port}` : `http://${addr}:${port}`) : `*:${port}`,
+      })
+    }
+  }
+  return rows
 })
 
 const detailTaskType = computed(() => orderDetail.value?.business_task?.task_type || '')
@@ -694,6 +756,24 @@ async function createBaseline() {
     if (e.response?.status === 409) {
       ElMessage.warning('该节点/任务类型/指标的基线已存在')
     }
+  }
+}
+
+async function runBaseline() {
+  if (!runBaselineForm.node_id) {
+    ElMessage.warning('请选择节点')
+    return
+  }
+  runBaselineLoading.value = true
+  try {
+    const { data } = await baselinesApi.run({ ...runBaselineForm })
+    ElMessage.success(`基线测试完成: ${data.baseline_value?.toFixed(2)} ${data.unit || ''}`)
+    showRunBaselineDialog.value = false
+    await loadBaselines()
+  } catch (e) {
+    // error handled by interceptor
+  } finally {
+    runBaselineLoading.value = false
   }
 }
 

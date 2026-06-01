@@ -132,7 +132,14 @@
               <div class="param-block" v-if="node.port_defs?.length"><span class="label">命名端口</span>
                 <div class="named-ports">
                   <div v-for="def in node.port_defs" :key="def.name" class="named-port-tag">
-                    <code>{{ def.name }}</code><span>{{ def.label || def.name }}</span><span class="port-val">{{ node.port_values?.[def.name] ?? def.default ?? '-' }}</span>
+                    <code>{{ def.name }}</code><span>{{ def.label || def.name }}</span><span class="port-val">
+  <template v-if="node.business_address">
+    {{ node.business_address.includes(':') ? `[${node.business_address}]` : node.business_address }}:{{ node.port_values?.[def.name] ?? def.default ?? '-' }}
+  </template>
+  <template v-else>
+    {{ node.port_values?.[def.name] ?? def.default ?? '-' }}
+  </template>
+</span>
                   </div>
                 </div>
               </div>

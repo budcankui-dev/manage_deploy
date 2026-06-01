@@ -105,6 +105,7 @@ export const baselinesApi = {
   create: (data) => api.post('/baselines', data),
   update: (id, data) => api.put(`/baselines/${id}`, data),
   delete: (id) => api.delete(`/baselines/${id}`),
+  run: (data) => api.post('/baselines/run', data, { timeout: 120000 }),
 }
 
 export const authApi = {

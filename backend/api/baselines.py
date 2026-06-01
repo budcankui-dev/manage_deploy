@@ -1,5 +1,6 @@
 """Node baseline CRUD API — 管理节点基线性能数据。"""
 
+import asyncio
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,6 +46,76 @@ class BaselineUpdate(BaseModel):
     unit: Optional[str] = None
     run_count: Optional[int] = None
     raw_values: Optional[list[float]] = None
+
+
+class BaselineRunRequest(BaseModel):
+    node_id: str
+    task_type: str
+    runs: int = 3
+
+
+class BaselineRunResponse(BaseModel):
+    status: str
+    baseline_id: Optional[str] = None
+    baseline_value: Optional[float] = None
+    raw_values: Optional[list[float]] = None
+    unit: Optional[str] = None
+
+
+@router.post("/run", response_model=BaselineRunResponse)
+async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = Depends(get_db)):
+    """在后端本地运行基准测试并保存结果。"""
+    from services.baseline_runner import run_benchmark, TASK_BENCHMARKS
+
+    node = (await db.execute(
+        select(NodeModel).where(NodeModel.id == payload.node_id)
+    )).scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    if payload.task_type not in TASK_BENCHMARKS:
+        raise HTTPException(status_code=400, detail=f"Unknown task_type: {payload.task_type}")
+
+    result = await asyncio.to_thread(run_benchmark, payload.task_type, payload.runs)
+
+    existing = (await db.execute(
+        select(NodeBaseline).where(
+            NodeBaseline.node_id == payload.node_id,
+            NodeBaseline.task_type == payload.task_type,
+            NodeBaseline.metric_key == result["metric_key"],
+        )
+    )).scalar_one_or_none()
+
+    if existing:
+        existing.baseline_value = result["baseline_value"]
+        existing.raw_values = result["raw_values"]
+        existing.run_count = result["run_count"]
+        await db.commit()
+        await db.refresh(existing)
+        baseline_id = existing.id
+    else:
+        row = NodeBaseline(
+            node_id=payload.node_id,
+            task_type=payload.task_type,
+            metric_key=result["metric_key"],
+            baseline_value=result["baseline_value"],
+            operator=result["operator"],
+            unit=result["unit"],
+            run_count=result["run_count"],
+            raw_values=result["raw_values"],
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        baseline_id = row.id
+
+    return BaselineRunResponse(
+        status="completed",
+        baseline_id=baseline_id,
+        baseline_value=result["baseline_value"],
+        raw_values=result["raw_values"],
+        unit=result["unit"],
+    )
 
 
 @router.get("", response_model=list[BaselineResponse])

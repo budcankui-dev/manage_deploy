@@ -11,6 +11,8 @@ class PortDefSpec(BaseModel):
     name: str = Field(..., description="变量名，如 api / grpc / metrics")
     label: Optional[str] = Field(default=None, description="用途说明")
     default: Optional[int] = Field(default=None, description="实例未填时的默认端口")
+    auto: bool = Field(default=False, description="是否自动分配端口")
+    range: Optional[list[int]] = Field(default=None, description="自动分配范围 [start, end]")
 
 
 class MacroDefSpec(BaseModel):
