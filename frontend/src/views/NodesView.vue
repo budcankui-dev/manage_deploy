@@ -31,6 +31,10 @@
             <span class="status-badge" :class="node.status">
               已注册
             </span>
+            <el-tag v-if="node.node_kind" size="small" :type="nodeKindTagType(node.node_kind)" style="margin-left: 8px">
+              {{ nodeKindLabel(node.node_kind) }}
+            </el-tag>
+            <el-tag v-if="node.is_schedulable === false" size="small" type="info" style="margin-left: 4px">不可调度</el-tag>
           </div>
           <el-dropdown trigger="click">
             <el-button text circle>
@@ -207,6 +211,15 @@ const paginatedNodes = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return (nodes.value || []).slice(start, start + pageSize.value)
 })
+
+function nodeKindLabel(kind) {
+  const labels = { worker: '计算节点', terminal: '终端节点', router: '路由设备', switch: '交换机', storage: '存储节点' }
+  return labels[kind] || kind || '未知'
+}
+function nodeKindTagType(kind) {
+  const types = { worker: 'primary', terminal: 'success', router: 'warning', switch: 'info', storage: '' }
+  return types[kind] || 'info'
+}
 
 function toggleSelected(id) {
   if (selectedIds.value.includes(id)) {

@@ -270,7 +270,12 @@
             <h3 class="section-title">节点放置</h3>
             <el-table :data="placementRows" size="small">
               <el-table-column prop="role" label="角色" width="120" />
-              <el-table-column prop="node_id" label="节点 ID" min-width="220" />
+              <el-table-column label="部署节点" min-width="220">
+                <template #default="{ row }">
+                  <span v-if="row.node_id === '未部署'" style="color: #909399">未部署容器</span>
+                  <span v-else>{{ row.node_id }}</span>
+                </template>
+              </el-table-column>
             </el-table>
           </template>
           <el-empty v-else description="无路由结果" />
@@ -401,7 +406,7 @@
         </el-form-item>
         <el-form-item label="计算节点">
           <el-select v-model="manualPlacements.worker.worker_host" placeholder="选择节点" style="width:200px">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+            <el-option v-for="n in schedulableNodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
           <el-input v-model="manualPlacements.worker.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
         </el-form-item>
@@ -453,7 +458,11 @@
           </el-select>
         </el-form-item>
         <el-form-item label="任务类型">
-          <el-input v-model="newBaseline.task_type" placeholder="如 high_throughput_matmul" />
+          <el-select v-model="newBaseline.task_type" placeholder="选择任务类型" style="width:100%">
+            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
+            <el-option label="低时延视频链路" value="low_latency_video_pipeline" />
+            <el-option label="模型训练" value="llm_text_generation" />
+          </el-select>
         </el-form-item>
         <el-form-item label="指标">
           <el-input v-model="newBaseline.metric_key" placeholder="如 effective_gflops" />
@@ -531,6 +540,8 @@ const page = ref(1)
 const pageSize = ref(20)
 const nodes = ref([])
 
+const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
+
 const filters = reactive({
   q: '',
   task_type: '',
@@ -578,8 +589,22 @@ const newBaseline = reactive({
 })
 
 const placementRows = computed(() => {
-  const placements = orderDetail.value?.routing_result?.placements || {}
-  return Object.entries(placements).map(([role, node_id]) => ({ role, node_id }))
+  const placements = orderDetail.value?.routing_result?.placements
+  if (!placements) return []
+  if (Array.isArray(placements)) {
+    const map = {}
+    placements.forEach(p => { map[p.node_id] = p.worker_host })
+    return [
+      { role: '数据源', node_id: map.source || '未部署' },
+      { role: '计算', node_id: map.compute || map.worker || '未部署' },
+      { role: '汇总', node_id: map.sink || '未部署' },
+    ]
+  }
+  return [
+    { role: '数据源', node_id: placements.source || '未部署' },
+    { role: '计算', node_id: placements.compute || placements.worker || '未部署' },
+    { role: '汇总', node_id: placements.sink || '未部署' },
+  ]
 })
 
 const portAccessRows = computed(() => {

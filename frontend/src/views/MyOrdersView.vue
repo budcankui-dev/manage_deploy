@@ -91,7 +91,7 @@
             <el-descriptions-item label="策略">{{ detail.routing_result.selected_strategy || '-' }}</el-descriptions-item>
             <el-descriptions-item label="节点分配">
               <span v-if="detail.routing_result.placements">
-                {{ detail.routing_result.placements.source }} → {{ detail.routing_result.placements.compute }} → {{ detail.routing_result.placements.sink }}
+                {{ detail.routing_result.placements?.source || '(未部署)' }} → {{ detail.routing_result.placements?.compute || detail.routing_result.placements?.worker || '-' }} → {{ detail.routing_result.placements?.sink || '(未部署)' }}
               </span>
               <span v-else>-</span>
             </el-descriptions-item>

@@ -222,7 +222,12 @@
             <el-icon class="confirm-icon"><CircleCheck /></el-icon>
             <div class="confirm-text">
               <strong>参数已完整</strong>
-              <p>所有参数已就绪，确认后提交任务</p>
+              <div class="confirm-params">
+                <p v-if="draft?.task_type"><span class="param-label">任务类型：</span>{{ taskTypeLabel(draft.task_type) }}</p>
+                <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ draft.source_name || '-' }} → {{ draft.destination_name || '-' }}</p>
+                <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
+                <p v-if="draft?.data_profile?.matrix_size"><span class="param-label">规模：</span>{{ draft.data_profile.matrix_size }}×{{ draft.data_profile.matrix_size }} 矩阵 × {{ draft.data_profile.batch_count || 1 }} 批</p>
+              </div>
             </div>
             <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
           </div>
@@ -1602,6 +1607,15 @@ onBeforeUnmount(stopRoutingPolling)
   margin: 4px 0 0;
   font-size: 13px;
   color: #666;
+}
+.confirm-params {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.8;
+}
+.confirm-params .param-label {
+  color: #909399;
 }
 
 /* ── Composer ── */

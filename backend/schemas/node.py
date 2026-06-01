@@ -12,7 +12,8 @@ class NodeBase(BaseModel):
 
 
 class NodeCreate(NodeBase):
-    pass
+    node_kind: Optional[str] = None
+    is_schedulable: bool = True
 
 
 class NodeUpdate(BaseModel):
@@ -21,12 +22,16 @@ class NodeUpdate(BaseModel):
     management_ip: Optional[str] = None
     business_ip: Optional[str] = None
     business_ipv6: Optional[str] = None
+    node_kind: Optional[str] = None
+    is_schedulable: Optional[bool] = None
 
 
 class NodeResponse(NodeBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    node_kind: Optional[str] = None
+    is_schedulable: bool = True
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -40,6 +45,8 @@ class NodeSimple(BaseModel):
     management_ip: str
     business_ip: str
     business_ipv6: Optional[str] = None
+    node_kind: Optional[str] = None
+    is_schedulable: bool = True
 
 
 class OrphanContainerResponse(BaseModel):
