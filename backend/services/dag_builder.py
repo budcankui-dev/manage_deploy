@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from services.resource_estimator import estimate_resources, estimate_data_mb
+
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 POLICY_TYPE_MAP = {
@@ -32,10 +34,9 @@ def build_matmul_dag(
 
     ms = matrix_size or 1024
     bc = batch_count or 1
-    gpu_mem_mb = max(256, int((ms * ms * 8 * 3 * bc) / (1024 * 1024)))
-    gpu_mem_mb = min(gpu_mem_mb, 16384)
-    cpu_mem_mb = max(1024, gpu_mem_mb // 2)
-    data_mb = max(1, int((ms * ms * 8) / (1024 * 1024)))
+    profile = {"matrix_size": ms, "batch_count": bc}
+    resources = estimate_resources("high_throughput_matmul", profile)
+    data_mb = estimate_data_mb("high_throughput_matmul", profile)
 
     policy = POLICY_TYPE_MAP.get(routing_strategy or "resource_guarantee", "RESOURCE_GUARANTEE")
 
@@ -54,15 +55,15 @@ def build_matmul_dag(
         "nodes": [
             {
                 "node_id": "source",
-                "resources": {"cpu_units": 2, "cpu_mem_mb": 512, "gpu_units": 0, "gpu_mem_mb": 0, "disk_mb": 0},
+                "resources": resources["source"],
             },
             {
                 "node_id": "compute",
-                "resources": {"cpu_units": 8, "cpu_mem_mb": cpu_mem_mb, "gpu_units": 1, "gpu_mem_mb": gpu_mem_mb, "disk_mb": 0},
+                "resources": resources["compute"],
             },
             {
                 "node_id": "sink",
-                "resources": {"cpu_units": 2, "cpu_mem_mb": 512, "gpu_units": 0, "gpu_mem_mb": 0, "disk_mb": 0},
+                "resources": resources["sink"],
             },
         ],
     }

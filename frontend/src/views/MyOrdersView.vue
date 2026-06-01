@@ -37,6 +37,7 @@
         <div class="detail-header">
           <h2>{{ selectedOrder.name || selectedOrder.id.slice(0, 16) }}</h2>
           <el-tag :type="statusTagType(selectedOrder.status)" size="large">{{ formatStatus(selectedOrder.status) }}</el-tag>
+          <el-button v-if="selectedOrder.status === 'pending'" type="danger" plain size="small" @click="cancelOrder" :loading="cancelLoading">取消工单</el-button>
         </div>
 
         <!-- Basic info -->
@@ -51,6 +52,15 @@
             <el-descriptions-item label="更新时间">{{ formatTime(selectedOrder.updated_at) }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
+
+        <!-- Status steps -->
+        <el-steps :active="orderStepIndex" finish-status="success" align-center style="margin: 16px 0">
+          <el-step title="提交" />
+          <el-step title="节点分配" />
+          <el-step title="部署" />
+          <el-step title="运行" />
+          <el-step title="评估完成" />
+        </el-steps>
 
         <!-- Task info -->
         <el-card v-if="detail" class="detail-card">
@@ -94,7 +104,7 @@
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="实例 ID"><code>{{ detail.instance.id }}</code></el-descriptions-item>
             <el-descriptions-item label="状态">
-              <el-tag :type="instanceStatusType(detail.instance.status)" size="small">{{ detail.instance.status }}</el-tag>
+              <el-tag :type="instanceStatusType(detail.instance.status)" size="small">{{ instanceStatusLabel(detail.instance.status) }}</el-tag>
             </el-descriptions-item>
             <el-descriptions-item v-if="detail?.instance?.port_access_urls" label="端口访问">
               <div v-for="(url, role) in detail.instance.port_access_urls" :key="role" style="font-family: monospace; font-size: 12px">
@@ -107,16 +117,10 @@
         <!-- Business metrics -->
         <el-card v-if="detail?.evaluation" class="detail-card">
           <template #header>业务指标</template>
-          <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="指标键">{{ detail.evaluation.metric_key || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="实际值">{{ detail.evaluation.actual_value ?? '-' }}</el-descriptions-item>
-            <el-descriptions-item label="目标值">{{ detail.evaluation.target_value ?? '-' }}</el-descriptions-item>
-            <el-descriptions-item label="结果">
-              <el-tag :type="detail.evaluation.passed ? 'success' : 'danger'" size="small">
-                {{ detail.evaluation.passed ? '达标' : '未达标' }}
-              </el-tag>
-            </el-descriptions-item>
-          </el-descriptions>
+          <div class="result-verdict" :class="verdictClass">
+            <strong>{{ verdictTitle }}</strong>
+            <p>{{ verdictSubtitle }}</p>
+          </div>
         </el-card>
 
         <div v-if="detailLoading" class="detail-loading">
@@ -129,16 +133,36 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ordersApi } from '@/api'
-import { taskTypeLabel } from '@/constants/businessTaskDisplay'
+import { taskTypeLabel, buildMatmulVerdict } from '@/constants/businessTaskDisplay'
 
 const orders = ref([])
 const selectedOrder = ref(null)
 const detail = ref(null)
 const listLoading = ref(false)
 const detailLoading = ref(false)
+const cancelLoading = ref(false)
+
+const orderStepIndex = computed(() => {
+  const s = selectedOrder.value?.status
+  if (!s || s === 'pending') return 0
+  if (s === 'materialized') return 2
+  if (s === 'running') return 3
+  if (s === 'completed') return 4
+  if (s === 'failed' || s === 'cancelled') return -1
+  return 0
+})
+
+const verdict = computed(() => {
+  if (!detail.value?.evaluation) return null
+  return buildMatmulVerdict(detail.value.evaluation)
+})
+const verdictClass = computed(() => verdict.value?.statusClass || '')
+const verdictTitle = computed(() => verdict.value?.title || '')
+const verdictSubtitle = computed(() => verdict.value?.subtitle || '')
 
 async function loadOrders() {
   listLoading.value = true
@@ -166,10 +190,27 @@ async function selectOrder(order) {
   }
 }
 
+async function cancelOrder() {
+  if (!selectedOrder.value) return
+  try {
+    await ElMessageBox.confirm('确定取消此工单？', '确认')
+    cancelLoading.value = true
+    await ordersApi.cancel(selectedOrder.value.id)
+    ElMessage.success('工单已取消')
+    await loadOrders()
+    selectedOrder.value = null
+    detail.value = null
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('取消失败')
+  } finally {
+    cancelLoading.value = false
+  }
+}
+
 function formatStatus(status) {
   return {
     pending: '待处理',
-    materialized: '已物化',
+    materialized: '已部署',
     running: '运行中',
     failed: '失败',
     cancelled: '已取消',
@@ -196,6 +237,17 @@ function instanceStatusType(status) {
     failed: 'danger',
     starting: 'warning',
   }[status] || 'info'
+}
+
+function instanceStatusLabel(status) {
+  return {
+    running: '运行中',
+    stopped: '已停止',
+    failed: '失败',
+    starting: '启动中',
+    scheduled: '已调度',
+    pending: '待启动',
+  }[status] || status || '-'
 }
 
 function formatTime(value) {
@@ -319,6 +371,13 @@ onMounted(loadOrders)
 .detail-card {
   margin-bottom: 16px;
 }
+
+.result-verdict { padding: 16px; border-radius: 8px; }
+.result-verdict.success { background: #f0f9eb; }
+.result-verdict.danger { background: #fef0f0; }
+.result-verdict.pending { background: #f4f4f5; }
+.result-verdict strong { display: block; margin-bottom: 4px; }
+.result-verdict p { margin: 0; color: #606266; font-size: 13px; }
 
 .detail-loading {
   display: flex;

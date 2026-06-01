@@ -13,6 +13,13 @@
       </div>
     </header>
 
+    <div class="success-rate-card" v-if="totalEvaluated > 0">
+      <div class="rate-number" :class="{ pass: totalSuccessRate >= 90, fail: totalSuccessRate < 90 }">
+        {{ totalSuccessRate.toFixed(1) }}%
+      </div>
+      <div class="rate-label">业务目标成功率（{{ totalSuccessCount }}/{{ totalEvaluated }}）</div>
+    </div>
+
     <el-collapse v-model="summaryOpen">
       <el-collapse-item title="按任务类型和路由策略统计" name="summary">
         <el-table :data="summary" size="small" v-loading="summaryLoading">
@@ -50,7 +57,9 @@
           <el-table-column label="基线值" width="120">
             <template #default="{ row }">{{ row.baseline_value?.toFixed(2) }} {{ row.unit || '' }}</template>
           </el-table-column>
-          <el-table-column prop="operator" label="方向" width="60" />
+          <el-table-column prop="operator" label="方向" width="60">
+            <template #default="{ row }">{{ row.operator === '>=' ? '越高越好' : '越低越好' }}</template>
+          </el-table-column>
           <el-table-column prop="run_count" label="测试次数" width="80" />
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
@@ -78,9 +87,9 @@
           <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="loadList">
             <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.business_success" placeholder="耗时验收" clearable style="width: 120px" @change="loadList">
+          <el-select v-model="filters.business_success" placeholder="性能达标" clearable style="width: 120px" @change="loadList">
             <el-option label="达标" :value="true" />
-            <el-option label="超标" :value="false" />
+            <el-option label="未达标" :value="false" />
           </el-select>
           <el-checkbox v-model="filters.include_cancelled" @change="loadList">显示已取消</el-checkbox>
         </div>
@@ -122,7 +131,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="耗时达标" width="90">
+        <el-table-column label="性能达标" width="90">
           <template #default="{ row }">
             <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
             <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
@@ -341,7 +350,7 @@
               <span class="consistency-detail">{{ detailMatmulConsistency.detail }}</span>
             </div>
 
-            <h3 class="section-title">耗时验收</h3>
+            <h3 class="section-title">性能验收</h3>
             <div class="result-verdict" :class="detailMatmulVerdict.statusClass">
               <strong>{{ detailMatmulVerdict.title }}</strong>
               <p>{{ detailMatmulVerdict.subtitle }}</p>
@@ -357,7 +366,7 @@
               <el-descriptions-item label="实际 / 目标">
                 {{ orderDetail.evaluation.actual_value }} / {{ orderDetail.evaluation.target_value }} {{ orderDetail.evaluation.unit || '' }}
               </el-descriptions-item>
-              <el-descriptions-item label="耗时达标">
+              <el-descriptions-item label="性能达标">
                 <el-tag :type="orderDetail.evaluation.business_success ? 'success' : 'danger'">
                   {{ orderDetail.evaluation.business_success ? '达标' : '未达标' }}
                 </el-tag>
@@ -384,19 +393,19 @@
     <el-dialog v-model="manualRoutingVisible" title="手动分配路由" width="520px" destroy-on-close>
       <p style="margin-bottom:12px">为任务 <strong>{{ manualRoutingOrder?.name || '未命名' }}</strong> 分配计算节点</p>
       <el-form label-width="100px" size="small">
-        <el-form-item label="Source 节点">
+        <el-form-item label="数据源节点">
           <el-select v-model="manualPlacements.source.worker_host" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
           <el-checkbox v-model="manualPlacements.source.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
         </el-form-item>
-        <el-form-item label="Worker 节点">
+        <el-form-item label="计算节点">
           <el-select v-model="manualPlacements.worker.worker_host" placeholder="选择节点" style="width:200px">
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
           <el-input v-model="manualPlacements.worker.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
         </el-form-item>
-        <el-form-item label="Sink 节点">
+        <el-form-item label="汇总节点">
           <el-select v-model="manualPlacements.sink.worker_host" placeholder="选择节点" :disabled="manualPlacements.sink.skip_deploy" clearable style="width:200px">
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
@@ -422,7 +431,7 @@
         </el-form-item>
         <el-form-item label="任务类型">
           <el-select v-model="runBaselineForm.task_type" style="width:100%">
-            <el-option label="high_throughput_matmul" value="high_throughput_matmul" />
+            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
           </el-select>
         </el-form-item>
         <el-form-item label="运行次数">
@@ -543,6 +552,10 @@ const taskTypeOptions = computed(() => {
   const fromList = items.value.map((row) => row.task_type).filter(Boolean)
   return [...new Set([...fromSummary, ...fromList])]
 })
+
+const totalEvaluated = computed(() => summary.value.reduce((s, r) => s + (r.evaluated_count || 0), 0))
+const totalSuccessCount = computed(() => summary.value.reduce((s, r) => s + (r.success_count || 0), 0))
+const totalSuccessRate = computed(() => totalEvaluated.value > 0 ? (totalSuccessCount.value / totalEvaluated.value) * 100 : 0)
 
 const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
 
@@ -1179,6 +1192,27 @@ async function submitSample() {
   line-height: 1.5;
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
+}
+
+.success-rate-card {
+  text-align: center;
+  padding: 24px;
+  margin-bottom: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
+}
+.rate-number {
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.rate-number.pass { color: #67c23a; }
+.rate-number.fail { color: #f56c6c; }
+.rate-label {
+  font-size: 14px;
+  color: #606266;
+  margin-top: 8px;
 }
 
 .deploy-actions {

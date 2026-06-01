@@ -170,13 +170,13 @@ export function buildMatmulVerdict(evaluation) {
   const target = evaluation.target_value
   if (evaluation.business_success) {
     return {
-      title: '计算已完成，耗时达标',
+      title: '计算已完成，性能达标',
       subtitle: `实际 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: target, unit })}。`,
       statusClass: 'success',
     }
   }
   return {
-    title: '计算已完成，耗时未达标',
+    title: '计算已完成，性能未达标',
     subtitle: evaluation.failure_reason || `实际 ${actual} ${unit} 超过目标 ${target} ${unit}。`,
     statusClass: 'danger',
   }

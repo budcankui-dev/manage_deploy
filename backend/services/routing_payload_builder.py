@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from services.resource_estimator import estimate_resources, estimate_data_mb
+
 
 def build_routing_payload(
     order_id: str,
@@ -34,7 +36,7 @@ def build_routing_payload(
     submit_ts_ms = int(business_start_time.timestamp() * 1000)
     deadline_ms = int(business_end_time.timestamp() * 1000)
 
-    nodes = _build_dag_nodes(task_type, template_nodes, resource_requirement)
+    nodes = _build_dag_nodes(task_type, template_nodes, resource_requirement, data_profile)
     edges = _build_dag_edges(task_type, nodes, data_profile)
 
     return {
@@ -75,6 +77,7 @@ def _build_dag_nodes(
     task_type: str,
     template_nodes: list[dict[str, Any]] | None,
     resource_requirement: dict[str, Any] | None,
+    data_profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的逻辑节点列表。"""
     if template_nodes:
@@ -94,37 +97,40 @@ def _build_dag_nodes(
             for i, n in enumerate(template_nodes)
         ]
 
-    defaults = _default_nodes_for_task_type(task_type, resource_requirement)
+    defaults = _default_nodes_for_task_type(task_type, resource_requirement, data_profile)
     return defaults
 
 
 def _default_nodes_for_task_type(
     task_type: str,
     resource_requirement: dict[str, Any] | None,
+    data_profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    res = resource_requirement or {}
-    cpu = res.get("cpu_units", 10)
-    mem = res.get("mem_mb", 1024)
-    gpu = res.get("gpu_units", 0)
-    est_ms = res.get("est_runtime_ms", 600000)
+    estimated = estimate_resources(task_type, data_profile)
+    res_override = resource_requirement or {}
 
-    if task_type == "high_throughput_matmul":
-        return [
-            {"node_id": "source", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": 0}, "exec": {"est_runtime_ms": est_ms}},
-            {"node_id": "compute", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": gpu}, "exec": {"est_runtime_ms": est_ms}},
-            {"node_id": "sink", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": 0}, "exec": {"est_runtime_ms": est_ms}},
-        ]
-    elif task_type == "low_latency_video_pipeline":
-        return [
-            {"node_id": "video", "resources": {"cpu_units": 20, "mem_mb": mem, "disk_mb": 1024, "gpu_units": 0}, "exec": {"est_runtime_ms": est_ms}},
-            {"node_id": "infer", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": gpu}, "exec": {"est_runtime_ms": est_ms}},
-        ]
-    else:
-        return [
-            {"node_id": "source", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": 0}, "exec": {"est_runtime_ms": est_ms}},
-            {"node_id": "compute", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": gpu}, "exec": {"est_runtime_ms": est_ms}},
-            {"node_id": "sink", "resources": {"cpu_units": cpu, "mem_mb": mem, "disk_mb": 1024, "gpu_units": 0}, "exec": {"est_runtime_ms": est_ms}},
-        ]
+    nodes = []
+    for role, res in estimated.items():
+        # Merge: override wins if provided
+        merged = {**res}
+        if res_override:
+            for key in ("cpu_units", "cpu_mem_mb", "gpu_units", "gpu_mem_mb", "disk_mb"):
+                if key in res_override:
+                    merged[key] = res_override[key]
+
+        nodes.append({
+            "node_id": role,
+            "resources": {
+                "cpu_units": merged["cpu_units"],
+                "mem_mb": merged["cpu_mem_mb"],
+                "disk_mb": merged["disk_mb"],
+                "gpu_units": merged["gpu_units"],
+            },
+            "exec": {
+                "est_runtime_ms": res_override.get("est_runtime_ms", 600000),
+            },
+        })
+    return nodes
 
 
 def _build_dag_edges(
@@ -133,8 +139,7 @@ def _build_dag_edges(
     data_profile: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的边列表，表达业务数据流向。"""
-    profile = data_profile or {}
-    data_mb = profile.get("data_mb", 20)
+    data_mb = estimate_data_mb(task_type, data_profile)
 
     if len(nodes) < 2:
         return []
