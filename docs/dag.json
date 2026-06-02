@@ -1,0 +1,45 @@
+{
+    "job_id": "XXXX",
+    "_comment": "低延时转发模态",
+    "job_name": "视频AI推理",
+    "modal": "低延时转发模态",
+    "policy_type": "COST_CONSTRAINED",
+    "submit_time":"yyyy-mm-dd hh:mm:ss", 
+    "scheduled_start_time":"yyyy-mm-dd hh:mm:ss",
+    "scheduled_end_time ": "yyyy-mm-dd hh:mm:ss",
+    "edges": [
+        {
+            "to": "infer",
+            "from": "video",
+            "data_mb": 20
+        }
+    ],
+
+    "nodes": [
+        {
+            "exec": {
+                "est_runtime_ms": 600000
+            },
+            "node_id": "video",
+            "resources": {
+                "mem_mb": 1024,
+                "disk_mb": 1024,
+                "cpu_units": 20,
+                "gpu_units": 0
+            }
+        },
+        {
+            "exec": {
+                "est_runtime_ms": 600000
+            },
+            "node_id": "infer",
+            "resources": {
+                "mem_mb": 1024,
+                "disk_mb": 1024,
+                "cpu_units": 10,
+                "gpu_units": 0
+            }
+        }
+    ]
+ 
+}
