@@ -72,8 +72,9 @@
               <span v-if="row.std_dev != null" style="margin-left:4px;font-size:11px;color:#999">σ={{ row.std_dev.toFixed(2) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="140">
             <template #default="{ row }">
+              <el-button size="small" type="primary" text @click="openEditBaseline(row)">编辑</el-button>
               <el-button size="small" type="danger" text @click="deleteBaseline(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -460,6 +461,31 @@
       </template>
     </el-dialog>
 
+    <!-- 编辑基线对话框 -->
+    <el-dialog v-model="showEditBaselineDialog" title="编辑基线" width="440px" destroy-on-close>
+      <el-form :model="editBaselineForm" label-width="90px" size="small">
+        <el-form-item label="基线值">
+          <el-input-number v-model="editBaselineForm.baseline_value" :precision="2" :min="0" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="方向">
+          <el-select v-model="editBaselineForm.operator" style="width:100%">
+            <el-option label=">= (越大越好)" value=">=" />
+            <el-option label="<= (越小越好)" value="<=" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="单位">
+          <el-input v-model="editBaselineForm.unit" placeholder="如 GFLOPS" />
+        </el-form-item>
+        <el-form-item label="测试次数">
+          <el-input-number v-model="editBaselineForm.run_count" :min="1" :max="100" style="width:100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditBaselineDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveEditBaseline">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新增基线对话框 -->
     <el-dialog v-model="showBaselineDialog" title="新增节点基线" width="440px" destroy-on-close>
       <el-form :model="newBaseline" label-width="90px" size="small">
@@ -599,6 +625,26 @@ const manualPlacements = ref({
   worker: { worker_host: '', gpu_device: '0', skip_deploy: false },
   sink: { worker_host: '', gpu_device: null, skip_deploy: false },
 })
+
+const showEditBaselineDialog = ref(false)
+const editBaselineId = ref('')
+const editBaselineForm = reactive({ baseline_value: 0, operator: '>=', unit: '', run_count: 3 })
+
+function openEditBaseline(row) {
+  editBaselineId.value = row.id
+  editBaselineForm.baseline_value = row.baseline_value
+  editBaselineForm.operator = row.operator
+  editBaselineForm.unit = row.unit || ''
+  editBaselineForm.run_count = row.run_count
+  showEditBaselineDialog.value = true
+}
+
+async function saveEditBaseline() {
+  await baselinesApi.update(editBaselineId.value, { ...editBaselineForm })
+  ElMessage.success('基线已更新')
+  showEditBaselineDialog.value = false
+  await loadBaselines()
+}
 
 const newBaseline = reactive({
   node_id: '',
