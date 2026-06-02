@@ -31,9 +31,13 @@
             <span class="status-badge" :class="node.status">
               已注册
             </span>
-            <el-tag v-if="node.node_kind" size="small" :type="nodeKindTagType(node.node_kind)" style="margin-left: 8px">
+            <el-tag v-if="node.node_kind && node.node_kind !== 'both'" size="small" :type="nodeKindTagType(node.node_kind)" style="margin-left: 8px">
               {{ nodeKindLabel(node.node_kind) }}
             </el-tag>
+            <template v-if="node.node_kind === 'both'">
+              <el-tag size="small" type="primary" style="margin-left: 8px">计算节点</el-tag>
+              <el-tag size="small" type="success" style="margin-left: 4px">终端节点</el-tag>
+            </template>
             <el-tag v-if="node.is_schedulable === false" size="small" type="info" style="margin-left: 4px">不可调度</el-tag>
           </div>
           <el-dropdown trigger="click">
@@ -213,11 +217,11 @@ const paginatedNodes = computed(() => {
 })
 
 function nodeKindLabel(kind) {
-  const labels = { worker: '计算节点', terminal: '终端节点', both: '计算+终端', router: '路由设备', switch: '交换机', storage: '存储节点' }
+  const labels = { worker: '计算节点', terminal: '终端节点', both: 'both', admin: '管理节点', router: '路由设备', switch: '交换机', storage: '存储节点' }
   return labels[kind] || kind || '未知'
 }
 function nodeKindTagType(kind) {
-  const types = { worker: 'primary', terminal: 'success', both: 'warning', router: 'warning', switch: 'info', storage: '' }
+  const types = { worker: 'primary', terminal: 'success', admin: 'danger', router: 'warning', switch: 'info', storage: '' }
   return types[kind] || 'info'
 }
 

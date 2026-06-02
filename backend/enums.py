@@ -91,6 +91,7 @@ class NodeKind(str, Enum):
     WORKER = "worker"
     TERMINAL = "terminal"
     BOTH = "both"
+    ADMIN = "admin"
     ROUTER = "router"
     SWITCH = "switch"
     STORAGE = "storage"
