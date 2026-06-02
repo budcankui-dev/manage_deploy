@@ -213,11 +213,11 @@ const paginatedNodes = computed(() => {
 })
 
 function nodeKindLabel(kind) {
-  const labels = { worker: '计算节点', terminal: '终端节点', router: '路由设备', switch: '交换机', storage: '存储节点' }
+  const labels = { worker: '计算节点', terminal: '终端节点', both: '计算+终端', router: '路由设备', switch: '交换机', storage: '存储节点' }
   return labels[kind] || kind || '未知'
 }
 function nodeKindTagType(kind) {
-  const types = { worker: 'primary', terminal: 'success', router: 'warning', switch: 'info', storage: '' }
+  const types = { worker: 'primary', terminal: 'success', both: 'warning', router: 'warning', switch: 'info', storage: '' }
   return types[kind] || 'info'
 }
 

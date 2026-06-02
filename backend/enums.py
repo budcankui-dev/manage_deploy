@@ -90,6 +90,7 @@ class RoutingStatus(str, Enum):
 class NodeKind(str, Enum):
     WORKER = "worker"
     TERMINAL = "terminal"
+    BOTH = "both"
     ROUTER = "router"
     SWITCH = "switch"
     STORAGE = "storage"
