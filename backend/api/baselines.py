@@ -122,6 +122,53 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
     )
 
 
+class BatchBaselineRunRequest(BaseModel):
+    task_type: str = "high_throughput_matmul"
+    runs: int = 3
+
+
+@router.post("/batch-run")
+async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession = Depends(get_db)):
+    """对所有可调度节点批量运行基准测试。"""
+    from services.baseline_runner import run_benchmark, BENCHMARK_PROFILES
+
+    if payload.task_type not in BENCHMARK_PROFILES:
+        raise HTTPException(status_code=400, detail=f"不支持的任务类型: {payload.task_type}")
+
+    nodes = (await db.execute(
+        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
+    )).scalars().all()
+
+    succeeded, failed = [], []
+    for node in nodes:
+        try:
+            result = await asyncio.to_thread(run_benchmark, payload.task_type, payload.runs)
+            existing = (await db.execute(
+                select(NodeBaseline).where(
+                    NodeBaseline.node_id == node.id,
+                    NodeBaseline.task_type == payload.task_type,
+                    NodeBaseline.metric_key == result["metric_key"],
+                )
+            )).scalar_one_or_none()
+            if existing:
+                existing.baseline_value = result["baseline_value"]
+                existing.raw_values = result["raw_values"]
+                existing.run_count = result["run_count"]
+            else:
+                db.add(NodeBaseline(
+                    node_id=node.id, task_type=payload.task_type,
+                    metric_key=result["metric_key"], baseline_value=result["baseline_value"],
+                    operator=result["operator"], unit=result["unit"],
+                    run_count=result["run_count"], raw_values=result["raw_values"],
+                ))
+            await db.commit()
+            succeeded.append(node.hostname)
+        except Exception as e:
+            failed.append({"node": node.hostname, "error": str(e)})
+
+    return {"succeeded": len(succeeded), "failed": failed, "nodes": succeeded}
+
+
 @router.get("", response_model=list[BaselineResponse])
 async def list_baselines(
     node_id: Optional[str] = None,

@@ -44,47 +44,6 @@
       </el-collapse-item>
     </el-collapse>
 
-    <el-collapse v-model="baselineOpen" style="margin-bottom: 16px">
-      <el-collapse-item title="节点基线性能" name="baseline">
-        <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center">
-          <el-select v-model="baselineFilter.node_id" placeholder="筛选节点" clearable style="width: 180px" @change="loadBaselines">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname || n.display_name" :value="n.id" />
-          </el-select>
-          <el-button size="small" type="primary" plain @click="showBaselineDialog = true">新增基线</el-button>
-          <el-button size="small" type="success" plain @click="showRunBaselineDialog = true">运行基线测试</el-button>
-          <el-button size="small" type="warning" plain @click="showBatchBenchmarkDialog = true">批量压测</el-button>
-          <el-button size="small" type="primary" plain :loading="autoRouteLoading" @click="batchAutoRoute">一键路由</el-button>
-          <el-button size="small" type="success" plain :loading="startAllLoading" @click="startAllRouted">一键启动</el-button>
-        </div>
-        <el-table :data="baselines" size="small" v-loading="baselinesLoading" empty-text="暂无基线数据">
-          <el-table-column prop="node_hostname" label="节点" width="140" />
-          <el-table-column prop="task_type" label="任务类型" width="200" />
-          <el-table-column prop="metric_key" label="指标" width="160" />
-          <el-table-column label="基线值" width="120">
-            <template #default="{ row }">{{ row.baseline_value?.toFixed(2) }} {{ row.unit || '' }}</template>
-          </el-table-column>
-          <el-table-column prop="operator" label="方向" width="60">
-            <template #default="{ row }">{{ row.operator === '>=' ? '越高越好' : '越低越好' }}</template>
-          </el-table-column>
-          <el-table-column prop="run_count" label="测试次数" width="80" />
-          <el-table-column label="稳定性" width="100">
-            <template #default="{ row }">
-              <el-tag v-if="row.stable === true" type="success" size="small">稳定</el-tag>
-              <el-tag v-else-if="row.stable === false" type="warning" size="small">波动大</el-tag>
-              <span v-else>—</span>
-              <span v-if="row.std_dev != null" style="margin-left:4px;font-size:11px;color:#999">σ={{ row.std_dev.toFixed(2) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="140">
-            <template #default="{ row }">
-              <el-button size="small" type="primary" text @click="openEditBaseline(row)">编辑</el-button>
-              <el-button size="small" type="danger" text @click="deleteBaseline(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-collapse-item>
-    </el-collapse>
-
     <section class="card">
       <div class="card-header">
         <h2>工单列表</h2>
@@ -111,15 +70,11 @@
       </div>
 
       <el-table :data="items" size="small" v-loading="listLoading">
-        <el-table-column prop="name" label="名称" min-width="160" />
-        <el-table-column label="任务类型" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tooltip v-if="row.task_type" :content="row.task_type" placement="top">
-              <span class="task-type-cell">{{ taskTypeLabel(row.task_type) }}</span>
-            </el-tooltip>
-            <span v-else>-</span>
-            <small v-if="row.task_type && taskTypeLabel(row.task_type) !== row.task_type" class="task-type-code">{{ row.task_type }}</small>
-          </template>
+        <el-table-column label="工单ID" width="120">
+          <template #default="{ row }"><code style="font-size:11px">{{ row.id?.slice(0,8) }}</code></template>
+        </el-table-column>
+        <el-table-column label="任务类型" min-width="160">
+          <template #default="{ row }">{{ taskTypeLabel(row.task_type) || '-' }}</template>
         </el-table-column>
         <el-table-column label="路由策略" min-width="130">
           <template #default="{ row }">{{ routingPolicyLabel(row.routing_policy) }}</template>
@@ -438,117 +393,6 @@
       </template>
     </el-dialog>
 
-    <!-- 运行基线测试对话框 -->
-    <el-dialog v-model="showRunBaselineDialog" title="运行基线测试" width="440px" destroy-on-close>
-      <el-alert type="info" :closable="false" style="margin-bottom:16px">
-        在后端本地运行基准测试（矩阵乘法），计算 effective_gflops 中位数作为基线值。
-      </el-alert>
-      <el-form :model="runBaselineForm" label-width="90px" size="small">
-        <el-form-item label="节点">
-          <el-select v-model="runBaselineForm.node_id" placeholder="选择节点" style="width:100%">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="任务类型">
-          <el-select v-model="runBaselineForm.task_type" style="width:100%">
-            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="运行次数">
-          <el-input-number v-model="runBaselineForm.runs" :min="1" :max="10" style="width:100%" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showRunBaselineDialog = false">取消</el-button>
-        <el-button type="primary" :loading="runBaselineLoading" @click="runBaseline">开始测试</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 编辑基线对话框 -->
-    <el-dialog v-model="showEditBaselineDialog" title="编辑基线" width="440px" destroy-on-close>
-      <el-form :model="editBaselineForm" label-width="90px" size="small">
-        <el-form-item label="基线值">
-          <el-input-number v-model="editBaselineForm.baseline_value" :precision="2" :min="0" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="方向">
-          <el-select v-model="editBaselineForm.operator" style="width:100%">
-            <el-option label=">= (越大越好)" value=">=" />
-            <el-option label="<= (越小越好)" value="<=" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="单位">
-          <el-input v-model="editBaselineForm.unit" placeholder="如 GFLOPS" />
-        </el-form-item>
-        <el-form-item label="测试次数">
-          <el-input-number v-model="editBaselineForm.run_count" :min="1" :max="100" style="width:100%" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showEditBaselineDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveEditBaseline">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 批量压测对话框 -->
-    <el-dialog v-model="showBatchBenchmarkDialog" title="批量压测" width="440px" destroy-on-close>
-      <el-form :model="batchBenchmarkForm" label-width="90px" size="small">
-        <el-form-item label="任务数量">
-          <el-input-number v-model="batchBenchmarkForm.count" :min="1" :max="30" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="任务类型">
-          <el-select v-model="batchBenchmarkForm.task_type" style="width:100%">
-            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="矩阵大小">
-          <el-input-number v-model="batchBenchmarkForm.matrix_size" :min="64" :max="8192" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="批次数">
-          <el-input-number v-model="batchBenchmarkForm.batch_count" :min="1" :max="500" style="width:100%" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showBatchBenchmarkDialog = false">取消</el-button>
-        <el-button type="primary" :loading="batchBenchmarkLoading" @click="submitBatchBenchmark">确认</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 新增基线对话框 -->
-    <el-dialog v-model="showBaselineDialog" title="新增节点基线" width="440px" destroy-on-close>
-      <el-form :model="newBaseline" label-width="90px" size="small">
-        <el-form-item label="节点">
-          <el-select v-model="newBaseline.node_id" placeholder="选择节点" style="width:100%">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="任务类型">
-          <el-select v-model="newBaseline.task_type" placeholder="选择任务类型" style="width:100%">
-            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
-            <el-option label="低时延视频链路" value="low_latency_video_pipeline" />
-            <el-option label="模型训练" value="llm_text_generation" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="指标">
-          <el-input v-model="newBaseline.metric_key" placeholder="如 effective_gflops" />
-        </el-form-item>
-        <el-form-item label="基线值">
-          <el-input-number v-model="newBaseline.baseline_value" :precision="2" :min="0" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="方向">
-          <el-select v-model="newBaseline.operator" style="width:100%">
-            <el-option label=">= (越大越好)" value=">=" />
-            <el-option label="<= (越小越好)" value="<=" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="单位">
-          <el-input v-model="newBaseline.unit" placeholder="如 GFLOPS" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showBaselineDialog = false">取消</el-button>
-        <el-button type="primary" @click="createBaseline">保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -557,7 +401,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { businessApi, baselinesApi, instancesApi, nodesApi, ordersApi } from '@/api'
+import { businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
 import {
   DEPLOYMENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -582,18 +426,6 @@ const route = useRoute()
 const router = useRouter()
 const demoRunning = ref(false)
 const summaryOpen = ref(['summary'])
-const baselineOpen = ref([])
-const baselines = ref([])
-const baselinesLoading = ref(false)
-const baselineFilter = reactive({ node_id: '' })
-const showBaselineDialog = ref(false)
-const showRunBaselineDialog = ref(false)
-const runBaselineLoading = ref(false)
-const runBaselineForm = reactive({
-  node_id: '',
-  task_type: 'high_throughput_matmul',
-  runs: 3,
-})
 const summary = ref([])
 const summaryLoading = ref(false)
 const listLoading = ref(false)
@@ -653,85 +485,6 @@ const manualPlacements = ref({
   sink: { worker_host: '', gpu_device: null, skip_deploy: false },
 })
 
-const showEditBaselineDialog = ref(false)
-const editBaselineId = ref('')
-const editBaselineForm = reactive({ baseline_value: 0, operator: '>=', unit: '', run_count: 3 })
-
-const showBatchBenchmarkDialog = ref(false)
-const batchBenchmarkLoading = ref(false)
-const batchBenchmarkForm = reactive({ task_type: 'high_throughput_matmul', count: 10, matrix_size: 1024, batch_count: 50 })
-const autoRouteLoading = ref(false)
-const startAllLoading = ref(false)
-
-function openEditBaseline(row) {
-  editBaselineId.value = row.id
-  editBaselineForm.baseline_value = row.baseline_value
-  editBaselineForm.operator = row.operator
-  editBaselineForm.unit = row.unit || ''
-  editBaselineForm.run_count = row.run_count
-  showEditBaselineDialog.value = true
-}
-
-async function saveEditBaseline() {
-  await baselinesApi.update(editBaselineId.value, { ...editBaselineForm })
-  ElMessage.success('基线已更新')
-  showEditBaselineDialog.value = false
-  await loadBaselines()
-}
-
-async function submitBatchBenchmark() {
-  batchBenchmarkLoading.value = true
-  try {
-    const { data } = await ordersApi.batchBenchmark({
-      task_type: batchBenchmarkForm.task_type,
-      count: batchBenchmarkForm.count,
-      data_profile: { matrix_size: batchBenchmarkForm.matrix_size, batch_count: batchBenchmarkForm.batch_count },
-    })
-    ElMessage.success(`已创建 ${data.created} 条压测工单`)
-    showBatchBenchmarkDialog.value = false
-    await loadList()
-  } finally {
-    batchBenchmarkLoading.value = false
-  }
-}
-
-async function batchAutoRoute() {
-  autoRouteLoading.value = true
-  try {
-    const { data } = await ordersApi.batchAutoRoute()
-    ElMessage.success(`已路由 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
-    await loadList()
-  } finally {
-    autoRouteLoading.value = false
-  }
-}
-
-async function startAllRouted() {
-  startAllLoading.value = true
-  try {
-    // Find all materialized benchmark instances that are in pending/stopped state and start them
-    const { data } = await businessApi.list({ order_status: 'materialized', page: 1, page_size: 100 })
-    const toStart = (data.items || []).filter(row => row.instance_id && canStart(row.deployment_status))
-    if (!toStart.length) {
-      ElMessage.info('没有待启动的实例')
-      return
-    }
-    await instancesApi.batchStart(toStart.map(r => r.instance_id))
-    ElMessage.success(`已启动 ${toStart.length} 个实例`)
-    await loadList()
-  } finally {
-    startAllLoading.value = false
-  }
-}
-
-const newBaseline = reactive({
-  node_id: '',
-  task_type: 'high_throughput_matmul',
-  metric_key: 'effective_gflops',
-  baseline_value: 0,
-  operator: '>=',
-  unit: 'GFLOPS',
-})
 
 const placementRows = computed(() => {
   const placements = orderDetail.value?.routing_result?.placements
@@ -840,11 +593,6 @@ watch(
   }
 )
 
-watch(baselineOpen, (val) => {
-  if (val.includes('baseline') && baselines.value.length === 0) {
-    loadBaselines()
-  }
-})
 
 function percent(value) {
   return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`
@@ -904,60 +652,6 @@ function canStart(status) {
 
 async function refreshAll() {
   await Promise.all([loadSummary(), loadList(), loadNodes()])
-}
-
-async function loadBaselines() {
-  baselinesLoading.value = true
-  try {
-    const params = {}
-    if (baselineFilter.node_id) params.node_id = baselineFilter.node_id
-    const { data } = await baselinesApi.list(params)
-    baselines.value = data
-  } finally {
-    baselinesLoading.value = false
-  }
-}
-
-async function deleteBaseline(row) {
-  await ElMessageBox.confirm(`确认删除 ${row.node_hostname} / ${row.task_type} 的基线？`, '删除确认')
-  await baselinesApi.delete(row.id)
-  ElMessage.success('已删除')
-  await loadBaselines()
-}
-
-async function createBaseline() {
-  if (!newBaseline.node_id || !newBaseline.task_type || !newBaseline.metric_key) {
-    ElMessage.warning('请填写完整信息')
-    return
-  }
-  try {
-    await baselinesApi.create({ ...newBaseline })
-    ElMessage.success('基线已创建')
-    showBaselineDialog.value = false
-    await loadBaselines()
-  } catch (e) {
-    if (e.response?.status === 409) {
-      ElMessage.warning('该节点/任务类型/指标的基线已存在')
-    }
-  }
-}
-
-async function runBaseline() {
-  if (!runBaselineForm.node_id) {
-    ElMessage.warning('请选择节点')
-    return
-  }
-  runBaselineLoading.value = true
-  try {
-    const { data } = await baselinesApi.run({ ...runBaselineForm })
-    ElMessage.success(`基线测试完成: ${data.baseline_value?.toFixed(2)} ${data.unit || ''}`)
-    showRunBaselineDialog.value = false
-    await loadBaselines()
-  } catch (e) {
-    // error handled by interceptor
-  } finally {
-    runBaselineLoading.value = false
-  }
 }
 
 async function loadSummary() {

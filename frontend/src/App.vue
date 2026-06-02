@@ -17,6 +17,10 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>业务任务中心</span>
         </router-link>
+        <router-link to="/benchmark" class="nav-item">
+          <el-icon><TrendCharts /></el-icon>
+          <span>验收测试</span>
+        </router-link>
         <router-link to="/nodes" class="nav-item">
           <el-icon><Monitor /></el-icon>
           <span>工作节点</span>
