@@ -15,6 +15,33 @@ if "/app" not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, "/app")
 
+
+def benchmark_mode() -> int:
+    """Run fixed workload, output JSON result, exit."""
+    matrix_size = int(os.environ.get("MATRIX_SIZE", "1024"))
+    batch_count = int(os.environ.get("BATCH_COUNT", "50"))
+    seed = int(os.environ.get("SEED", "42"))
+    warmup = int(os.environ.get("WARMUP_BATCHES", "3"))
+
+    # warmup phase (not counted)
+    if warmup > 0:
+        run_matmul(matrix_size, warmup, seed)
+
+    # measured phase
+    result = run_matmul(matrix_size, batch_count, seed)
+    output = {
+        "benchmark_result": {
+            "effective_gflops": result["effective_gflops"],
+            "elapsed_ms": result["elapsed_ms"],
+            "matrix_size": matrix_size,
+            "batch_count": batch_count,
+            "seed": seed,
+            "warmup_batches": warmup,
+        }
+    }
+    print(json.dumps(output), flush=True)
+    return 0
+
 from _common.http_server import (
     get_listen_port,
     post_json_to_peer,
@@ -66,6 +93,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
+        if os.environ.get("BENCHMARK_MODE", "").lower() in ("true", "1", "yes"):
+            sys.exit(benchmark_mode())
         sys.exit(main())
     except Exception as exc:
         print(f"COMPUTE_FAILED {exc}", flush=True)

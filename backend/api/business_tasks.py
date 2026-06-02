@@ -79,7 +79,16 @@ async def build_instance_create_from_business_task(
         "ROUTING_RESULT": payload.routing_result.model_dump_json(),
         "RESULT_STORAGE": _json_env(payload.result_storage),
     }
+    if payload.task_type == "high_throughput_matmul":
+        shared_env["USE_GPU"] = "true"
     overrides: list[TaskInstanceNodeOverride] = []
+    gpu_roles = set()
+    if payload.task_type == "high_throughput_matmul":
+        gpu_roles.add("compute")
+    elif payload.task_type == "low_latency_video_pipeline":
+        gpu_roles.add("compute")
+    elif payload.task_type == "llm_text_generation":
+        gpu_roles.add("compute")
     for role, template_node_name in role_node_names.items():
         raw_node_id = payload.routing_result.placements.get(role)
         if not raw_node_id:
@@ -90,11 +99,13 @@ async def build_instance_create_from_business_task(
             node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
         env = dict(shared_env)
         env["TASK_ROLE"] = role
+        gpu_id = "all" if role in gpu_roles else None
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
                 node_id=node_id,
                 env=env,
+                gpu_id=gpu_id,
             )
         )
 
@@ -288,9 +299,16 @@ async def _lookup_baseline(
     """Look up baseline value for the worker node used in this task."""
     if not task_type:
         return None
-    placements = routing_result.get("placements") or {}
-    # Find the worker node hostname from placements (key "worker" or "compute")
-    worker_host = placements.get("worker") or placements.get("compute")
+    placements = routing_result.get("placements") or []
+    # placements is a list of {"node_id": role, "worker_host": hostname}
+    worker_host = None
+    if isinstance(placements, list):
+        for p in placements:
+            if p.get("node_id") in ("compute", "worker"):
+                worker_host = p.get("worker_host")
+                break
+    elif isinstance(placements, dict):
+        worker_host = placements.get("worker") or placements.get("compute")
     if not worker_host:
         return None
     # Resolve hostname to node_id
@@ -333,7 +351,7 @@ async def evaluate_and_store_business_metric(
         return None
 
     objective = BusinessObjective(**objective_data)
-    routing_result = business_task.get("routing_result") or {}
+    routing_result = order.runtime_config.get("routing_result") or business_task.get("routing_result") or {}
     estimated_metric = routing_result.get("estimated_metric") or {}
     estimated_value = estimated_metric.get("metric_value")
     object_uris = _extract_object_uris(tags)

@@ -386,7 +386,7 @@ class TemplateMetricSummary(BaseModel):
 class BusinessObjective(BaseModel):
     metric_key: str
     operator: str = ">="
-    target_value: float
+    target_value: Optional[float] = None
     unit: Optional[str] = None
 
 
@@ -472,9 +472,9 @@ class TaskOrderInstanceSummary(BaseModel):
 class TaskOrderEvaluationSummary(BaseModel):
     metric_key: str
     actual_value: float
-    target_value: float
+    target_value: Optional[float] = None
     unit: Optional[str] = None
-    business_success: bool
+    business_success: Optional[bool] = None
     failure_reason: Optional[str] = None
     estimated_value: Optional[float] = None
     estimation_error_ratio: Optional[float] = None
@@ -510,10 +510,10 @@ class BusinessObjectiveEvaluationResult(BaseModel):
     task_type: Optional[str] = None
     metric_key: str
     actual_value: float
-    target_value: float
+    target_value: Optional[float] = None
     operator: str
     unit: Optional[str] = None
-    business_success: bool
+    business_success: Optional[bool] = None
     failure_reason: Optional[str] = None
     estimated_value: Optional[float] = None
     estimation_error_ratio: Optional[float] = None
@@ -529,10 +529,10 @@ class BusinessObjectiveEvaluationResponse(BaseModel):
     routing_strategy: Optional[str] = None
     metric_key: str
     actual_value: float
-    target_value: float
+    target_value: Optional[float] = None
     operator: str
     unit: Optional[str] = None
-    business_success: bool
+    business_success: Optional[bool] = None
     failure_reason: Optional[str] = None
     estimated_value: Optional[float] = None
     estimation_error_ratio: Optional[float] = None

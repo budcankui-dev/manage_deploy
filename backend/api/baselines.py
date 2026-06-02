@@ -60,12 +60,14 @@ class BaselineRunResponse(BaseModel):
     baseline_value: Optional[float] = None
     raw_values: Optional[list[float]] = None
     unit: Optional[str] = None
+    std_dev: Optional[float] = None
+    stable: Optional[bool] = None
 
 
 @router.post("/run", response_model=BaselineRunResponse)
 async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = Depends(get_db)):
     """在后端本地运行基准测试并保存结果。"""
-    from services.baseline_runner import run_benchmark, TASK_BENCHMARKS
+    from services.baseline_runner import run_benchmark, BENCHMARK_PROFILES
 
     node = (await db.execute(
         select(NodeModel).where(NodeModel.id == payload.node_id)
@@ -73,7 +75,7 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    if payload.task_type not in TASK_BENCHMARKS:
+    if payload.task_type not in BENCHMARK_PROFILES:
         raise HTTPException(status_code=400, detail=f"Unknown task_type: {payload.task_type}")
 
     result = await asyncio.to_thread(run_benchmark, payload.task_type, payload.runs)
@@ -115,6 +117,8 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
         baseline_value=result["baseline_value"],
         raw_values=result["raw_values"],
         unit=result["unit"],
+        std_dev=result.get("std_dev"),
+        stable=result.get("stable"),
     )
 
 

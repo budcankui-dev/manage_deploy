@@ -143,7 +143,7 @@ async def send_message(
         )
     )
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-    await db.flush()
+    await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 
@@ -444,7 +444,7 @@ async def confirm_intent(
     conversation.status = ConversationStatus.AWAITING_ROUTING
     conversation.materialized_order_id = order.id
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-    await db.flush()
+    await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 

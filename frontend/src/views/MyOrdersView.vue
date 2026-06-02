@@ -121,6 +121,16 @@
             <strong>{{ verdictTitle }}</strong>
             <p>{{ verdictSubtitle }}</p>
           </div>
+          <el-descriptions :column="2" size="small" style="margin-top:12px">
+            <el-descriptions-item label="实际值">
+              {{ Number(detail.evaluation.actual_value).toFixed(2) }} {{ detail.evaluation.unit || '' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="目标值">
+              {{ detail.evaluation.target_value != null ? Number(detail.evaluation.target_value).toFixed(2) + ' ' + (detail.evaluation.unit || '') : '待设定基线' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="指标">{{ detail.evaluation.metric_key }}</el-descriptions-item>
+            <el-descriptions-item label="方向">{{ detail.evaluation.operator === '>=' ? '越高越好' : '越低越好' }}</el-descriptions-item>
+          </el-descriptions>
         </el-card>
 
         <div v-if="detailLoading" class="detail-loading">

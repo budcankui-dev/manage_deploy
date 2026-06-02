@@ -343,6 +343,15 @@ async def receive_routing_result(
             "SOURCE_NAME": order.source_name or "",
             "DESTINATION_NAME": order.destination_name or "",
         }
+        # Inject business task env vars from runtime_config
+        bt = (order.runtime_config or {}).get("business_task", {})
+        if bt:
+            import json
+            env["TASK_TYPE"] = bt.get("task_type") or ""
+            env["DATA_PROFILE"] = json.dumps(bt.get("data_profile") or {})
+            env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
+            env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
+            env["TASK_INSTANCE_ID"] = order.id  # will be updated after instance creation
         if placement.gpu_device is not None:
             env["GPU_DEVICE"] = placement.gpu_device
 
@@ -364,6 +373,12 @@ async def receive_routing_result(
         node_overrides=overrides,
     )
     instance = await _create_instance_from_template(db, instance_create, source_order_id=order.id)
+
+    # Update TASK_INSTANCE_ID in each node's env now that we have the real instance id
+    for node in instance.nodes:
+        if node.env and node.env.get("TASK_INSTANCE_ID") == order.id:
+            node.env = {**node.env, "TASK_INSTANCE_ID": instance.id}
+            flag_modified(node, "env")
 
     # Register scheduled jobs
     ts = TaskScheduler()

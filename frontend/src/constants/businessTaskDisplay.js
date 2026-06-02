@@ -13,6 +13,9 @@ export const TASK_TYPE_SUMMARIES = {
 const METRIC_LABELS = {
   compute_latency_ms: '计算耗时',
   end_to_end_latency_ms: '端到端时延',
+  effective_gflops: '计算性能',
+  tokens_per_second: '生成速率',
+  avg_frame_latency_ms: '帧推理时延',
 }
 
 const OPERATOR_LABELS = {
@@ -161,23 +164,30 @@ export function buildMatmulVerdict(evaluation) {
   if (!evaluation) {
     return {
       title: '等待计算完成',
-      subtitle: '启动实例并完成矩阵乘法后，sink 将上报 compute_latency_ms。',
+      subtitle: '启动实例并完成矩阵乘法后，sink 将上报 effective_gflops。',
       statusClass: 'pending',
     }
   }
-  const unit = evaluation.unit || 'ms'
+  const unit = evaluation.unit || 'GFLOPS'
   const actual = Number(evaluation.actual_value).toFixed(2)
   const target = evaluation.target_value
+  if (evaluation.business_success === null || evaluation.business_success === undefined) {
+    return {
+      title: '计算已完成，待评估',
+      subtitle: evaluation.failure_reason || `实际 ${actual} ${unit}，尚无基线数据，无法判定是否达标。`,
+      statusClass: 'warning',
+    }
+  }
   if (evaluation.business_success) {
     return {
       title: '计算已完成，性能达标',
-      subtitle: `实际 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: target, unit })}。`,
+      subtitle: `实际 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '>=', target_value: target, unit })}。`,
       statusClass: 'success',
     }
   }
   return {
     title: '计算已完成，性能未达标',
-    subtitle: evaluation.failure_reason || `实际 ${actual} ${unit} 超过目标 ${target} ${unit}。`,
+    subtitle: evaluation.failure_reason || `实际 ${actual} ${unit}，未达到目标 ${target} ${unit}。`,
     statusClass: 'danger',
   }
 }

@@ -64,6 +64,14 @@
             <template #default="{ row }">{{ row.operator === '>=' ? '越高越好' : '越低越好' }}</template>
           </el-table-column>
           <el-table-column prop="run_count" label="测试次数" width="80" />
+          <el-table-column label="稳定性" width="100">
+            <template #default="{ row }">
+              <el-tag v-if="row.stable === true" type="success" size="small">稳定</el-tag>
+              <el-tag v-else-if="row.stable === false" type="warning" size="small">波动大</el-tag>
+              <span v-else>—</span>
+              <span v-if="row.std_dev != null" style="margin-left:4px;font-size:11px;color:#999">σ={{ row.std_dev.toFixed(2) }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
               <el-button size="small" type="danger" text @click="deleteBaseline(row)">删除</el-button>

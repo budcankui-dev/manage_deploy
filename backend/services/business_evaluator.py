@@ -68,8 +68,22 @@ def evaluate_business_objective(
             target = baseline_value * BASELINE_TOLERANCE_HIGHER
         else:
             target = baseline_value * BASELINE_TOLERANCE_LOWER
-    else:
+    elif objective.target_value is not None and objective.target_value > 0:
         target = objective.target_value
+    else:
+        return BusinessObjectiveEvaluationResult(
+            task_type=task_type,
+            metric_key=actual_metric_key,
+            actual_value=actual_value,
+            target_value=None,
+            operator=objective.operator,
+            unit=objective.unit,
+            business_success=None,
+            failure_reason="无基线数据，无法评估",
+            estimated_value=estimated_value,
+            estimation_error_ratio=_error_ratio(estimated_value, actual_value),
+            object_uris=object_uris,
+        )
 
     # Evaluate
     if objective.operator == ">=":

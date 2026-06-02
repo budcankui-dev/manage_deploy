@@ -419,7 +419,6 @@ def _raw_to_parse_result(raw: dict[str, Any], existing_draft: dict[str, Any] | N
         business_objective = {
             "metric_key": "effective_gflops",
             "operator": ">=",
-            "target_value": 0,
             "unit": "GFLOPS",
         }
 
