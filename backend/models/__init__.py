@@ -241,6 +241,7 @@ class TaskOrder(Base):
     scheduled_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     auto_start: Mapped[bool] = mapped_column(default=False)
     keep_after_stop: Mapped[bool] = mapped_column(default=False, server_default="0")
+    is_benchmark: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     runtime_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[OrderStatus] = mapped_column(String(50), default=OrderStatus.PENDING)
     routing_status: Mapped[str] = mapped_column(String(50), default=RoutingStatus.NOT_REQUIRED)

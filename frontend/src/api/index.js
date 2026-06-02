@@ -89,6 +89,7 @@ export const ordersApi = {
   materializePending: () => api.post('/orders/materialize/pending'),
   submitRoutingResult: (id, data) => api.post(`/orders/${id}/routing-result`, data),
   cancel: (id) => api.post(`/orders/${id}/cancel`),
+  batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
 }
 
 export const businessApi = {

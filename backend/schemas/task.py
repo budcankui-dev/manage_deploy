@@ -334,6 +334,7 @@ class TaskOrderResponse(BaseModel):
     scheduled_end_time: Optional[datetime] = None
     auto_start: bool
     keep_after_stop: bool = False
+    is_benchmark: bool = False
     runtime_config: Optional[dict] = None
     status: OrderStatus
     routing_status: Optional[str] = None

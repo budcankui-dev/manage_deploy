@@ -52,6 +52,7 @@
           </el-select>
           <el-button size="small" type="primary" plain @click="showBaselineDialog = true">新增基线</el-button>
           <el-button size="small" type="success" plain @click="showRunBaselineDialog = true">运行基线测试</el-button>
+          <el-button size="small" type="warning" plain @click="showBatchBenchmarkDialog = true">批量压测</el-button>
         </div>
         <el-table :data="baselines" size="small" v-loading="baselinesLoading" empty-text="暂无基线数据">
           <el-table-column prop="node_hostname" label="节点" width="140" />
@@ -486,6 +487,30 @@
       </template>
     </el-dialog>
 
+    <!-- 批量压测对话框 -->
+    <el-dialog v-model="showBatchBenchmarkDialog" title="批量压测" width="440px" destroy-on-close>
+      <el-form :model="batchBenchmarkForm" label-width="90px" size="small">
+        <el-form-item label="任务数量">
+          <el-input-number v-model="batchBenchmarkForm.count" :min="1" :max="30" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="任务类型">
+          <el-select v-model="batchBenchmarkForm.task_type" style="width:100%">
+            <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="矩阵大小">
+          <el-input-number v-model="batchBenchmarkForm.matrix_size" :min="64" :max="8192" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="批次数">
+          <el-input-number v-model="batchBenchmarkForm.batch_count" :min="1" :max="500" style="width:100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showBatchBenchmarkDialog = false">取消</el-button>
+        <el-button type="primary" :loading="batchBenchmarkLoading" @click="submitBatchBenchmark">确认</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新增基线对话框 -->
     <el-dialog v-model="showBaselineDialog" title="新增节点基线" width="440px" destroy-on-close>
       <el-form :model="newBaseline" label-width="90px" size="small">
@@ -630,6 +655,10 @@ const showEditBaselineDialog = ref(false)
 const editBaselineId = ref('')
 const editBaselineForm = reactive({ baseline_value: 0, operator: '>=', unit: '', run_count: 3 })
 
+const showBatchBenchmarkDialog = ref(false)
+const batchBenchmarkLoading = ref(false)
+const batchBenchmarkForm = reactive({ task_type: 'high_throughput_matmul', count: 10, matrix_size: 1024, batch_count: 50 })
+
 function openEditBaseline(row) {
   editBaselineId.value = row.id
   editBaselineForm.baseline_value = row.baseline_value
@@ -644,6 +673,22 @@ async function saveEditBaseline() {
   ElMessage.success('基线已更新')
   showEditBaselineDialog.value = false
   await loadBaselines()
+}
+
+async function submitBatchBenchmark() {
+  batchBenchmarkLoading.value = true
+  try {
+    const { data } = await ordersApi.batchBenchmark({
+      task_type: batchBenchmarkForm.task_type,
+      count: batchBenchmarkForm.count,
+      data_profile: { matrix_size: batchBenchmarkForm.matrix_size, batch_count: batchBenchmarkForm.batch_count },
+    })
+    ElMessage.success(`已创建 ${data.created} 条压测工单`)
+    showBatchBenchmarkDialog.value = false
+    await loadList()
+  } finally {
+    batchBenchmarkLoading.value = false
+  }
 }
 
 const newBaseline = reactive({

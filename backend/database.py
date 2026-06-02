@@ -65,6 +65,7 @@ async def init_db() -> None:
         await _ensure_column(conn, "task_instances", "source_order_id", "VARCHAR(36)")
         await _ensure_column(conn, "task_instances", "keep_after_stop", "BOOLEAN NOT NULL DEFAULT 0")
         await _ensure_column(conn, "task_orders", "keep_after_stop", "BOOLEAN NOT NULL DEFAULT 0")
+        await _ensure_column(conn, "task_orders", "is_benchmark", "BOOLEAN NOT NULL DEFAULT 0")
         # Phase 1: Node 扩展
         await _ensure_column(conn, "nodes", "node_kind", "VARCHAR(50) DEFAULT 'worker'")
         await _ensure_column(conn, "nodes", "display_name", "VARCHAR(255)")

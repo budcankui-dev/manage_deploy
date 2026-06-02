@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -22,6 +22,7 @@ from schemas import (
     TaskOrderResponse,
 )
 from services.business_task_query import get_order_detail_context
+from services.dag_builder import build_matmul_dag
 from services.order_materialize import _resolve_node_id
 from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
 from services.port_plan import format_service_url, get_business_address
@@ -392,3 +393,62 @@ async def receive_routing_result(
 
     await db.commit()
     return {"status": "ok", "order_id": order_id, "routing_status": "completed", "instance_id": instance.id}
+
+
+class BatchBenchmarkRequest(BaseModel):
+    task_type: str = "high_throughput_matmul"
+    count: int = Field(default=10, ge=1, le=30)
+    data_profile: dict = Field(default_factory=lambda: {"matrix_size": 1024, "batch_count": 50})
+    routing_strategy: str = "resource_guarantee"
+
+
+@router.post("/batch-benchmark")
+async def create_batch_benchmark(
+    payload: BatchBenchmarkRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    catalog_row = await db.execute(
+        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.task_type == payload.task_type)
+    )
+    catalog = catalog_row.scalar_one_or_none()
+    if not catalog:
+        raise HTTPException(status_code=404, detail=f"No catalog entry for task_type: {payload.task_type}")
+
+    order_ids = []
+    for i in range(payload.count):
+        order_id_placeholder = f"benchmark-{payload.task_type}-{i + 1}"
+        routing_dag = build_matmul_dag(
+            order_id=order_id_placeholder,
+            source_name=None,
+            destination_name=None,
+            business_start_time=None,
+            business_end_time=None,
+            matrix_size=payload.data_profile.get("matrix_size", 1024),
+            batch_count=payload.data_profile.get("batch_count", 50),
+            routing_strategy=payload.routing_strategy,
+        )
+        runtime_config = {
+            "business_task": {
+                "task_type": payload.task_type,
+                "data_profile": payload.data_profile,
+                "business_objective": {"metric_key": "effective_gflops", "operator": ">=", "unit": "GFLOPS"},
+                "routing_strategy": payload.routing_strategy,
+            }
+        }
+        order = TaskOrder(
+            user_id=current_user.id,
+            template_id=catalog.template_id,
+            name=order_id_placeholder,
+            status=OrderStatus.PENDING,
+            routing_status=RoutingStatus.PENDING.value,
+            routing_input_dag=routing_dag,
+            runtime_config=runtime_config,
+            is_benchmark=True,
+        )
+        db.add(order)
+        await db.flush()
+        order_ids.append(order.id)
+
+    await db.commit()
+    return {"created": len(order_ids), "order_ids": order_ids}
