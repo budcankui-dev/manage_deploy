@@ -90,6 +90,8 @@ export const ordersApi = {
   submitRoutingResult: (id, data) => api.post(`/orders/${id}/routing-result`, data),
   cancel: (id) => api.post(`/orders/${id}/cancel`),
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
+  batchAutoRoute: () => api.post('/orders/batch-auto-route'),
+  startAllRouted: () => api.post('/orders/start-all-routed'),
 }
 
 export const businessApi = {

@@ -1,3 +1,5 @@
+import random
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -452,3 +454,135 @@ async def create_batch_benchmark(
 
     await db.commit()
     return {"created": len(order_ids), "order_ids": order_ids}
+
+
+@router.post("/batch-auto-route")
+async def batch_auto_route(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Auto-route all pending benchmark orders."""
+    rows = await db.execute(
+        select(TaskOrder).where(
+            TaskOrder.status == OrderStatus.PENDING,
+            TaskOrder.routing_status == RoutingStatus.PENDING.value,
+            TaskOrder.is_benchmark == True,
+            TaskOrder.user_id == current_user.id,
+        )
+    )
+    orders = rows.scalars().all()
+
+    schedulable_rows = await db.execute(
+        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
+    )
+    schedulable = schedulable_rows.scalars().all()
+    if not schedulable:
+        raise HTTPException(status_code=400, detail="No schedulable nodes available")
+
+    routed = 0
+    failed = []
+    for order in orders:
+        try:
+            picked = {role: random.choice(schedulable) for role in ("source", "compute", "sink")}
+            await _do_auto_route(db, order, picked)
+            routed += 1
+        except Exception as exc:
+            failed.append({"order_id": order.id, "error": str(exc)})
+
+    await db.commit()
+    return {"routed": routed, "failed": failed}
+
+
+async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
+    """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
+    catalog_row = await db.execute(
+        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.template_id == order.template_id)
+    )
+    catalog = catalog_row.scalar_one_or_none()
+    role_node_names = {
+        "source": catalog.source_node_name if catalog else None,
+        "compute": catalog.compute_node_name if catalog else None,
+        "sink": catalog.sink_node_name if catalog else None,
+    }
+
+    overrides: list[TaskInstanceNodeOverride] = []
+    for role, node in picked.items():
+        template_node_name = role_node_names.get(role) or role
+        env: dict[str, str] = {
+            "TASK_ROLE": role,
+            "SOURCE_NAME": order.source_name or "",
+            "DESTINATION_NAME": order.destination_name or "",
+        }
+        bt = (order.runtime_config or {}).get("business_task", {})
+        if bt:
+            import json
+            env["TASK_TYPE"] = bt.get("task_type") or ""
+            env["DATA_PROFILE"] = json.dumps(bt.get("data_profile") or {})
+            env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
+            env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
+            env["TASK_INSTANCE_ID"] = order.id
+        overrides.append(TaskInstanceNodeOverride(
+            template_node_name=template_node_name,
+            node_id=node.id,
+            env=env,
+        ))
+
+    placements = [{"node_id": role, "worker_host": node.hostname} for role, node in picked.items()]
+    rc = order.runtime_config or {}
+    rc["routing_result"] = {"placements": placements}
+    order.runtime_config = rc
+    flag_modified(order, "runtime_config")
+    order.routing_status = RoutingStatus.COMPLETED.value
+
+    instance_create = TaskInstanceCreate(
+        template_id=order.template_id,
+        name=order.name,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=order.business_start_time,
+        scheduled_end_time=order.business_end_time,
+        auto_start=False,
+        keep_after_stop=order.keep_after_stop,
+        node_overrides=overrides,
+    )
+    instance = await _create_instance_from_template(db, instance_create, source_order_id=order.id)
+
+    for node_obj in instance.nodes:
+        if node_obj.env and node_obj.env.get("TASK_INSTANCE_ID") == order.id:
+            node_obj.env = {**node_obj.env, "TASK_INSTANCE_ID": instance.id}
+            flag_modified(node_obj, "env")
+
+    ts = TaskScheduler()
+    if order.business_start_time:
+        await ts.schedule_task_start(instance.id, order.business_start_time)
+    if order.business_end_time:
+        await ts.schedule_task_end(instance.id, order.business_end_time)
+
+    order.materialized_instance_id = instance.id
+    order.status = OrderStatus.MATERIALIZED
+
+
+@router.post("/{order_id}/auto-route")
+async def auto_route_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mock router: randomly assigns schedulable nodes, then calls routing-result logic."""
+    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.routing_status != RoutingStatus.PENDING.value:
+        raise HTTPException(status_code=400, detail=f"Order routing_status is '{order.routing_status}', expected 'pending'")
+
+    schedulable_rows = await db.execute(
+        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
+    )
+    schedulable = schedulable_rows.scalars().all()
+    if not schedulable:
+        raise HTTPException(status_code=400, detail="No schedulable nodes available")
+
+    picked = {role: random.choice(schedulable) for role in ("source", "compute", "sink")}
+    await _do_auto_route(db, order, picked)
+    await db.commit()
+    return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

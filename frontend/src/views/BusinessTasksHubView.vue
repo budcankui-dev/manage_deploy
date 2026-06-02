@@ -53,6 +53,8 @@
           <el-button size="small" type="primary" plain @click="showBaselineDialog = true">新增基线</el-button>
           <el-button size="small" type="success" plain @click="showRunBaselineDialog = true">运行基线测试</el-button>
           <el-button size="small" type="warning" plain @click="showBatchBenchmarkDialog = true">批量压测</el-button>
+          <el-button size="small" type="primary" plain :loading="autoRouteLoading" @click="batchAutoRoute">一键路由</el-button>
+          <el-button size="small" type="success" plain :loading="startAllLoading" @click="startAllRouted">一键启动</el-button>
         </div>
         <el-table :data="baselines" size="small" v-loading="baselinesLoading" empty-text="暂无基线数据">
           <el-table-column prop="node_hostname" label="节点" width="140" />
@@ -658,6 +660,8 @@ const editBaselineForm = reactive({ baseline_value: 0, operator: '>=', unit: '',
 const showBatchBenchmarkDialog = ref(false)
 const batchBenchmarkLoading = ref(false)
 const batchBenchmarkForm = reactive({ task_type: 'high_throughput_matmul', count: 10, matrix_size: 1024, batch_count: 50 })
+const autoRouteLoading = ref(false)
+const startAllLoading = ref(false)
 
 function openEditBaseline(row) {
   editBaselineId.value = row.id
@@ -688,6 +692,35 @@ async function submitBatchBenchmark() {
     await loadList()
   } finally {
     batchBenchmarkLoading.value = false
+  }
+}
+
+async function batchAutoRoute() {
+  autoRouteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchAutoRoute()
+    ElMessage.success(`已路由 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
+    await loadList()
+  } finally {
+    autoRouteLoading.value = false
+  }
+}
+
+async function startAllRouted() {
+  startAllLoading.value = true
+  try {
+    // Find all materialized benchmark instances that are in pending/stopped state and start them
+    const { data } = await businessApi.list({ order_status: 'materialized', page: 1, page_size: 100 })
+    const toStart = (data.items || []).filter(row => row.instance_id && canStart(row.deployment_status))
+    if (!toStart.length) {
+      ElMessage.info('没有待启动的实例')
+      return
+    }
+    await instancesApi.batchStart(toStart.map(r => r.instance_id))
+    ElMessage.success(`已启动 ${toStart.length} 个实例`)
+    await loadList()
+  } finally {
+    startAllLoading.value = false
   }
 }
 
