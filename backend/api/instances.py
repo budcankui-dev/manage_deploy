@@ -44,6 +44,7 @@ from services.runtime_fields import apply_runtime_overrides, build_container_sta
 from services.scheduler import TaskScheduler
 from services.order_sync import mark_orders_cancelled_for_instance
 from services.port_plan import (
+    extract_ports_from_values,
     extract_host_ports,
     find_running_port_conflict_records,
     format_running_port_conflict_message,
@@ -64,6 +65,34 @@ def _find_override(t_node: TaskTemplateNode, overrides: list[TaskInstanceNodeOve
         if item.template_node_name and item.template_node_name == t_node.name:
             return item
     return None
+
+
+async def _allocated_ports_for_node(
+    db: AsyncSession,
+    node_id: str,
+    *,
+    exclude_instance_id: str | None = None,
+    extra_ports: set[int] | None = None,
+) -> list[int]:
+    """Ports already assigned on this node, including materialized-not-started tasks."""
+    ports: set[int] = set(extra_ports or set())
+    inactive_statuses = (TaskStatus.STOPPED, TaskStatus.FAILED, TaskStatus.EXPIRED)
+    stmt = (
+        select(TaskInstanceNode)
+        .join(TaskInstance, TaskInstance.id == TaskInstanceNode.instance_id)
+        .where(
+            TaskInstanceNode.node_id == node_id,
+            TaskInstance.status.notin_(inactive_statuses),
+        )
+    )
+    if exclude_instance_id:
+        stmt = stmt.where(TaskInstance.id != exclude_instance_id)
+
+    result = await db.execute(stmt)
+    for existing in result.scalars().all():
+        ports.update(extract_ports_from_values(existing.port_values))
+        ports.update(extract_host_ports(existing.ports, existing.network_mode or "host"))
+    return sorted(ports)
 
 
 def _find_instance_node_override(
@@ -432,31 +461,45 @@ async def _create_instance_from_template(
     template_edges = edges_result.scalars().all()
 
     instance_node_map: dict[str, str] = {}
+    allocated_ports_by_node: dict[str, set[int]] = {}
     for t_node in template_nodes:
         override = _find_override(t_node, instance.node_overrides)
         legacy_ports = pick_override(t_node, override, "ports")
+        target_node_id = (override.node_id if override and override.node_id else t_node.node_id)
 
         # Auto-allocate ports for port_defs with auto=true
         user_port_values = override.port_values if override else None
         if t_node.port_defs and any(
             isinstance(pd, dict) and pd.get("auto") for pd in t_node.port_defs
         ):
-            target_node_id = (override.node_id if override and override.node_id else t_node.node_id)
             machine = (await db.execute(
                 select(NodeModel).where(NodeModel.id == target_node_id)
             )).scalar_one_or_none()
             if machine:
                 agent_addr = machine.agent_address or f"http://{machine.management_ip}:8001"
+                exclude_ports = await _allocated_ports_for_node(
+                    db,
+                    target_node_id,
+                    exclude_instance_id=db_instance.id,
+                    extra_ports=allocated_ports_by_node.get(target_node_id),
+                )
                 user_port_values = await auto_allocate_ports(
                     agent_address=agent_addr,
                     port_defs=t_node.port_defs,
                     existing_port_values=user_port_values,
+                    exclude_ports=exclude_ports,
                 )
 
         resolved_ports, normalized_port_values = resolve_port_values(
             t_node.port_defs,
             user_port_values,
             legacy_ports,
+        )
+        allocated_ports_by_node.setdefault(target_node_id, set()).update(
+            extract_ports_from_values(normalized_port_values)
+        )
+        allocated_ports_by_node[target_node_id].update(
+            extract_host_ports(resolved_ports, pick_override(t_node, override, "network_mode"))
         )
         db_node = TaskInstanceNode(
             instance_id=db_instance.id,
