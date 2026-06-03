@@ -286,8 +286,11 @@ async def list_business_task_results(instance_id: str, db: AsyncSession = Depend
 
 
 @router.get("/business-tasks/summary")
-async def business_task_summary(db: AsyncSession = Depends(get_db)):
-    return await summarize_business_tasks(db)
+async def business_task_summary(
+    is_benchmark: bool | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    return await summarize_business_tasks(db, is_benchmark=is_benchmark)
 
 
 async def _lookup_baseline(
@@ -311,10 +314,14 @@ async def _lookup_baseline(
         worker_host = placements.get("worker") or placements.get("compute")
     if not worker_host:
         return None
-    # Resolve hostname to node_id
+    # Resolve hostname/display name/UUID to node_id.
     node = (
         await db.execute(
-            select(NodeModel).where(NodeModel.hostname == worker_host)
+            select(NodeModel).where(
+                (NodeModel.id == worker_host)
+                | (NodeModel.hostname == worker_host)
+                | (NodeModel.display_name == worker_host)
+            )
         )
     ).scalar_one_or_none()
     if not node:
@@ -385,6 +392,8 @@ async def evaluate_and_store_business_metric(
         estimated_value=estimated_value,
         baseline_value=baseline_value,
     )
+    if evaluation.target_value is None:
+        return None
     row = BusinessObjectiveEvaluation(
         instance_id=instance_id,
         task_type=business_task.get("task_type") or "unknown",

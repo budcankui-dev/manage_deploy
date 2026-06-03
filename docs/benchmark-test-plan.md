@@ -1,134 +1,162 @@
 # 业务目标验收测试方案
 
-> 最后更新：2026-06-02  
-> 状态：已实现，可执行
+> 最后更新：2026-06-03
+> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，仍需四节点真实压测留档
 
 ## 目标
-验证系统在真实工作负载下，业务目标成功率 ≥ 90%。
+
+验证系统在真实工作负载下，业务目标成功率达到验收要求：
+
+```text
+业务目标成功率 = 业务目标达成工单数 / 已完成且可评价工单数 x 100%
+验收通过条件：业务目标成功率 >= 90%
+```
+
+当前支持业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
 ## 验收指标
-- 成功条件：`actual_value >= baseline_value × 0.8`（higher-is-better 指标）
-- 通过标准：`成功工单数 / 已评估工单数 ≥ 90%`
 
-## 测试范围
-当前支持业务类型：高吞吐矩阵乘法（`high_throughput_matmul`）
+矩阵乘法任务使用过程性计算速率指标，不用绝对完成时间作为业务目标。
 
-## 访问地址
-- 管理员前端：http://10.112.244.94:8182（登录：admin/admin）
-- 验收测试页：http://10.112.244.94:8182/benchmark
-- 后端 API：http://10.112.244.94:8181
+```text
+effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds / 1e9
+单任务达标条件：actual_gflops >= baseline_gflops x 0.8
+```
 
-## 前置条件
-1. 三个计算节点已注册（compute-1/2/3，均为计算+终端双角色）
-2. 每个参与测试的节点已完成 baseline 测试（stable=true，参数：matrix_size=1024, batch_count=50, seed=42, warmup=3）
-3. matmul worker 镜像已推送到 `10.112.244.94:5000/scientific-matmul:dev`
+其中 `baseline_gflops` 是该节点在相同业务 profile 下的历史基准能力，`0.8` 是科研验收阶段的容忍系数。这样可以屏蔽输入数据量差异，重点评价“任务运行后的过程性能力是否达到该节点历史水平”。
 
-## 测试参数
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| 任务数量 | 10 | 可调整，最多 30；3个节点并发可同时跑多个 |
-| 矩阵规模 | 1024 × 1024 | 固定，与 baseline 一致 |
-| 批次数 | 50 | 固定，与 baseline 一致 |
-| 随机种子 | 42 | 固定 |
+## 测试环境
 
-## 测试流程（全部在验收测试页操作）
+- 管理员前端：`http://10.112.244.94:8182`
+- 验收测试页：`http://10.112.244.94:8182/benchmark`
+- 后端 API：`http://10.112.244.94:8181`
+- 管理节点：`admin-server`，`10.112.244.94`
+- 业务节点：`compute-1`、`compute-2`、`compute-3`
 
-### Step 1: 基线管理
-验收测试页 → 基线管理 section：
-- 查看所有节点的当前基线状态（未测试节点标红）
-- 点击 [批量测试所有节点] 对所有可调度节点跑基线（约 30-60 秒/节点）
-- 等待每个节点显示 stable=true
-
-### Step 2: 批量创建测试工单
-验收测试页 → 批量压测 section：
-- 配置任务数（推荐 10）、矩阵大小（1024）、批次数（50）
-- 点击 [创建压测工单]
-- 工单带 `is_benchmark=true` 标记，与日常功能性工单区分
-
-### Step 3: 路由与启动
-验收测试页 → 路由与启动 section：
-- 点击 [一键路由]：随机分配可调度节点（当前 mock 策略，后续接入真实路由模块）
-- 点击 [一键启动]：所有已路由实例批量启动
-- 状态格子显示：待路由 / 待启动 / 运行中 / 已完成 / 失败
-
-### Step 4: 查看成功率
-验收测试页 → 成功率统计 section：
-- 实时显示成功率百分比 + 进度条
-- 绿色 = ≥ 90%（验收通过）；红色 = 未达标
-- 点击 [刷新] 获取最新数据
-
-## 并发说明
-matmul 模板端口已配置为动态分配（source: 18800-18900，compute: 18900-19000，sink: 19000-19100），同一节点可同时运行多个实例，支持 3 节点并发压测。
-
-## 验收判定
-`GET /api/business-tasks/summary` 返回的 `business_success_rate` 字段：
-- ≥ 0.90 → 验收通过 ✓
-- < 0.90 → 不通过，检查失败原因（baseline 过期、节点性能不稳定、容器启动失败等）
-
-## 与路由系统对接说明
-当前 mock 路由策略为随机选择可调度节点。对接真实路由模块时：
-- 外部路由系统调用 `POST /api/orders/{order_id}/routing-result` 写入路由结果
-- 路由输入 DAG 在工单创建时自动生成，路径：`task_orders.routing_input_dag`
-- 字段格式：见 `docs/dag.json` 示例
-
-## is_benchmark 字段说明
-测试工单与功能性工单通过 `task_orders.is_benchmark` 字段区分：
-- `is_benchmark=true`：通过批量压测创建的测试工单
-- `is_benchmark=false`：用户正常使用创建的工单（不纳入成功率统计）
-
-
-## 目标
-验证系统在真实工作负载下，业务目标成功率 ≥ 90%。
-
-## 验收指标
-- 成功条件：`actual_value >= baseline_value × 0.8`（higher-is-better 指标）
-- 通过标准：`成功工单数 / 已评估工单数 ≥ 90%`
-
-## 测试范围
-当前支持业务类型：高吞吐矩阵乘法（`high_throughput_matmul`）
+机器详情见 [docs/deployment/test-lab.md](/Users/yanjia/codes/manage_deploy/docs/deployment/test-lab.md)。
+真实四节点迁移、构建、预检和页面验收命令见 [docs/deployment/matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
 ## 前置条件
-1. 至少 1 个计算节点已注册并可调度
-2. 每个参与测试的节点已完成 baseline 测试（stable=true，参数：matrix_size=1024, batch_count=50, seed=42, warmup=3）
-3. 管理系统后端正常运行
 
-## 测试参数
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| 任务数量 | 10 | 可调整，最多 30 |
-| 矩阵规模 | 1024 × 1024 | 固定，与 baseline 一致 |
-| 批次数 | 50 | 固定，与 baseline 一致 |
-| 随机种子 | 42 | 固定 |
+1. `admin-server` 已部署前端、后端、数据库、对象存储和私有镜像仓库。
+2. `compute-1/2/3` 已注册为可调度节点，可作为 source / compute / sink。
+3. 业务节点已运行 Node Agent，管理面能访问各节点 Agent API。
+4. 矩阵乘法 worker 镜像已在 AMD64 环境构建并推送到 `10.112.244.94:5000/scientific-matmul:dev`。
+5. 每个参与测试的节点已完成相同 profile 的 baseline 测试，且 `stable=true`。
 
-## 测试流程
+## 默认参数
 
-### Step 1: 运行节点基线（管理员界面）
-进入「基线性能」面板 → 对每个计算节点点击「运行基线测试」→ 等待 stable=true
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| 任务数量 | `30` | 正式验收固定 30；少于 30 只作为调试，不判定正式通过 |
+| 矩阵规模 | `1024` | 与 baseline profile 保持一致 |
+| 批次数 | `50` | 与 baseline profile 保持一致 |
+| warmup | `3` | 前 3 批不计入有效吞吐 |
+| 随机种子 | `42` | 保持重复性 |
 
-### Step 2: 批量创建测试工单
-点击「批量压测」→ 配置参数 → 创建 N 个 is_benchmark=true 的工单
+## 页面流程
 
-### Step 3: 一键路由
-点击「一键路由」→ 系统自动为每个测试工单分配节点（当前为随机策略，后续接入真实路由模块）
+### Step 1 基线
 
-### Step 4: 一键启动
-点击「一键启动」→ 所有已路由工单的容器实例自动启动
+验收测试页直接列出所有可调度节点：
 
-### Step 5: 等待完成并查看结果
-等待所有任务运行完成（约 2-5 分钟/任务），在「业务目标成功率」面板查看实时统计
+- 未测试节点显示红色“未测试”。
+- 已测试节点显示 `baseline_value`、稳定性和上次更新时间。
+- 每行支持单节点“测试/重测”。
+- 底部操作支持“批量测试所有节点”。
 
-## 验收判定
-`GET /api/business-tasks/summary` 返回的 `business_success_rate` 字段：
-- ≥ 0.90 → 验收通过 ✓
-- < 0.90 → 不通过，检查失败原因（baseline 过期、节点性能不稳定等）
+### Step 2 批量压测
 
-## 与路由系统对接说明
-当前 mock 路由策略为随机选择可调度节点。对接真实路由模块时：
-- 外部路由系统调用 `POST /api/orders/{order_id}/routing-result` 写入路由结果
-- 路由输入 DAG 在工单创建时自动生成，路径：`task_orders.routing_input_dag`
-- 字段格式：见 `docs/dag.json` 示例
+在一行内配置任务数、矩阵规模、批次数，然后点击“创建压测工单”。
 
-## is_benchmark 字段说明
-测试工单与功能性工单通过 `task_orders.is_benchmark` 字段区分：
-- `is_benchmark=true`：通过批量压测创建的测试工单，用于成功率统计
-- `is_benchmark=false`：用户正常使用创建的工单，不纳入成功率统计（可选，统计时支持按此过滤）
+创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。
+
+### Step 3 执行
+
+执行区实时展示工单状态分布：
+
+```text
+待路由 / 已路由 / 运行中 / 已完成 / 失败
+```
+
+操作按钮：
+
+- “一键路由”：仅用于当前批量验收流程的 mock 路由，为 `is_benchmark=true` 的待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
+- “一键启动”：启动所有已路由且已物化的验收实例。
+- “刷新”：重新拉取状态。
+
+### Step 4 结果
+
+结果区以进度条展示矩阵乘法计算任务的业务目标成功率：
+
+- 成功率 `>= 90%` 且已评估任务数 `>= 30` 显示绿色，判定验收通过。
+- 成功率 `< 90%` 显示红色，判定未达标。
+- 已评估任务数 `< 30` 显示“样本不足”，即使当前比例为 100% 也不能作为正式验收截图。
+- 展示 `达标任务数 / 已评估任务数`，便于专家快速核对。
+
+## 路由系统边界
+
+当前阶段路由策略可以是资源约束驱动的简单放置策略，例如选择 GPU 数量满足要求的节点。业务目标成功率不证明路由算法全局最优，而是证明平台能完成：
+
+```text
+用户/测试工单 -> DAG 生成 -> 路由放置 -> 实例部署 -> Worker 运行 -> 指标采集 -> 业务目标判定 -> 成功率统计
+```
+
+外部路由系统接入时：
+
+- 工单创建时生成 `task_orders.routing_input_dag`。
+- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。
+- 平台接收结果后物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。
+
+当前 `/benchmark` 页面的一键路由仅作为验收 mock 路由，页面和文档均需明确其边界：它用于跑通部署与评价闭环，不替代外部路由算法，不证明路由最优。
+
+## 真实四节点执行要求
+
+从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再在 `admin-server` 拉取更新并重启服务。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并重启 Node Agent。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
+
+完整操作清单见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
+
+推荐正式验收执行命令：
+
+```bash
+# admin-server 构建并推送 AMD64 worker
+cd /home/bupt/manage_deploy
+WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_TAG=dev \
+WORKER_PLATFORM=linux/amd64 \
+WORKER_PUSH=1 \
+./scripts/build_workers.sh
+
+# admin-server 重建模板，确保模板 image 指向私有 registry
+WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_TAG=dev \
+DEMO_BASE_URL=http://127.0.0.1:8181 \
+PYTHONPATH=backend \
+/home/bupt/miniconda3/envs/manage_deploy/bin/python backend/scripts/rebuild_matmul_template.py
+```
+
+```bash
+# 本地或 admin-server 运行真实远程 E2E preflight，不能跳过镜像/架构/agent 检查
+BASE_URL=http://10.112.244.94:8181 \
+E2E_REMOTE=1 \
+WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_TAG=dev \
+E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
+E2E_NODE_AGENT_HOSTS="10.112.249.191 10.112.150.166 10.112.116.165" \
+MATMUL_MATRIX_SIZE=1024 \
+MATMUL_BATCH_COUNT=50 \
+./scripts/e2e_matmul_live.sh
+```
+
+## 可视化 E2E 要求
+
+端到端测试需要让用户看到页面过程时，Tester Agent 应使用有头浏览器或 Codex Browser 打开 `http://10.112.244.94:8182/benchmark`，逐步操作 Step 1 到 Step 4，并在关键节点保留截图或页面状态说明。
+
+命令行 API 校验只能作为辅助，不能替代浏览器中对验收页面布局、状态变化和结果进度条的可视化确认。
+
+## 当前限制
+
+- 当前验收页面的 UI 四步流程已基本具备。
+- 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
+- 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
+- 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。

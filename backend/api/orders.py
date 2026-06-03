@@ -10,7 +10,7 @@ from typing import Optional
 
 from api.auth import get_current_user
 from database import get_db
-from enums import DeploymentMode, OrderStatus, RoutingStatus
+from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus
 from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskInstanceNode, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
@@ -25,6 +25,7 @@ from schemas import (
 )
 from services.business_task_query import get_order_detail_context
 from services.dag_builder import build_matmul_dag
+from services.dag_executor import DAGExecutor
 from services.order_materialize import _resolve_node_id
 from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
 from services.port_plan import format_service_url, get_business_address
@@ -35,7 +36,11 @@ from .instances import _create_instance_from_template
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 
-def _order_to_response(order: TaskOrder, instance_exists: bool | None = None) -> TaskOrderResponse:
+def _order_to_response(
+    order: TaskOrder,
+    instance_exists: bool | None = None,
+    deployment_status: TaskStatus | None = None,
+) -> TaskOrderResponse:
     rc = order.runtime_config or {}
     bt = rc.get("business_task") or {}
     rp = bt.get("runtime_plan") or {}
@@ -46,14 +51,29 @@ def _order_to_response(order: TaskOrder, instance_exists: bool | None = None) ->
     }
     if instance_exists is not None:
         updates["instance_exists"] = instance_exists
+    if deployment_status is not None:
+        updates["deployment_status"] = deployment_status
     return data.model_copy(update=updates)
 
 
-async def _instance_exists(db: AsyncSession, instance_id: str | None) -> bool | None:
+async def _instance_state(
+    db: AsyncSession,
+    instance_id: str | None,
+) -> tuple[bool | None, TaskStatus | None]:
     if not instance_id:
-        return None
-    row = await db.execute(select(TaskInstance.id).where(TaskInstance.id == instance_id))
-    return row.scalar_one_or_none() is not None
+        return None, None
+    row = await db.execute(
+        select(TaskInstance.id, TaskInstance.status).where(TaskInstance.id == instance_id)
+    )
+    result = row.first()
+    if not result:
+        return False, None
+    return True, result.status
+
+
+async def _instance_exists(db: AsyncSession, instance_id: str | None) -> bool | None:
+    exists, _ = await _instance_state(db, instance_id)
+    return exists
 
 
 @router.post("", response_model=TaskOrderResponse)
@@ -106,8 +126,14 @@ async def list_orders(
 
     responses: list[TaskOrderResponse] = []
     for order in orders:
-        exists = await _instance_exists(db, order.materialized_instance_id)
-        responses.append(_order_to_response(order, instance_exists=exists))
+        exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
+        responses.append(
+            _order_to_response(
+                order,
+                instance_exists=exists,
+                deployment_status=deployment_status,
+            )
+        )
     return responses
 
 
@@ -127,8 +153,12 @@ async def get_order(
     business_task = config.get("business_task")
     routing_result = config.get("routing_result")
 
-    instance_exists = await _instance_exists(db, order.materialized_instance_id)
-    base = _order_to_response(order, instance_exists=instance_exists)
+    instance_exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
+    base = _order_to_response(
+        order,
+        instance_exists=instance_exists,
+        deployment_status=deployment_status,
+    )
     detail = TaskOrderDetailResponse.model_validate(base.model_dump())
     detail.business_task = business_task if isinstance(business_task, dict) else None
     detail.routing_result = routing_result if isinstance(routing_result, dict) else None
@@ -435,6 +465,7 @@ async def create_batch_benchmark(
                 "task_type": payload.task_type,
                 "data_profile": payload.data_profile,
                 "business_objective": {"metric_key": "effective_gflops", "operator": ">=", "unit": "GFLOPS"},
+                "runtime_plan": {"routing_strategy": payload.routing_strategy},
                 "routing_strategy": payload.routing_strategy,
             }
         }
@@ -493,6 +524,74 @@ async def batch_auto_route(
     return {"routed": routed, "failed": failed}
 
 
+@router.post("/start-all-routed")
+async def start_all_routed_benchmark_orders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start all materialized benchmark orders for the current user."""
+    rows = await db.execute(
+        select(TaskOrder).where(
+            TaskOrder.status == OrderStatus.MATERIALIZED,
+            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
+            TaskOrder.is_benchmark == True,
+            TaskOrder.user_id == current_user.id,
+            TaskOrder.materialized_instance_id.is_not(None),
+        )
+    )
+    orders = rows.scalars().all()
+
+    started: list[str] = []
+    skipped: list[str] = []
+    failed: dict[str, str] = {}
+
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        if not instance_id:
+            failed[order.id] = "Order has no materialized instance"
+            continue
+
+        result = await db.execute(
+            select(TaskInstance)
+            .options(selectinload(TaskInstance.nodes))
+            .where(TaskInstance.id == instance_id)
+        )
+        instance = result.scalar_one_or_none()
+        if not instance:
+            failed[order.id] = "Materialized instance not found"
+            continue
+
+        if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+            skipped.append(instance_id)
+            continue
+
+        if instance.status not in (
+            TaskStatus.PENDING,
+            TaskStatus.SCHEDULED,
+            TaskStatus.STOPPED,
+            TaskStatus.FAILED,
+        ):
+            failed[order.id] = f"Cannot start instance in status: {instance.status}"
+            continue
+
+        try:
+            executor = DAGExecutor(db)
+            success, error = await executor.execute_dag_start(instance_id)
+            if success:
+                started.append(instance_id)
+            else:
+                failed[order.id] = error or "Unknown error"
+        except Exception as exc:
+            failed[order.id] = str(exc)
+
+    return {
+        "started": len(started),
+        "skipped": len(skipped),
+        "failed": failed,
+        "instance_ids": started,
+    }
+
+
 async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
     catalog_row = await db.execute(
@@ -529,7 +628,12 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
 
     placements = [{"node_id": role, "worker_host": node.hostname} for role, node in picked.items()]
     rc = order.runtime_config or {}
-    rc["routing_result"] = {"placements": placements}
+    business_task = rc.get("business_task") or {}
+    runtime_plan = business_task.get("runtime_plan") or {}
+    rc["routing_result"] = {
+        "strategy": runtime_plan.get("routing_strategy") or business_task.get("routing_strategy"),
+        "placements": placements,
+    }
     order.runtime_config = rc
     flag_modified(order, "runtime_config")
     order.routing_status = RoutingStatus.COMPLETED.value

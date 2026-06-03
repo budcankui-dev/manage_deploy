@@ -97,7 +97,7 @@ export const ordersApi = {
 export const businessApi = {
   submit: (data) => api.post('/business-tasks', data),
   list: (params = {}) => api.get('/business-tasks', { params }),
-  summary: () => api.get('/business-tasks/summary'),
+  summary: (params = {}) => api.get('/business-tasks/summary', { params }),
   evaluation: (instanceId) => api.get(`/business-tasks/${instanceId}/evaluation`),
   results: (instanceId) => api.get(`/business-tasks/${instanceId}/results`),
   catalog: () => api.get('/business-template-catalog'),

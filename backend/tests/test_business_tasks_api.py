@@ -2,8 +2,8 @@ import pytest
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
-from enums import UserRole
-from models import User
+from enums import OrderStatus, UserRole
+from models import BusinessObjectiveEvaluation, TaskOrder, User
 
 
 async def _create_user(db_session, username: str, role: UserRole = UserRole.USER) -> User:
@@ -256,6 +256,84 @@ async def test_business_task_summary_success_rate_excludes_unevaluated_orders(cl
     assert summary[0]["evaluated_count"] == 1
     assert summary[0]["success_count"] == 1
     assert summary[0]["business_success_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_business_task_summary_can_filter_benchmark_orders(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+
+    def runtime_config(strategy: str = "resource_guarantee"):
+        return {
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "data_profile": {"matrix_size": 1024, "batch_count": 50},
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "target_value": 80,
+                    "unit": "GFLOPS",
+                },
+                "runtime_plan": {"routing_strategy": strategy},
+            }
+        }
+
+    normal_order = TaskOrder(
+        template_id=template_id,
+        name="普通业务工单",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config(),
+        materialized_instance_id="normal-instance",
+        is_benchmark=False,
+    )
+    benchmark_order = TaskOrder(
+        template_id=template_id,
+        name="验收压测工单",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config(),
+        materialized_instance_id="benchmark-instance",
+        is_benchmark=True,
+    )
+    db_session.add_all([normal_order, benchmark_order])
+    db_session.add_all(
+        [
+            BusinessObjectiveEvaluation(
+                instance_id="normal-instance",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=90,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=True,
+            ),
+            BusinessObjectiveEvaluation(
+                instance_id="benchmark-instance",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=60,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=False,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    all_response = await client.get("/api/business-tasks/summary")
+    assert all_response.status_code == 200
+    assert all_response.json()[0]["count"] == 2
+
+    benchmark_response = await client.get("/api/business-tasks/summary?is_benchmark=true")
+    assert benchmark_response.status_code == 200
+    benchmark_summary = benchmark_response.json()
+    assert len(benchmark_summary) == 1
+    assert benchmark_summary[0]["count"] == 1
+    assert benchmark_summary[0]["evaluated_count"] == 1
+    assert benchmark_summary[0]["success_count"] == 0
+    assert benchmark_summary[0]["business_success_rate"] == 0.0
 
 
 @pytest.mark.asyncio

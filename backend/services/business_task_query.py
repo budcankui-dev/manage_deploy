@@ -213,10 +213,13 @@ async def list_business_tasks(
 async def summarize_business_tasks(
     db: AsyncSession,
     include_cancelled: bool = False,
+    is_benchmark: bool | None = None,
 ) -> list[dict[str, Any]]:
     query = select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
     if not include_cancelled:
         query = query.where(TaskOrder.status != OrderStatus.CANCELLED)
+    if is_benchmark is not None:
+        query = query.where(TaskOrder.is_benchmark == is_benchmark)
     rows = await db.execute(query)
     business_orders: list[tuple[TaskOrder, dict[str, Any]]] = []
     for order in rows.scalars():

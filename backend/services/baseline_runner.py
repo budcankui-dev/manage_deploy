@@ -15,7 +15,9 @@ from __future__ import annotations
 import json
 import logging
 import statistics
+import asyncio
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -29,6 +31,7 @@ BENCHMARK_PROFILES = {
         "operator": ">=",
         "unit": "GFLOPS",
         "image": "10.112.244.94:5000/scientific-matmul:dev",
+        "command": "python3 /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",
             "MATRIX_SIZE": "1024",
@@ -59,6 +62,7 @@ async def run_baseline_on_node(
 
     profile = BENCHMARK_PROFILES[task_type]
     image = image_override or profile["image"]
+    command = profile.get("command")
     env = dict(profile["env"])
     values: list[float] = []
 
@@ -66,7 +70,7 @@ async def run_baseline_on_node(
         for i in range(runs):
             container_name = f"baseline-{task_type}-run{i}-{int(time.time())}"
             gflops = await _run_single_benchmark(
-                client, agent_address, image, env, container_name
+                client, agent_address, image, env, container_name, command
             )
             values.append(gflops)
             logger.info(f"Baseline run {i+1}/{runs}: {gflops:.2f} GFLOPS")
@@ -94,43 +98,50 @@ async def _run_single_benchmark(
     image: str,
     env: dict[str, str],
     container_name: str,
+    command: str | None = None,
 ) -> float:
     """启动一个临时容器执行基准测试并收集结果。"""
     base_url = agent_address.rstrip("/")
+    task_id = str(uuid.uuid4())
+    node_id = str(uuid.uuid4())
 
     # 1. 创建容器
     create_payload = {
         "image": image,
+        "command": command,
         "env": env,
         "network_mode": "host",
         "restart_policy": "no",
     }
     resp = await client.post(
-        f"{base_url}/containers/start",
+        f"{base_url}/containers/{task_id}/{node_id}/start",
         json=create_payload,
-        params={"name": container_name},
     )
     resp.raise_for_status()
-    container_id = resp.json().get("container_id") or resp.json().get("id")
 
     # 2. 等待容器退出（轮询状态）
     for _ in range(120):  # max 120s
-        time.sleep(1)
-        status_resp = await client.get(f"{base_url}/containers/{container_name}/status")
+        await asyncio.sleep(1)
+        status_resp = await client.get(f"{base_url}/containers/{task_id}/{node_id}/status")
         if status_resp.status_code == 200:
             status = status_resp.json().get("status", "")
             if status in ("exited", "stopped", "dead"):
                 break
     else:
         # 超时，强制停止
-        await client.post(f"{base_url}/containers/{container_name}/stop")
+        await client.post(f"{base_url}/containers/{task_id}/{node_id}/stop")
 
     # 3. 收集日志
-    logs_resp = await client.get(f"{base_url}/containers/{container_name}/logs")
-    logs_text = logs_resp.text if logs_resp.status_code == 200 else ""
+    logs_resp = await client.get(f"{base_url}/containers/{task_id}/{node_id}/logs")
+    logs_text = ""
+    if logs_resp.status_code == 200:
+        try:
+            logs_text = logs_resp.json().get("logs", "")
+        except json.JSONDecodeError:
+            logs_text = logs_resp.text
 
     # 4. 删除容器
-    await client.delete(f"{base_url}/containers/{container_name}")
+    await client.delete(f"{base_url}/containers/{task_id}/{node_id}")
 
     # 5. 解析结果
     return _parse_benchmark_result(logs_text)
