@@ -87,13 +87,15 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
 重建矩阵乘法模板，确保模板镜像指向私有仓库：
 
 ```bash
-ssh manage-admin "cd /home/bupt/manage_deploy && \
+ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
   WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
   WORKER_TAG=dev \
   DEMO_BASE_URL=http://127.0.0.1:8181 \
-  PYTHONPATH=backend \
-  /home/bupt/miniconda3/envs/manage_deploy/bin/python backend/scripts/rebuild_matmul_template.py"
+  PYTHONPATH=/home/bupt/manage_deploy/backend \
+  /home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_matmul_template.py"
 ```
+
+模板节点必须开启 `port_defs.auto=true`。正式 `/benchmark` 批量验收会并发物化 30 个实例，如果端口仍固定为 `18801/18802/18803`，同一物理节点上的多个容器会互相抢端口或串到其它实例，表现为只有少数任务上报指标。
 
 ## 4. 业务节点预检
 
@@ -112,6 +114,8 @@ done
 ```
 
 然后重启 Docker 和 Node Agent。
+
+如果 Node Agent 镜像较旧，`POST /ports/available` 可能返回 404。当前 backend 会在这种情况下使用数据库已分配端口和模板端口范围做本地 fallback 分配，足够支撑验收；后续仍建议重建并部署包含 `/ports/available` 的 Node Agent 镜像。
 
 ## 5. 命令行 E2E 预检
 
@@ -162,4 +166,5 @@ curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true
 | baseline 失败 | Node Agent 地址、Docker 权限、私有仓库拉取、benchmark 容器日志 |
 | Step 4 样本不足 | 任务未完成、指标未上报、无 baseline 导致不可评价 |
 | 成功率异常 100% 但任务数很少 | 不是正式验收；必须达到 30 个已评估任务 |
+| 批量压测只有少数任务上报指标 | 检查模板 `port_defs.auto=true`、backend 自动端口 fallback、同一节点端口是否重复 |
 | 一键启动后无运行中状态 | 检查 `/tmp/manage_deploy_backend.log`、Node Agent 日志、端口冲突预检 |
