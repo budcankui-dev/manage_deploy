@@ -2,7 +2,7 @@
   <div class="benchmark-page">
     <section class="hero-card">
       <div>
-        <p class="eyebrow">验收测试</p>
+        <p class="eyebrow">业务目标验收</p>
         <h1>业务目标成功率闭环验证</h1>
         <p class="hero-subtitle">按基线、批量压测、路由执行、成功率统计四步完成专家验收演示；正式判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
         <div class="run-strip">
@@ -15,6 +15,7 @@
         <span class="field-label">任务类型</span>
         <el-select v-model="taskType" class="task-select">
           <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
+          <el-option label="视频AI推理任务" value="low_latency_video_pipeline" />
         </el-select>
         <el-button type="primary" :loading="fullFlowLoading" @click="startFullFlow">
           开始完整测试流程
@@ -97,20 +98,33 @@
         <div class="pressure-form">
           <span>任务数</span>
           <el-input-number v-model="benchmarkForm.count" :min="1" :max="30" controls-position="right" />
-          <span>矩阵</span>
-          <el-input-number v-model="benchmarkForm.matrix_size" :min="256" :step="256" controls-position="right" />
-          <span>批次</span>
-          <el-input-number v-model="benchmarkForm.batch_count" :min="1" controls-position="right" />
-          <span>观测秒数</span>
-          <el-input-number v-model="benchmarkForm.observation_duration_sec" :min="0" :max="120" controls-position="right" />
-          <span>最少样本</span>
-          <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
+          <template v-if="taskType === 'high_throughput_matmul'">
+            <span>矩阵</span>
+            <el-input-number v-model="benchmarkForm.matrix_size" :min="256" :step="256" controls-position="right" />
+            <span>批次</span>
+            <el-input-number v-model="benchmarkForm.batch_count" :min="1" controls-position="right" />
+            <span>观测秒数</span>
+            <el-input-number v-model="benchmarkForm.observation_duration_sec" :min="0" :max="120" controls-position="right" />
+            <span>最少样本</span>
+            <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
+          </template>
+          <template v-else-if="taskType === 'low_latency_video_pipeline'">
+            <span>帧数</span>
+            <el-input-number v-model="benchmarkForm.frame_count" :min="30" :step="10" controls-position="right" />
+            <span>抽帧间隔</span>
+            <el-input-number v-model="benchmarkForm.frame_stride" :min="1" controls-position="right" />
+            <span>有效帧</span>
+            <el-input-number v-model="benchmarkForm.measured_frames" :min="10" :max="300" controls-position="right" />
+            <span>计算强度</span>
+            <el-input-number v-model="benchmarkForm.work_units" :min="1000" :step="5000" controls-position="right" />
+          </template>
           <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建压测工单</el-button>
         </div>
         <div class="pending-pill">
           当前待处理工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
+      <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
       <p class="status-note">创建压测工单会生成新的验收轮次 ID，后续路由、启动、统计和工单证据表默认只针对这一轮，避免历史数据影响验收截图。</p>
     </el-card>
 
@@ -214,7 +228,7 @@
       </template>
       <div v-if="!summaryAggregate" class="empty-hint">暂无统计数据，完成压测后查看。</div>
       <div v-else class="result-block">
-        <div class="result-title">矩阵乘法计算任务</div>
+        <div class="result-title">{{ currentTaskConfig.label }}</div>
         <div class="result-meta-grid">
           <div>
             <span>统计口径</span>
@@ -317,6 +331,18 @@ import { ElMessage } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
+const taskConfigs = {
+  high_throughput_matmul: {
+    label: '矩阵乘法计算任务',
+    unit: 'GFLOPS',
+    objectiveText: '业务目标：计算节点 effective_gflops 不低于该节点同 profile 历史基线的 0.8 倍。',
+  },
+  low_latency_video_pipeline: {
+    label: '视频AI推理任务',
+    unit: 'ms',
+    objectiveText: '业务目标：工业检测抽帧推理的 frame_latency_p90_ms 不高于该节点同 profile 历史基线的 1.2 倍。',
+  },
+}
 const taskType = ref('high_throughput_matmul')
 const nodes = ref([])
 const nodesLoading = ref(false)
@@ -347,7 +373,18 @@ const benchmarkForm = reactive({
   warmup_batches: 3,
   min_samples: 5,
   max_samples: 12,
+  frame_count: 100,
+  resolution: '720p',
+  fps: 30,
+  frame_stride: 30,
+  warmup_frames: 10,
+  measured_frames: 90,
+  work_units: 45000,
 })
+
+const currentTaskConfig = computed(() =>
+  taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
+)
 
 const nodeBaselineRows = computed(() =>
   nodes.value.filter(n => n.is_schedulable).map(n => {
@@ -356,7 +393,7 @@ const nodeBaselineRows = computed(() =>
       node_id: n.id,
       hostname: n.hostname,
       baseline_value: bl?.baseline_value ?? null,
-      unit: bl?.unit || 'GFLOPS',
+      unit: bl?.unit || currentTaskConfig.value.unit,
       stable: bl?.stable ?? null,
       updated_at: bl?.updated_at ?? bl?.created_at ?? null,
     }
@@ -463,8 +500,7 @@ function formatTime(value) {
 }
 
 function taskTypeLabel(value) {
-  if (value === 'high_throughput_matmul') return '矩阵乘法计算任务'
-  if (value === 'low_latency_video_pipeline') return '视频AI推理任务'
+  if (taskConfigs[value]) return taskConfigs[value].label
   if (value === 'text_model_training') return '文本模型训练任务'
   return value || '—'
 }
@@ -567,7 +603,7 @@ async function loadBaselines() {
 }
 
 async function loadOrders() {
-  const params = { is_benchmark: true, limit: 100 }
+  const params = { is_benchmark: true, task_type: taskType.value, limit: 100 }
   if (currentBenchmarkRunId.value) {
     params.benchmark_run_id = currentBenchmarkRunId.value
   }
@@ -584,7 +620,7 @@ async function loadOrders() {
 }
 
 async function loadSummary() {
-  const params = { is_benchmark: true }
+  const params = { is_benchmark: true, task_type: taskType.value }
   if (currentBenchmarkRunId.value) {
     params.benchmark_run_id = currentBenchmarkRunId.value
   }
@@ -652,17 +688,7 @@ async function createBatch() {
       task_type: taskType.value,
       count: benchmarkForm.count,
       benchmark_run_id: runId,
-      data_profile: {
-        matrix_size: benchmarkForm.matrix_size,
-        batch_count: benchmarkForm.batch_count,
-        seed: 42,
-        warmup_batches: benchmarkForm.warmup_batches,
-        observation_duration_sec: benchmarkForm.observation_duration_sec,
-        sample_interval_sec: benchmarkForm.sample_interval_sec,
-        sample_batch_count: benchmarkForm.sample_batch_count,
-        min_samples: benchmarkForm.min_samples,
-        max_samples: benchmarkForm.max_samples,
-      },
+      data_profile: buildBenchmarkDataProfile(),
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条压测工单`)
@@ -670,6 +696,34 @@ async function createBatch() {
     return data
   } finally {
     batchCreateLoading.value = false
+  }
+}
+
+function buildBenchmarkDataProfile() {
+  if (taskType.value === 'low_latency_video_pipeline') {
+    return {
+      profile_id: 'video_industrial_inspection_720p',
+      frame_count: benchmarkForm.frame_count,
+      resolution: benchmarkForm.resolution,
+      fps: benchmarkForm.fps,
+      frame_stride: benchmarkForm.frame_stride,
+      warmup_frames: benchmarkForm.warmup_frames,
+      measured_frames: benchmarkForm.measured_frames,
+      work_units: benchmarkForm.work_units,
+      seed: 42,
+    }
+  }
+  return {
+    profile_id: 'cpu_standard',
+    matrix_size: benchmarkForm.matrix_size,
+    batch_count: benchmarkForm.batch_count,
+    seed: 42,
+    warmup_batches: benchmarkForm.warmup_batches,
+    observation_duration_sec: benchmarkForm.observation_duration_sec,
+    sample_interval_sec: benchmarkForm.sample_interval_sec,
+    sample_batch_count: benchmarkForm.sample_batch_count,
+    min_samples: benchmarkForm.min_samples,
+    max_samples: benchmarkForm.max_samples,
   }
 }
 
@@ -688,7 +742,10 @@ async function openOrderDetail(row) {
 async function doAutoRoute() {
   routeLoading.value = true
   try {
-    const { data } = await ordersApi.batchAutoRoute({ benchmark_run_id: currentBenchmarkRunId.value || null })
+    const { data } = await ordersApi.batchAutoRoute({
+      benchmark_run_id: currentBenchmarkRunId.value || null,
+      task_type: taskType.value,
+    })
     ElMessage.success(`已路由 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
     await loadOrders()
     return data
@@ -700,7 +757,10 @@ async function doAutoRoute() {
 async function doStartAll() {
   startLoading.value = true
   try {
-    const { data } = await ordersApi.startAllRouted({ benchmark_run_id: currentBenchmarkRunId.value || null })
+    const { data } = await ordersApi.startAllRouted({
+      benchmark_run_id: currentBenchmarkRunId.value || null,
+      task_type: taskType.value,
+    })
     ElMessage.success(`已启动 ${data.started ?? data.routed ?? '全部'} 个实例`)
     await Promise.all([loadOrders(), loadSummary()])
     return data
@@ -726,7 +786,14 @@ async function startFullFlow() {
   }
 }
 
-watch(taskType, () => Promise.all([loadBaselines(), loadSummary()]))
+watch(taskType, async () => {
+  selectedOrderDetail.value = null
+  detailDrawerVisible.value = false
+  if (currentBenchmarkRunId.value && !currentBenchmarkRunId.value.startsWith(taskType.value)) {
+    setCurrentBenchmarkRunId('')
+  }
+  await Promise.all([loadBaselines(), loadOrders(), loadSummary()])
+})
 onMounted(loadAll)
 </script>
 

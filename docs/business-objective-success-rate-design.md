@@ -1,6 +1,6 @@
 # 业务目标成功率与路由结果接入设计
 
-本文记录“业务目标成功率”的统一定义、过程性指标方案、历史基准能力判定，以及外部路由系统回写 placements 和 GPU 分配结果后的部署衔接方式。当前为设计方案，不代表已全部实现。
+本文记录“业务目标成功率”的统一定义、过程性指标方案、历史基准能力判定，以及外部路由系统回写 placements 和 GPU 分配结果后的部署衔接方式。当前矩阵乘法主链路已接入 `/benchmark` 验收页面；视频 AI 推理作为扩展业务已具备轻量 worker、baseline fallback、镜像构建入口和页面工单创建能力；模型训练/文本生成保持指标契约预留。
 
 ## 总体原则
 
@@ -18,10 +18,10 @@
 
 ## 任务结构假设
 
-第一阶段默认每个任务只有一个核心业务计算节点：
+第一阶段默认每个任务只有一个核心业务计算节点。代码实现中核心计算角色统一使用 `compute`，文档叙事中 `worker` 与 `compute` 等价：
 
 ```text
-source -> worker -> sink
+source -> compute/worker -> sink
 ```
 
 - `source`：数据源或任务发起角色，通常不需要 GPU。
@@ -34,6 +34,7 @@ source -> worker -> sink
 - 一个 `worker` 最多使用一个 GPU。
 - 路由结果需要说明每个逻辑子任务放在哪台物理节点。
 - 对需要 GPU 的逻辑子任务，路由结果需要返回分配的 GPU 编号。
+- 多个业务类型可以复用同一个 source/compute/sink 模板；物化实例时必须优先使用工单中的 `task_type` 定位 `business_template_catalog`，再按模板节点名生成 overrides，避免只按 `template_id` 查询造成 catalog 歧义。
 
 ## 业务类型与过程性指标
 
@@ -64,7 +65,7 @@ business_success = false
 failure_reason = metrics_incomplete
 ```
 
-当前矩阵乘法实现采用“任务结束后汇总过程性指标”的轻量方案：compute 节点在 warmup 后持续采样，sink 节点一次性上报 `effective_gflops` 中位数以及 `sample_count`、`observed_duration_sec`、`mean/min/max_effective_gflops`、`samples` 等元数据。这样既能说明指标来自运行过程，又避免为了验收页面引入实时监控系统。后续如要增强演示效果，可在 UI 中轮询工单详情和实例事件，但正式判定仍以最终上报的业务指标为准。
+当前矩阵乘法实现采用“任务结束后汇总过程性指标”的轻量方案：compute 节点在 warmup 后持续采样，sink 节点一次性上报 `effective_gflops` 中位数以及 `sample_count`、`observed_duration_sec`、`mean/min/max_effective_gflops`、`samples` 等元数据。这样既能说明指标来自运行过程，又避免为了验收页面引入实时 CPU/GPU 监控系统。资源监控可作为演示增强项，但正式判定仍以最终上报的业务指标、工单详情、节点/GPU 分配和指标 JSON 为准。
 
 视频推理业务采用轻量“工业检测抽帧”负载，不强制真实传输完整视频流。当前已提供 `workers/low-latency-video/` 最小 worker：source 节点生成固定视频帧元数据，并按 `frame_stride=30` 抽帧发送给 worker；worker 执行确定性的 CPU 推理 surrogate，记录每帧处理时延；sink 汇总有效阶段 `frame_latency_p90_ms` 并上报。这样符合“低时延视频 AI 推理/工业检测”模态，又避免批量压测时完整视频流量压垮实验网络。后续如果替换真实模型，只需要保持 `frame_latency_p90_ms` 指标契约不变。
 

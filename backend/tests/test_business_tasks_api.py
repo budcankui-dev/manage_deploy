@@ -1,8 +1,9 @@
 import pytest
+from sqlalchemy import select
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
-from enums import OrderStatus, UserRole
+from enums import OrderStatus, RoutingStatus, UserRole
 from models import BusinessObjectiveEvaluation, TaskOrder, User
 
 
@@ -424,6 +425,218 @@ async def test_benchmark_summary_and_orders_can_filter_by_run_id(client, db_sess
     )
     assert orders_response.status_code == 200
     assert [row["name"] for row in orders_response.json()] == ["run-a benchmark order"]
+
+
+@pytest.mark.asyncio
+async def test_business_task_summary_can_filter_by_task_type(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+
+    def runtime_config(task_type: str):
+        return {
+            "benchmark": {"run_id": "mixed-task-type-run"},
+            "business_task": {
+                "task_type": task_type,
+                "data_profile": {},
+                "business_objective": {
+                    "metric_key": "effective_gflops" if task_type == "high_throughput_matmul" else "frame_latency_p90_ms",
+                    "operator": ">=" if task_type == "high_throughput_matmul" else "<=",
+                    "unit": "GFLOPS" if task_type == "high_throughput_matmul" else "ms",
+                },
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            },
+        }
+
+    matmul_order = TaskOrder(
+        template_id=template_id,
+        name="matmul benchmark order",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config("high_throughput_matmul"),
+        materialized_instance_id="matmul-summary-instance",
+        is_benchmark=True,
+    )
+    video_order = TaskOrder(
+        template_id=template_id,
+        name="video benchmark order",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config("low_latency_video_pipeline"),
+        materialized_instance_id="video-summary-instance",
+        is_benchmark=True,
+    )
+    db_session.add_all([matmul_order, video_order])
+    db_session.add_all(
+        [
+            BusinessObjectiveEvaluation(
+                instance_id="matmul-summary-instance",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=90,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=True,
+            ),
+            BusinessObjectiveEvaluation(
+                instance_id="video-summary-instance",
+                task_type="low_latency_video_pipeline",
+                routing_strategy="resource_guarantee",
+                metric_key="frame_latency_p90_ms",
+                actual_value=130,
+                target_value=150,
+                operator="<=",
+                unit="ms",
+                business_success=True,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/business-tasks/summary",
+        params={
+            "is_benchmark": True,
+            "benchmark_run_id": "mixed-task-type-run",
+            "task_type": "high_throughput_matmul",
+        },
+    )
+
+    assert response.status_code == 200
+    summary = response.json()
+    assert len(summary) == 1
+    assert summary[0]["task_type"] == "high_throughput_matmul"
+    assert summary[0]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-video-user")
+
+    response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 2,
+            "benchmark_run_id": "video-run-a",
+            "data_profile": {
+                "frame_count": 150,
+                "frame_stride": 30,
+                "measured_frames": 90,
+                "work_units": 45000,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 2
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == body["order_ids"][0]))
+    order = row.scalar_one()
+    assert order.user_id == user.id
+    assert order.is_benchmark is True
+    assert order.routing_status == "pending"
+
+    business_task = order.runtime_config["business_task"]
+    assert business_task["task_type"] == "low_latency_video_pipeline"
+    assert business_task["modality"] == "low_latency_forwarding"
+    assert business_task["business_objective"] == {
+        "metric_key": "frame_latency_p90_ms",
+        "operator": "<=",
+        "unit": "ms",
+    }
+    assert business_task["data_profile"]["frame_count"] == 150
+    assert business_task["data_profile"]["profile_id"] == "video_industrial_inspection_720p"
+
+    dag = order.routing_input_dag
+    assert dag["job_name"] == "视频AI推理"
+    assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
+    assert dag["edges"] == [
+        {"from": "source", "to": "compute", "data_mb": 20},
+        {"from": "compute", "to": "sink", "data_mb": 20},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-scope-user")
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    matmul_create = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 1,
+            "benchmark_run_id": "mixed-run",
+        },
+    )
+    assert matmul_create.status_code == 200
+    video_create = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "mixed-run",
+        },
+    )
+    assert video_create.status_code == 200
+    matmul_order_id = matmul_create.json()["order_ids"][0]
+    video_order_id = video_create.json()["order_ids"][0]
+
+    response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "mixed-run", "task_type": "high_throughput_matmul"},
+    )
+    assert response.status_code == 200
+    assert response.json()["routed"] == 1, response.json()
+
+    matmul_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == matmul_order_id))
+    ).scalar_one()
+    video_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == video_order_id))
+    ).scalar_one()
+    assert matmul_order.routing_status == "completed"
+    assert matmul_order.materialized_instance_id
+    assert video_order.routing_status == "pending"
+    assert video_order.materialized_instance_id is None
+
+
+@pytest.mark.asyncio
+async def test_mock_auto_route_single_order_is_benchmark_only(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-single-route-user")
+    order = TaskOrder(
+        template_id=template_id,
+        name="normal pending order",
+        status=OrderStatus.PENDING,
+        user_id=user.id,
+        routing_status=RoutingStatus.PENDING.value,
+        is_benchmark=False,
+    )
+    db_session.add(order)
+    await db_session.commit()
+
+    response = await client.post(f"/api/orders/{order.id}/auto-route", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Mock auto-route is only available for benchmark orders"
 
 
 @pytest.mark.asyncio

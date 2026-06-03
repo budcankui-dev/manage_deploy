@@ -11,7 +11,7 @@ from typing import Optional
 
 from api.auth import get_current_user
 from database import get_db
-from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus
+from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
 from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskInstanceNode, TaskOrder, User
 from schemas import (
     BatchOperationRequest,
@@ -26,16 +26,65 @@ from schemas import (
     TaskOrderResponse,
 )
 from services.business_task_query import get_order_detail_context
-from services.dag_builder import build_matmul_dag
 from services.dag_executor import DAGExecutor
 from services.order_materialize import _resolve_node_id
 from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
 from services.port_plan import format_service_url, get_business_address
+from services.routing_payload_builder import build_routing_payload
 from services.scheduler import TaskScheduler
 
 from .instances import _create_instance_from_template
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+
+
+BENCHMARK_TASK_CONFIGS = {
+    "high_throughput_matmul": {
+        "label": "矩阵乘法计算任务",
+        "modality": "high_throughput_compute",
+        "default_profile": {
+            "profile_id": "cpu_standard",
+            "matrix_size": 1024,
+            "batch_count": 50,
+            "seed": 42,
+            "warmup_batches": 3,
+            "observation_duration_sec": 10,
+            "sample_interval_sec": 1,
+            "sample_batch_count": 5,
+            "min_samples": 5,
+            "max_samples": 12,
+        },
+        "business_objective": {
+            "metric_key": "effective_gflops",
+            "operator": ">=",
+            "unit": "GFLOPS",
+        },
+        "source_name": "benchmark-source",
+        "destination_name": "benchmark-sink",
+    },
+    "low_latency_video_pipeline": {
+        "label": "视频AI推理任务",
+        "modality": "low_latency_forwarding",
+        "default_profile": {
+            "profile_id": "video_industrial_inspection_720p",
+            "frame_count": 100,
+            "resolution": "720p",
+            "fps": 30,
+            "frame_stride": 30,
+            "warmup_frames": 10,
+            "measured_frames": 90,
+            "work_units": 45000,
+            "seed": 42,
+        },
+        "business_objective": {
+            "metric_key": "frame_latency_p90_ms",
+            "operator": "<=",
+            "unit": "ms",
+        },
+        "source_name": "benchmark-video-source",
+        "destination_name": "benchmark-video-sink",
+    },
+}
 
 
 def _benchmark_run_id(order: TaskOrder) -> str | None:
@@ -45,6 +94,38 @@ def _benchmark_run_id(order: TaskOrder) -> str | None:
         value = benchmark.get("run_id")
         return str(value) if value else None
     return None
+
+
+def _benchmark_task_type(order: TaskOrder) -> str | None:
+    config = order.runtime_config or {}
+    business_task = config.get("business_task")
+    if isinstance(business_task, dict):
+        value = business_task.get("task_type")
+        return str(value) if value else None
+    return None
+
+
+async def _catalog_for_order(db: AsyncSession, order: TaskOrder) -> BusinessTemplateCatalog | None:
+    query = select(BusinessTemplateCatalog).where(
+        BusinessTemplateCatalog.template_id == order.template_id
+    )
+    task_type = _benchmark_task_type(order)
+    if task_type:
+        query = query.where(BusinessTemplateCatalog.task_type == task_type)
+    rows = (await db.execute(query)).scalars().all()
+    return rows[0] if rows else None
+
+
+def _benchmark_config(task_type: str) -> dict:
+    try:
+        return BENCHMARK_TASK_CONFIGS[task_type]
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Unsupported benchmark task_type: {task_type}") from exc
+
+
+def _merged_benchmark_profile(task_type: str, data_profile: dict | None) -> dict:
+    config = _benchmark_config(task_type)
+    return {**config["default_profile"], **(data_profile or {})}
 
 
 def _order_to_response(
@@ -120,6 +201,7 @@ async def list_orders(
     status: OrderStatus | None = None,
     is_benchmark: bool | None = None,
     benchmark_run_id: str | None = None,
+    task_type: str | None = None,
     limit: int = 100,
     include_cancelled: bool = False,
     reconcile: bool = True,
@@ -143,6 +225,8 @@ async def list_orders(
     orders = rows.scalars().all()
     if benchmark_run_id:
         orders = [order for order in orders if _benchmark_run_id(order) == benchmark_run_id]
+    if task_type:
+        orders = [order for order in orders if _benchmark_task_type(order) == task_type]
     orders = orders[: max(1, min(limit, 500))]
 
     responses: list[TaskOrderResponse] = []
@@ -382,12 +466,7 @@ async def receive_routing_result(
     flag_modified(order, "runtime_config")
 
     # Resolve role -> template_node_name from catalog
-    catalog_row = await db.execute(
-        select(BusinessTemplateCatalog).where(
-            BusinessTemplateCatalog.template_id == order.template_id
-        )
-    )
-    catalog = catalog_row.scalar_one_or_none()
+    catalog = await _catalog_for_order(db, order)
     role_node_names = {
         "source": catalog.source_node_name if catalog else None,
         "compute": catalog.compute_node_name if catalog else None,
@@ -470,17 +549,7 @@ class BatchBenchmarkRequest(BaseModel):
     task_type: str = "high_throughput_matmul"
     count: int = Field(default=10, ge=1, le=30)
     benchmark_run_id: Optional[str] = None
-    data_profile: dict = Field(default_factory=lambda: {
-        "matrix_size": 1024,
-        "batch_count": 50,
-        "seed": 42,
-        "warmup_batches": 3,
-        "observation_duration_sec": 10,
-        "sample_interval_sec": 1,
-        "sample_batch_count": 5,
-        "min_samples": 5,
-        "max_samples": 12,
-    })
+    data_profile: dict = Field(default_factory=dict)
     routing_strategy: str = "resource_guarantee"
 
 
@@ -497,33 +566,39 @@ async def create_batch_benchmark(
     if not catalog:
         raise HTTPException(status_code=404, detail=f"No catalog entry for task_type: {payload.task_type}")
 
+    benchmark_config = _benchmark_config(payload.task_type)
+    data_profile = _merged_benchmark_profile(payload.task_type, payload.data_profile)
+    business_objective = dict(benchmark_config["business_objective"])
     order_ids = []
     business_start_time = datetime.utcnow()
     business_end_time = business_start_time + timedelta(hours=1)
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     for i in range(payload.count):
         order_id_placeholder = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
-        routing_dag = build_matmul_dag(
+        routing_dag = build_routing_payload(
             order_id=order_id_placeholder,
-            source_name=None,
-            destination_name=None,
-            business_start_time=None,
-            business_end_time=None,
-            matrix_size=payload.data_profile.get("matrix_size", 1024),
-            batch_count=payload.data_profile.get("batch_count", 50),
-            routing_strategy=payload.routing_strategy,
+            order_name=order_id_placeholder,
+            task_type=payload.task_type,
+            modality=benchmark_config["modality"],
+            source_name=benchmark_config["source_name"],
+            destination_name=benchmark_config["destination_name"],
+            business_start_time=business_start_time,
+            business_end_time=business_end_time,
+            data_profile=data_profile,
         )
         runtime_config = {
             "benchmark": {
                 "run_id": run_id,
                 "created_at": business_start_time.isoformat(),
                 "sample_count": payload.count,
-                "profile": payload.data_profile,
+                "profile": data_profile,
+                "mode": "mock-route-ready",
             },
             "business_task": {
                 "task_type": payload.task_type,
-                "data_profile": payload.data_profile,
-                "business_objective": {"metric_key": "effective_gflops", "operator": ">=", "unit": "GFLOPS"},
+                "modality": benchmark_config["modality"],
+                "data_profile": data_profile,
+                "business_objective": business_objective,
                 "runtime_plan": {"routing_strategy": payload.routing_strategy},
                 "routing_strategy": payload.routing_strategy,
             }
@@ -537,6 +612,8 @@ async def create_batch_benchmark(
             routing_input_dag=routing_dag,
             runtime_config=runtime_config,
             is_benchmark=True,
+            source_name=benchmark_config["source_name"],
+            destination_name=benchmark_config["destination_name"],
             business_start_time=business_start_time,
             business_end_time=business_end_time,
             scheduled_start_time=business_start_time,
@@ -552,6 +629,7 @@ async def create_batch_benchmark(
 
 class BenchmarkRunScopedRequest(BaseModel):
     benchmark_run_id: Optional[str] = None
+    task_type: Optional[str] = None
 
 
 @router.post("/batch-auto-route")
@@ -563,7 +641,7 @@ async def batch_auto_route(
     """Auto-route all pending benchmark orders."""
     rows = await db.execute(
         select(TaskOrder).where(
-            TaskOrder.status == OrderStatus.PENDING,
+            TaskOrder.status == OrderStatus.PENDING.value,
             TaskOrder.routing_status == RoutingStatus.PENDING.value,
             TaskOrder.is_benchmark == True,
             TaskOrder.user_id == current_user.id,
@@ -573,6 +651,10 @@ async def batch_auto_route(
     run_id = payload.benchmark_run_id if payload else None
     if run_id:
         orders = [order for order in orders if _benchmark_run_id(order) == run_id]
+    task_type = payload.task_type if payload else None
+    if task_type:
+        _benchmark_config(task_type)
+        orders = [order for order in orders if _benchmark_task_type(order) == task_type]
 
     schedulable_rows = await db.execute(
         select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
@@ -604,7 +686,7 @@ async def start_all_routed_benchmark_orders(
     """Start all materialized benchmark orders for the current user."""
     rows = await db.execute(
         select(TaskOrder).where(
-            TaskOrder.status == OrderStatus.MATERIALIZED,
+            TaskOrder.status == OrderStatus.MATERIALIZED.value,
             TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
             TaskOrder.is_benchmark == True,
             TaskOrder.user_id == current_user.id,
@@ -615,6 +697,10 @@ async def start_all_routed_benchmark_orders(
     run_id = payload.benchmark_run_id if payload else None
     if run_id:
         orders = [order for order in orders if _benchmark_run_id(order) == run_id]
+    task_type = payload.task_type if payload else None
+    if task_type:
+        _benchmark_config(task_type)
+        orders = [order for order in orders if _benchmark_task_type(order) == task_type]
 
     started: list[str] = []
     skipped: list[str] = []
@@ -669,10 +755,7 @@ async def start_all_routed_benchmark_orders(
 
 async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
-    catalog_row = await db.execute(
-        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.template_id == order.template_id)
-    )
-    catalog = catalog_row.scalar_one_or_none()
+    catalog = await _catalog_for_order(db, order)
     role_node_names = {
         "source": catalog.source_node_name if catalog else None,
         "compute": catalog.compute_node_name if catalog else None,
@@ -764,6 +847,10 @@ async def auto_route_order(
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if current_user.role != UserRole.ADMIN and order.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Cannot route orders owned by another user")
+    if not order.is_benchmark:
+        raise HTTPException(status_code=400, detail="Mock auto-route is only available for benchmark orders")
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=400, detail=f"Order routing_status is '{order.routing_status}', expected 'pending'")
 

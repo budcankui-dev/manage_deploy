@@ -1,7 +1,7 @@
 # 业务目标验收测试方案
 
 > 最后更新：2026-06-04
-> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；仍需四节点真实压测留档
+> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；矩阵乘法为正式主验收链路，视频 AI 推理已接入页面作为扩展业务演示，仍需四节点真实压测留档
 
 ## 目标
 
@@ -12,9 +12,9 @@
 验收通过条件：业务目标成功率 >= 90%
 ```
 
-当前支持业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
+当前正式主验收业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
-第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker 雏形 `workers/low-latency-video/`，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline 和构建镜像，用于扩展业务演示和后续联调准备；正式四节点 30 任务验收主链路仍优先使用矩阵乘法，避免一次验收同时引入过多变量。
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式四节点 30 任务验收主链路仍优先使用矩阵乘法，避免一次验收同时引入过多变量。
 
 ## 验收指标
 
@@ -76,7 +76,7 @@
 
 ### Step 2 批量压测
 
-在一行内配置任务数、矩阵规模、批次数、观测秒数和最少样本数，然后点击“创建压测工单”。
+在一行内配置任务数和当前任务类型的固定 profile 参数，然后点击“创建压测工单”。矩阵乘法展示矩阵规模、批次数、观测秒数和最少样本数；视频 AI 推理展示帧数、抽帧间隔、有效帧数和计算强度。
 
 创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。压测工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
 
@@ -92,8 +92,8 @@
 
 操作按钮：
 
-- “一键路由”：仅用于当前批量验收流程的 mock 路由，为 `is_benchmark=true` 的待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
-- “一键启动”：启动所有已路由且已物化的验收实例。
+- “一键路由”：仅用于当前批量验收流程的 mock 路由，为当前 `benchmark_run_id` 和当前任务类型的 `is_benchmark=true` 待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
+- “一键启动”：启动当前 `benchmark_run_id` 和当前任务类型下所有已路由且已物化的验收实例。
 - “刷新”：重新拉取状态。
 
 正式演示时，Step 3 的 mock 路由和启动操作只应作用于当前 `benchmark_run_id`。如果需要重新跑一轮验收，应重新点击 Step 2 创建新的压测工单，让新旧结果分离，避免把历史失败或历史成功样本混入本轮统计。
@@ -108,7 +108,7 @@
 
 ### Step 4 结果
 
-结果区以进度条展示矩阵乘法计算任务的业务目标成功率：
+结果区以进度条展示当前任务类型的业务目标成功率：
 
 - 成功率 `>= 90%` 且已评估任务数 `>= 30` 显示绿色，判定验收通过。
 - 成功率 `< 90%` 显示红色，判定未达标。
@@ -127,8 +127,9 @@
 外部路由系统接入时：
 
 - 工单创建时生成 `task_orders.routing_input_dag`。
-- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号，可使用简单格式 `{"compute": "compute-3"}`，也可使用包含 `node_name`、`gpu_indices`、`allocated_resources` 的完整格式。
-- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。
+- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。对话/工单主链路使用 `POST /api/routing-results/{routing_request_id}`，验收工单可直接使用 `POST /api/orders/{order_id}/routing-result`。两者都要表达 `source`、`compute/worker`、`sink` placements，compute 节点可携带 `gpu_device` 或 `gpu_indices`。
+- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。当前 `/benchmark` 一键路由写回 list 形式 placements，例如 `[{node_id:"compute", worker_host:"compute-3", gpu_device:"0"}]`；正式路由系统可使用更丰富的 dict 形式，平台按角色解析。
+- 如果多个业务类型复用同一个 source/compute/sink 模板，平台会优先根据工单 `runtime_config.business_task.task_type` 定位 `business_template_catalog`，避免只按 `template_id` 查找时出现多条 catalog 歧义。
 - 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 
 当前 `/benchmark` 页面的一键路由仅作为验收 mock 路由，页面和文档均需明确其边界：它用于跑通部署与评价闭环，不替代外部路由算法，不证明路由最优。
@@ -228,7 +229,8 @@ MATMUL_BATCH_COUNT=50 \
 - 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
 - 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
 - 当前业务目标统计接口和订单列表支持按 `benchmark_run_id` 过滤，验收页面默认按当前轮次统计，避免新旧压测结果互相污染。
-- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，但尚未在 `/benchmark` 页面作为正式 30 任务验收类型开放；如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
+- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
+- 当前正式判定不依赖实时 CPU/GPU 监控。资源监控可作为演示增强项，但验收主证据是工单详情中的实例状态、实际节点/GPU 分配、业务指标评估和指标采集 JSON，避免为了演示引入额外监控系统导致链路变复杂。
 - 当前验收证据链依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部压测工单并打开详情。
 - 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。
 - 截图建议包含 Step 1 基线表、Step 3 状态分布、工单证据链详情抽屉和 Step 4 成功率进度条。

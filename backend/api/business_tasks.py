@@ -295,12 +295,14 @@ async def list_business_task_results(instance_id: str, db: AsyncSession = Depend
 async def business_task_summary(
     is_benchmark: bool | None = None,
     benchmark_run_id: str | None = None,
+    task_type: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     return await summarize_business_tasks(
         db,
         is_benchmark=is_benchmark,
         benchmark_run_id=benchmark_run_id,
+        task_type=task_type,
     )
 
 

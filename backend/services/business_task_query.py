@@ -224,6 +224,7 @@ async def summarize_business_tasks(
     include_cancelled: bool = False,
     is_benchmark: bool | None = None,
     benchmark_run_id: str | None = None,
+    task_type: str | None = None,
 ) -> list[dict[str, Any]]:
     query = select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
     if not include_cancelled:
@@ -238,6 +239,8 @@ async def summarize_business_tasks(
         if benchmark_run_id and _extract_benchmark_run_id(order) != benchmark_run_id:
             continue
         business_task = _extract_business_task(order)
+        if task_type and business_task and business_task.get("task_type") != task_type:
+            continue
         if business_task:
             business_orders.append((order, business_task))
 

@@ -615,7 +615,7 @@ function metricMeaningLabel(row) {
     end_to_end_latency_ms: '端到端时延',
     effective_gflops: '有效算力',
     tokens_per_second: '推理吞吐',
-    frame_latency_p90_ms: '帧延迟P90',
+    frame_latency_p90_ms: '帧推理时延 P90',
   }
   return METRIC_LABELS[row.metric_key] || row.metric_key || '指标'
 }

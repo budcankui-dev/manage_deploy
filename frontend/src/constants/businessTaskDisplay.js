@@ -1,6 +1,6 @@
 export const TASK_TYPE_LABELS = {
   high_throughput_matmul: '矩阵乘法计算任务',
-  low_latency_video_pipeline: '低时延视频链路',
+  low_latency_video_pipeline: '视频AI推理任务',
   llm_text_generation: '大模型文本生成任务',
 }
 
@@ -8,7 +8,7 @@ export const TASK_TYPE_SUMMARIES = {
   high_throughput_matmul:
     '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
-    '在 source → compute → sink 链路上处理视频帧流，以端到端时延作为体验验收指标。',
+    '在 source → compute → sink 链路上按固定帧间隔抽样视频帧，模拟工业检测推理，以帧推理时延 P90 作为验收指标。',
   llm_text_generation:
     '在 source → inference → sink 链路上完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
@@ -18,7 +18,7 @@ const METRIC_LABELS = {
   end_to_end_latency_ms: '端到端时延',
   effective_gflops: '计算性能',
   tokens_per_second: '生成速率',
-  avg_frame_latency_ms: '帧推理时延',
+  frame_latency_p90_ms: '帧推理时延 P90',
 }
 
 const OPERATOR_LABELS = {
@@ -58,7 +58,7 @@ export function describeObjectiveMeaning(taskType, objective) {
     return `验收标准：${sentence}。以有效计算吞吐量和节点历史基线对比判定业务目标是否达标；计算跑通并上报指标后即可参与成功率统计。`
   }
   if (taskType === 'low_latency_video_pipeline') {
-    return `验收标准：${sentence}。数值越小表示链路响应越快；从源到汇总的处理全链路时延需满足阈值。`
+    return `验收标准：${sentence}。数值越小表示推理越快；以有效推理阶段的 P90 帧处理时延和节点历史基线对比判定。`
   }
   return `验收标准：${sentence}。`
 }
