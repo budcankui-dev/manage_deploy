@@ -72,6 +72,7 @@ class TaskScheduler:
 
         async def _run_stop():
             from database import async_session_maker
+            from models import TaskInstance
             from services.dag_executor import DAGExecutor
             from services.instance_lifecycle import auto_cleanup_instance
             from services.order_sync import mark_orders_completed_for_instance
