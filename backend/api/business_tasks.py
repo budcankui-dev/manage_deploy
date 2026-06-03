@@ -90,7 +90,10 @@ async def build_instance_create_from_business_task(
     elif payload.task_type == "llm_text_generation":
         gpu_roles.add("compute")
     for role, template_node_name in role_node_names.items():
-        raw_node_id = payload.routing_result.placements.get(role)
+        placement = payload.routing_result.placements.get(role)
+        if role == "compute" and placement is None:
+            placement = payload.routing_result.placements.get("worker")
+        raw_node_id = _placement_node_name(placement)
         if not raw_node_id:
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
         if _is_uuid(raw_node_id):
@@ -99,7 +102,10 @@ async def build_instance_create_from_business_task(
             node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
         env = dict(shared_env)
         env["TASK_ROLE"] = role
-        gpu_id = "all" if role in gpu_roles else None
+        placement_gpu_id = _placement_gpu_id(placement)
+        gpu_id = placement_gpu_id if placement_gpu_id is not None else ("all" if role in gpu_roles else None)
+        if placement_gpu_id is not None:
+            env["GPU_DEVICE"] = placement_gpu_id
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
@@ -311,7 +317,7 @@ async def _lookup_baseline(
                 worker_host = p.get("worker_host")
                 break
     elif isinstance(placements, dict):
-        worker_host = placements.get("worker") or placements.get("compute")
+        worker_host = _placement_node_name(placements.get("worker") or placements.get("compute"))
     if not worker_host:
         return None
     # Resolve hostname/display name/UUID to node_id.
@@ -336,6 +342,29 @@ async def _lookup_baseline(
         )
     ).scalar_one_or_none()
     return baseline.baseline_value if baseline else None
+
+
+def _placement_node_name(placement: Any) -> str | None:
+    if isinstance(placement, str):
+        return placement
+    if isinstance(placement, dict):
+        for key in ("node_id", "node_name", "worker_host", "hostname"):
+            value = placement.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _placement_gpu_id(placement: Any) -> str | None:
+    if not isinstance(placement, dict):
+        return None
+    gpu_device = placement.get("gpu_device")
+    if gpu_device is not None:
+        return str(gpu_device)
+    gpu_indices = placement.get("gpu_indices")
+    if isinstance(gpu_indices, list) and gpu_indices:
+        return str(gpu_indices[0])
+    return None
 
 
 async def evaluate_and_store_business_metric(
@@ -473,7 +502,25 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(raw, dict):
         return {
             key: raw[key]
-            for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed")
+            for key in (
+                "compute_latency_ms",
+                "effective_gflops",
+                "matrix_size",
+                "batch_count",
+                "seed",
+                "aggregation",
+                "mean_effective_gflops",
+                "min_effective_gflops",
+                "max_effective_gflops",
+                "observation_duration_sec",
+                "observed_duration_sec",
+                "sample_interval_sec",
+                "sample_batch_count",
+                "warmup_batches",
+                "sample_count",
+                "min_samples",
+                "samples",
+            )
             if raw.get(key) is not None
         }
     metadata: dict[str, Any] = {}

@@ -1,4 +1,5 @@
 import random
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ from schemas import (
     TaskOrderDetailResponse,
     TaskOrderEvaluationSummary,
     TaskOrderInstanceSummary,
+    TaskOrderNodePlacementSummary,
     TaskOrderResponse,
 )
 from services.business_task_query import get_order_detail_context
@@ -107,6 +109,8 @@ async def create_order(payload: TaskOrderCreate, db: AsyncSession = Depends(get_
 @router.get("", response_model=list[TaskOrderResponse])
 async def list_orders(
     status: OrderStatus | None = None,
+    is_benchmark: bool | None = None,
+    limit: int = 100,
     include_cancelled: bool = False,
     reconcile: bool = True,
     db: AsyncSession = Depends(get_db),
@@ -117,11 +121,13 @@ async def list_orders(
             await db.commit()
 
     query = select(TaskOrder).where(TaskOrder.user_id == current_user.id)
+    if is_benchmark is not None:
+        query = query.where(TaskOrder.is_benchmark == is_benchmark)
     if status:
         query = query.where(TaskOrder.status == status)
     elif not include_cancelled:
         query = query.where(TaskOrder.status != OrderStatus.CANCELLED)
-    rows = await db.execute(query.order_by(TaskOrder.created_at.desc()))
+    rows = await db.execute(query.order_by(TaskOrder.created_at.desc()).limit(max(1, min(limit, 500))))
     orders = rows.scalars().all()
 
     responses: list[TaskOrderResponse] = []
@@ -166,16 +172,30 @@ async def get_order(
     if instance:
         # Build port_access_urls from instance nodes
         port_access_urls: dict[str, str] = {}
+        node_placements: list[TaskOrderNodePlacementSummary] = []
         inst_nodes_result = await db.execute(
             select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance.id)
         )
         inst_nodes = inst_nodes_result.scalars().all()
         for inst_node in inst_nodes:
-            if not inst_node.port_values:
-                continue
             machine = (await db.execute(
                 select(NodeModel).where(NodeModel.id == inst_node.node_id)
             )).scalar_one_or_none()
+            env = inst_node.env or {}
+            node_placements.append(
+                TaskOrderNodePlacementSummary(
+                    role=env.get("TASK_ROLE") or inst_node.name,
+                    instance_node_name=inst_node.name,
+                    node_id=inst_node.node_id,
+                    hostname=machine.hostname if machine else None,
+                    gpu_id=inst_node.gpu_id,
+                    gpu_device=env.get("GPU_DEVICE"),
+                    port_values=inst_node.port_values,
+                    status=inst_node.status,
+                )
+            )
+            if not inst_node.port_values:
+                continue
             if not machine:
                 continue
             biz_addr = get_business_address(machine)
@@ -186,6 +206,7 @@ async def get_order(
                     continue
                 key = f"{inst_node.name}/{port_name}"
                 port_access_urls[key] = format_service_url(biz_addr, port_int)
+        detail.node_placements = node_placements
 
         detail.instance = TaskOrderInstanceSummary(
             id=instance.id,
@@ -392,15 +413,18 @@ async def receive_routing_result(
             template_node_name=template_node_name,
             node_id=resolved_node_id,
             env=env,
+            gpu_id=placement.gpu_device if placement.gpu_device is not None else None,
         ))
 
     # Create instance
+    start_time = order.business_start_time or order.scheduled_start_time or datetime.utcnow()
+    end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
         template_id=order.template_id,
         name=order.name,
         deployment_mode=DeploymentMode.SCHEDULED,
-        scheduled_start_time=order.business_start_time,
-        scheduled_end_time=order.business_end_time,
+        scheduled_start_time=start_time,
+        scheduled_end_time=end_time,
         auto_start=False,
         keep_after_stop=order.keep_after_stop,
         node_overrides=overrides,
@@ -430,7 +454,17 @@ async def receive_routing_result(
 class BatchBenchmarkRequest(BaseModel):
     task_type: str = "high_throughput_matmul"
     count: int = Field(default=10, ge=1, le=30)
-    data_profile: dict = Field(default_factory=lambda: {"matrix_size": 1024, "batch_count": 50})
+    data_profile: dict = Field(default_factory=lambda: {
+        "matrix_size": 1024,
+        "batch_count": 50,
+        "seed": 42,
+        "warmup_batches": 3,
+        "observation_duration_sec": 10,
+        "sample_interval_sec": 1,
+        "sample_batch_count": 5,
+        "min_samples": 5,
+        "max_samples": 12,
+    })
     routing_strategy: str = "resource_guarantee"
 
 
@@ -448,6 +482,8 @@ async def create_batch_benchmark(
         raise HTTPException(status_code=404, detail=f"No catalog entry for task_type: {payload.task_type}")
 
     order_ids = []
+    business_start_time = datetime.utcnow()
+    business_end_time = business_start_time + timedelta(hours=1)
     for i in range(payload.count):
         order_id_placeholder = f"benchmark-{payload.task_type}-{i + 1}"
         routing_dag = build_matmul_dag(
@@ -478,6 +514,10 @@ async def create_batch_benchmark(
             routing_input_dag=routing_dag,
             runtime_config=runtime_config,
             is_benchmark=True,
+            business_start_time=business_start_time,
+            business_end_time=business_end_time,
+            scheduled_start_time=business_start_time,
+            scheduled_end_time=business_end_time,
         )
         db.add(order)
         await db.flush()
@@ -620,13 +660,24 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
             env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
             env["TASK_INSTANCE_ID"] = order.id
+        gpu_id = "0" if role == "compute" else None
+        if gpu_id is not None:
+            env["GPU_DEVICE"] = gpu_id
         overrides.append(TaskInstanceNodeOverride(
             template_node_name=template_node_name,
             node_id=node.id,
             env=env,
+            gpu_id=gpu_id,
         ))
 
-    placements = [{"node_id": role, "worker_host": node.hostname} for role, node in picked.items()]
+    placements = [
+        {
+            "node_id": role,
+            "worker_host": node.hostname,
+            **({"gpu_device": "0"} if role == "compute" else {}),
+        }
+        for role, node in picked.items()
+    ]
     rc = order.runtime_config or {}
     business_task = rc.get("business_task") or {}
     runtime_plan = business_task.get("runtime_plan") or {}
@@ -638,12 +689,14 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     flag_modified(order, "runtime_config")
     order.routing_status = RoutingStatus.COMPLETED.value
 
+    start_time = order.business_start_time or order.scheduled_start_time or datetime.utcnow()
+    end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
         template_id=order.template_id,
         name=order.name,
         deployment_mode=DeploymentMode.SCHEDULED,
-        scheduled_start_time=order.business_start_time,
-        scheduled_end_time=order.business_end_time,
+        scheduled_start_time=start_time,
+        scheduled_end_time=end_time,
         auto_start=False,
         keep_after_stop=order.keep_after_stop,
         node_overrides=overrides,

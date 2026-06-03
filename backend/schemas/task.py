@@ -345,6 +345,7 @@ class TaskOrderResponse(BaseModel):
     routing_input_dag: Optional[dict] = None
     materialized_instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None
+    deployment_status: Optional[TaskStatus] = None
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -396,7 +397,7 @@ class RoutingResult(BaseModel):
         default="resource_guarantee",
         validation_alias=AliasChoices("strategy", "routing_policy"),
     )
-    placements: dict[str, str]
+    placements: dict[str, Any]
     estimated_metric: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
@@ -482,11 +483,23 @@ class TaskOrderEvaluationSummary(BaseModel):
     result_metadata: Optional[dict[str, Any]] = None
 
 
+class TaskOrderNodePlacementSummary(BaseModel):
+    role: str
+    instance_node_name: str
+    node_id: str
+    hostname: Optional[str] = None
+    gpu_id: Optional[str] = None
+    gpu_device: Optional[str] = None
+    port_values: Optional[dict[str, Any]] = None
+    status: Optional[NodeStatus] = None
+
+
 class TaskOrderDetailResponse(TaskOrderResponse):
     business_task: Optional[dict[str, Any]] = None
     routing_result: Optional[dict[str, Any]] = None
     instance: Optional[TaskOrderInstanceSummary] = None
     evaluation: Optional[TaskOrderEvaluationSummary] = None
+    node_placements: list[TaskOrderNodePlacementSummary] = Field(default_factory=list)
 
 
 class BusinessTemplateCatalogCreate(BaseModel):

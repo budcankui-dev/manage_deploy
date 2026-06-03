@@ -429,6 +429,7 @@ async def test_delete_order_purges_evaluation(client, db_session):
 @pytest.mark.asyncio
 async def test_business_task_list_api(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(client, db_session, username="admin-list", role=UserRole.ADMIN)
 
     payload = {
         "external_task_id": "intent-list-001",
@@ -458,7 +459,7 @@ async def test_business_task_list_api(client, db_session):
     order_id = body["order_id"]
     instance_id = body["instance_id"]
 
-    list_response = await client.get("/api/business-tasks")
+    list_response = await client.get("/api/business-tasks", headers=headers)
     assert list_response.status_code == 200
     listed = list_response.json()
     assert listed["total"] >= 1
@@ -477,6 +478,7 @@ async def test_business_task_list_api(client, db_session):
     filtered = await client.get(
         "/api/business-tasks",
         params={"task_type": "low_latency_video_pipeline", "routing_policy": "completion_time_first"},
+        headers=headers,
     )
     assert filtered.status_code == 200
     assert any(row["order_id"] == order_id for row in filtered.json()["items"])
@@ -485,18 +487,21 @@ async def test_business_task_list_api(client, db_session):
         f"/api/instances/{instance_id}/metrics",
         json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
     )
-    after_metric = await client.get("/api/business-tasks", params={"business_success": True})
+    after_metric = await client.get("/api/business-tasks", params={"business_success": True}, headers=headers)
     assert after_metric.status_code == 200
     success_item = next(row for row in after_metric.json()["items"] if row["order_id"] == order_id)
     assert success_item["actual_value"] == 150
     assert success_item["business_success"] is True
 
-    detail_response = await client.get(f"/api/orders/{order_id}")
+    detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
     assert detail["instance"]["id"] == instance_id
     assert detail["evaluation"]["business_success"] is True
+    placements = {item["role"]: item for item in detail["node_placements"]}
+    assert placements["compute"]["hostname"] == "worker-b"
+    assert placements["compute"]["gpu_id"] == "all"
 
 
 @pytest.mark.parametrize("tags,expected_keys", [

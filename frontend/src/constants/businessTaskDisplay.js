@@ -1,13 +1,16 @@
 export const TASK_TYPE_LABELS = {
   high_throughput_matmul: '矩阵乘法计算任务',
   low_latency_video_pipeline: '低时延视频链路',
+  llm_text_generation: '大模型文本生成任务',
 }
 
 export const TASK_TYPE_SUMMARIES = {
   high_throughput_matmul:
-    '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以计算耗时作为科学计算演示的验收指标。',
+    '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
     '在 source → compute → sink 链路上处理视频帧流，以端到端时延作为体验验收指标。',
+  llm_text_generation:
+    '在 source → inference → sink 链路上完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
 
 const METRIC_LABELS = {
@@ -27,7 +30,7 @@ const OPERATOR_LABELS = {
 export const MATMUL_PIPELINE_STEPS = [
   { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
   { role: 'compute', title: '执行计算', detail: 'NumPy 执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
-  { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 compute_latency_ms' },
+  { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 effective_gflops 和采样元数据' },
 ]
 
 export function taskTypeLabel(taskType) {
@@ -52,7 +55,7 @@ export function describeObjectiveMeaning(taskType, objective) {
   if (!objective) return '-'
   const sentence = formatObjectiveSentence(objective)
   if (taskType === 'high_throughput_matmul') {
-    return `验收标准：${sentence}。仅校验耗时是否达标，不验证矩阵乘法的数值正确性；计算跑通并上报指标后即可参与成功率统计。`
+    return `验收标准：${sentence}。以有效计算吞吐量和节点历史基线对比判定业务目标是否达标；计算跑通并上报指标后即可参与成功率统计。`
   }
   if (taskType === 'low_latency_video_pipeline') {
     return `验收标准：${sentence}。数值越小表示链路响应越快；从源到汇总的处理全链路时延需满足阈值。`
@@ -122,7 +125,10 @@ export function buildMatmulOutputRows(resultMetadata, evaluation) {
     rows.push({ label: '运行批次数', value: String(meta.batch_count) })
   }
   if (meta.compute_latency_ms != null) {
-    rows.push({ label: 'result.json 耗时', value: `${Number(meta.compute_latency_ms).toFixed(2)} ms` })
+    rows.push({ label: '观测窗口耗时', value: `${Number(meta.compute_latency_ms).toFixed(2)} ms` })
+  }
+  if (meta.sample_count != null) {
+    rows.push({ label: '有效样本数', value: String(meta.sample_count) })
   }
   if (evaluation) {
     const unit = evaluation.unit || 'ms'
@@ -210,7 +216,7 @@ export function buildComputeResultSummary(taskType, businessTask, evaluation, re
   ]
   if (evaluation) {
     lines.push({
-      label: '耗时达标',
+      label: '性能达标',
       value: evaluation.business_success ? '是' : '否',
       highlight: evaluation.business_success ? 'success' : 'danger',
     })

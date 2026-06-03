@@ -99,6 +99,8 @@ git diff --check
 
 ## 科学计算矩阵乘法 E2E
 
+正式业务目标成功率验收以 [/benchmark](benchmark-test-plan.md) 为主入口。命令行 E2E 用于验证镜像、Node Agent、端口、网络通信和指标上报链路；专家演示时必须结合浏览器页面查看基线、压测工单证据链和最终成功率。
+
 构建 worker 镜像：
 
 ```bash
@@ -136,9 +138,28 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 - 脚本末尾输出 `OK matmul live e2e passed`
 - 实例状态进入 `running`
-- evaluation 返回 `metric_key=compute_latency_ms`
+- evaluation 返回 `metric_key=effective_gflops`
 - `business_success=true`
 - source / compute / sink 均有非空 `ports` 和 `port_values`
+
+## 业务目标成功率页面验收
+
+页面入口：
+
+```text
+http://10.112.244.94:8182/benchmark
+```
+
+正式验收步骤：
+
+1. Step 1 批量测试所有可调度节点 baseline，确认每行都有基线值且稳定。
+2. Step 2 创建 30 个压测工单，矩阵 profile 与 baseline 保持一致，默认使用 10 秒观测窗口和最少 5 个有效样本。
+3. Step 3 使用外部路由系统回写 placements；联调阶段可用页面“一键路由”mock，仅用于验证部署与评价闭环。
+4. Step 3 启动已路由实例，等待状态进入已评估完成。
+5. 打开“验收工单证据链”中若干工单详情，核对业务参数 JSON、路由结果 JSON、source/compute/sink 节点、compute GPU 编号、实测指标和采集元数据。
+6. Step 4 截图最终结果，要求已评估任务数 >= 30 且业务目标成功率 >= 90%。
+
+如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建压测工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
 
 ## 端口冲突验收
 

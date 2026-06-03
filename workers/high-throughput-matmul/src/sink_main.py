@@ -78,7 +78,26 @@ def main() -> int:
         metric_value = float(result.get(metric_key, result.get("compute_latency_ms", 0)))
 
     # 上报 metric（业务验收关键路径），MinIO 上传失败不阻塞
-    METRIC_METADATA_KEYS = ("compute_latency_ms", "effective_gflops", "matrix_size", "batch_count", "seed", "result_preview")
+    METRIC_METADATA_KEYS = (
+        "compute_latency_ms",
+        "effective_gflops",
+        "matrix_size",
+        "batch_count",
+        "seed",
+        "result_preview",
+        "aggregation",
+        "mean_effective_gflops",
+        "min_effective_gflops",
+        "max_effective_gflops",
+        "observation_duration_sec",
+        "observed_duration_sec",
+        "sample_interval_sec",
+        "sample_batch_count",
+        "warmup_batches",
+        "sample_count",
+        "min_samples",
+        "samples",
+    )
     result_meta = {k: result[k] for k in METRIC_METADATA_KEYS if k in result}
 
     # MinIO 上传完整 result（用于前端展示），上传失败不阻塞

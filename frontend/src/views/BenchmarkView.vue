@@ -96,6 +96,10 @@
           <el-input-number v-model="benchmarkForm.matrix_size" :min="256" :step="256" controls-position="right" />
           <span>批次</span>
           <el-input-number v-model="benchmarkForm.batch_count" :min="1" controls-position="right" />
+          <span>观测秒数</span>
+          <el-input-number v-model="benchmarkForm.observation_duration_sec" :min="0" :max="120" controls-position="right" />
+          <span>最少样本</span>
+          <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
           <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建压测工单</el-button>
         </div>
         <div class="pending-pill">
@@ -141,6 +145,53 @@
           <div class="status-label">失败</div>
         </div>
       </div>
+    </el-card>
+
+    <el-card class="step-card evidence-card">
+      <template #header>
+        <div class="step-header">
+          <span class="step-num muted-step">证</span>
+          <div>
+            <div class="step-title">验收工单证据链</div>
+            <div class="step-desc">查看每个压测工单的路由结果、实例、节点/GPU 分配和业务指标，证明任务真实运行。</div>
+          </div>
+          <el-button class="header-action" size="small" plain @click="loadOrders">刷新工单列表</el-button>
+        </div>
+      </template>
+      <el-table :data="orders" size="small" empty-text="暂无压测工单">
+        <el-table-column prop="name" label="工单" min-width="210" show-overflow-tooltip />
+        <el-table-column label="任务状态" width="110">
+          <template #default="{ row }">
+            <el-tag size="small">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="路由状态" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.routing_status === 'completed' ? 'success' : 'warning'">
+              {{ row.routing_status || '—' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="部署状态" width="110">
+          <template #default="{ row }">{{ row.deployment_status || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="实例" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.materialized_instance_id || '未物化' }}</template>
+        </el-table-column>
+        <el-table-column label="路由放置" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ summarizePlacements(row.runtime_config?.routing_result?.placements) }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" align="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" plain :loading="detailLoading && selectedOrderId === row.id" @click="openOrderDetail(row)">
+              详情
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-card>
 
     <el-card class="step-card result-card">
@@ -197,6 +248,59 @@
         </div>
       </div>
     </el-card>
+
+    <el-drawer v-model="detailDrawerVisible" title="压测工单详情" size="56%">
+      <div v-if="!selectedOrderDetail" class="empty-hint">请选择一个工单查看详情。</div>
+      <div v-else class="detail-drawer-body">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="工单 ID">{{ selectedOrderDetail.id }}</el-descriptions-item>
+          <el-descriptions-item label="实例 ID">{{ selectedOrderDetail.materialized_instance_id || '未物化' }}</el-descriptions-item>
+          <el-descriptions-item label="任务状态">{{ selectedOrderDetail.status }}</el-descriptions-item>
+          <el-descriptions-item label="部署状态">{{ selectedOrderDetail.deployment_status || selectedOrderDetail.instance?.status || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="业务类型">{{ taskTypeLabel(selectedOrderDetail.task_type) }}</el-descriptions-item>
+          <el-descriptions-item label="路由策略">{{ selectedOrderDetail.routing_policy || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <section class="detail-section">
+          <h3>实际节点 / GPU 分配</h3>
+          <el-table :data="selectedOrderDetail.node_placements || []" size="small" empty-text="暂无节点分配信息">
+            <el-table-column prop="role" label="子任务" width="100" />
+            <el-table-column prop="hostname" label="物理节点" min-width="140" />
+            <el-table-column prop="instance_node_name" label="实例节点" min-width="120" />
+            <el-table-column label="GPU" width="90">
+              <template #default="{ row }">{{ row.gpu_device || row.gpu_id || '无' }}</template>
+            </el-table-column>
+            <el-table-column prop="status" label="节点状态" width="110" />
+          </el-table>
+        </section>
+
+        <section class="detail-section">
+          <h3>业务目标评估</h3>
+          <div v-if="selectedOrderDetail.evaluation" class="metric-grid">
+            <div><span>实测指标</span><strong>{{ formatMetric(selectedOrderDetail.evaluation.actual_value, selectedOrderDetail.evaluation.unit) }}</strong></div>
+            <div><span>达标阈值</span><strong>{{ formatMetric(selectedOrderDetail.evaluation.target_value, selectedOrderDetail.evaluation.unit) }}</strong></div>
+            <div><span>是否达标</span><strong :class="selectedOrderDetail.evaluation.business_success ? 'success-text' : 'danger-text'">{{ selectedOrderDetail.evaluation.business_success ? '达标' : '未达标' }}</strong></div>
+            <div><span>指标键</span><strong>{{ selectedOrderDetail.evaluation.metric_key }}</strong></div>
+          </div>
+          <div v-else class="empty-hint compact">尚未收到业务指标上报，任务完成后会生成评估结果。</div>
+        </section>
+
+        <section class="detail-section json-grid">
+          <div>
+            <h3>业务参数 JSON</h3>
+            <pre>{{ prettyJson(selectedOrderDetail.business_task) }}</pre>
+          </div>
+          <div>
+            <h3>路由结果 JSON</h3>
+            <pre>{{ prettyJson(selectedOrderDetail.routing_result) }}</pre>
+          </div>
+          <div>
+            <h3>指标采集结果 JSON</h3>
+            <pre>{{ prettyJson(selectedOrderDetail.evaluation?.result_metadata) }}</pre>
+          </div>
+        </section>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -219,8 +323,22 @@ const routeLoading = ref(false)
 const startLoading = ref(false)
 const fullFlowLoading = ref(false)
 const dashboardUpdatedAt = ref('')
+const detailDrawerVisible = ref(false)
+const detailLoading = ref(false)
+const selectedOrderId = ref('')
+const selectedOrderDetail = ref(null)
 const formalEvaluationCount = 30
-const benchmarkForm = reactive({ count: formalEvaluationCount, matrix_size: 1024, batch_count: 50 })
+const benchmarkForm = reactive({
+  count: formalEvaluationCount,
+  matrix_size: 1024,
+  batch_count: 50,
+  observation_duration_sec: 10,
+  sample_interval_sec: 1,
+  sample_batch_count: 5,
+  warmup_batches: 3,
+  min_samples: 5,
+  max_samples: 12,
+})
 
 const nodeBaselineRows = computed(() =>
   nodes.value.filter(n => n.is_schedulable).map(n => {
@@ -335,6 +453,46 @@ function formatTime(value) {
   })
 }
 
+function taskTypeLabel(value) {
+  if (value === 'high_throughput_matmul') return '矩阵乘法计算任务'
+  if (value === 'low_latency_video_pipeline') return '视频AI推理任务'
+  if (value === 'text_model_training') return '文本模型训练任务'
+  return value || '—'
+}
+
+function formatMetric(value, unit = '') {
+  if (value == null) return '—'
+  const numeric = Number(value)
+  const text = Number.isFinite(numeric) ? numeric.toFixed(2) : String(value)
+  return `${text} ${unit || ''}`.trim()
+}
+
+function summarizePlacements(placements) {
+  if (!placements) return '待路由'
+  if (Array.isArray(placements)) {
+    return placements.map(p => {
+      const gpu = p.gpu_device != null ? ` GPU ${p.gpu_device}` : ''
+      return `${p.node_id || p.role}:${p.worker_host || p.node_name || p.node_id}${gpu}`
+    }).join(' / ')
+  }
+  if (typeof placements === 'object') {
+    return Object.entries(placements).map(([role, placement]) => {
+      if (typeof placement === 'string') return `${role}:${placement}`
+      const node = placement?.node_name || placement?.worker_host || placement?.node_id || '—'
+      const gpu = Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length
+        ? ` GPU ${placement.gpu_indices.join(',')}`
+        : ''
+      return `${role}:${node}${gpu}`
+    }).join(' / ')
+  }
+  return String(placements)
+}
+
+function prettyJson(value) {
+  if (!value) return '暂无数据'
+  return JSON.stringify(value, null, 2)
+}
+
 function baselineRowClass({ row }) {
   if (row.baseline_value == null) return 'baseline-missing-row'
   if (row.stable === false) return 'baseline-unstable-row'
@@ -407,6 +565,13 @@ async function createBatch() {
       data_profile: {
         matrix_size: benchmarkForm.matrix_size,
         batch_count: benchmarkForm.batch_count,
+        seed: 42,
+        warmup_batches: benchmarkForm.warmup_batches,
+        observation_duration_sec: benchmarkForm.observation_duration_sec,
+        sample_interval_sec: benchmarkForm.sample_interval_sec,
+        sample_batch_count: benchmarkForm.sample_batch_count,
+        min_samples: benchmarkForm.min_samples,
+        max_samples: benchmarkForm.max_samples,
       },
     })
     ElMessage.success(`已创建 ${data.created} 条压测工单`)
@@ -414,6 +579,18 @@ async function createBatch() {
     return data
   } finally {
     batchCreateLoading.value = false
+  }
+}
+
+async function openOrderDetail(row) {
+  selectedOrderId.value = row.id
+  detailLoading.value = true
+  try {
+    const { data } = await ordersApi.get(row.id)
+    selectedOrderDetail.value = data
+    detailDrawerVisible.value = true
+  } finally {
+    detailLoading.value = false
   }
 }
 
@@ -540,6 +717,11 @@ onMounted(loadAll)
   font-size: 14px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+.muted-step {
+  background: #606266;
+  font-size: 13px;
 }
 
 .step-title {
@@ -753,6 +935,78 @@ onMounted(loadAll)
   padding: 28px 0;
 }
 
+.empty-hint.compact {
+  padding: 10px 0;
+  text-align: left;
+}
+
+.detail-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.detail-section h3 {
+  margin: 0 0 10px;
+  color: #303133;
+  font-size: 15px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-grid div {
+  padding: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+  background: #fafcff;
+}
+
+.metric-grid span {
+  display: block;
+  color: #909399;
+  font-size: 12px;
+}
+
+.metric-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: #303133;
+}
+
+.success-text {
+  color: #67c23a !important;
+}
+
+.danger-text {
+  color: #f56c6c !important;
+}
+
+.json-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.json-grid div:last-child {
+  grid-column: 1 / -1;
+}
+
+.json-grid pre {
+  max-height: 280px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 10px;
+  background: #1f2933;
+  color: #e5edf5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 @media (max-width: 900px) {
   .benchmark-page {
     padding: 18px;
@@ -785,6 +1039,15 @@ onMounted(loadAll)
 
   .result-meta-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-grid,
+  .json-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .json-grid div:last-child {
+    grid-column: auto;
   }
 }
 </style>

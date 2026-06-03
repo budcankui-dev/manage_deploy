@@ -9,24 +9,25 @@ import {
   taskTypeLabel,
 } from '../src/constants/businessTaskDisplay.js'
 
-assert.equal(taskTypeLabel('high_throughput_matmul'), '科学计算矩阵乘法')
+assert.equal(taskTypeLabel('high_throughput_matmul'), '矩阵乘法计算任务')
 assert.ok(
   describeObjectiveMeaning('high_throughput_matmul', {
-    metric_key: 'compute_latency_ms',
-    operator: '<=',
-    target_value: 60000,
-    unit: 'ms',
-  }).includes('不验证')
+    metric_key: 'effective_gflops',
+    operator: '>=',
+    target_value: 80,
+    unit: 'GFLOPS',
+  }).includes('有效计算吞吐量')
 )
 
 const inputRows = buildMatmulInputRows({ matrix_size: 64, batch_count: 1, seed: 42 })
 assert.equal(inputRows.length, 4)
 
 const outputRows = buildMatmulOutputRows(
-  { matrix_size: 64, batch_count: 1, compute_latency_ms: 2.5 },
-  { metric_key: 'compute_latency_ms', actual_value: 2.5, unit: 'ms' }
+  { matrix_size: 64, batch_count: 1, compute_latency_ms: 2.5, sample_count: 5 },
+  { metric_key: 'effective_gflops', actual_value: 82.5, unit: 'GFLOPS' }
 )
 assert.ok(outputRows.some((r) => r.label === '运行矩阵规模'))
+assert.ok(outputRows.some((r) => r.label === '有效样本数'))
 
 const consistency = buildMatmulParamConsistency(
   { matrix_size: 64, batch_count: 1 },
@@ -35,23 +36,23 @@ const consistency = buildMatmulParamConsistency(
 assert.equal(consistency.ok, true)
 
 const verdictOk = buildMatmulVerdict({
-  metric_key: 'compute_latency_ms',
-  actual_value: 2,
-  target_value: 60000,
-  unit: 'ms',
-  operator: '<=',
+  metric_key: 'effective_gflops',
+  actual_value: 82,
+  target_value: 80,
+  unit: 'GFLOPS',
+  operator: '>=',
   business_success: true,
 })
 assert.equal(verdictOk.statusClass, 'success')
 
 const verdictFail = buildMatmulVerdict({
-  metric_key: 'compute_latency_ms',
-  actual_value: 70000,
-  target_value: 60000,
-  unit: 'ms',
-  operator: '<=',
+  metric_key: 'effective_gflops',
+  actual_value: 60,
+  target_value: 80,
+  unit: 'GFLOPS',
+  operator: '>=',
   business_success: false,
-  failure_reason: '70000.0 > 60000.0',
+  failure_reason: '60.0 < 80.0',
 })
 assert.equal(verdictFail.statusClass, 'danger')
 

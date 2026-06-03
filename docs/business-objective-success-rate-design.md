@@ -62,6 +62,8 @@ business_success = false
 failure_reason = metrics_incomplete
 ```
 
+当前矩阵乘法实现采用“任务结束后汇总过程性指标”的轻量方案：compute 节点在 warmup 后持续采样，sink 节点一次性上报 `effective_gflops` 中位数以及 `sample_count`、`observed_duration_sec`、`mean/min/max_effective_gflops`、`samples` 等元数据。这样既能说明指标来自运行过程，又避免为了验收页面引入实时监控系统。后续如要增强演示效果，可在 UI 中轮询工单详情和实例事件，但正式判定仍以最终上报的业务指标为准。
+
 ## 历史基准能力
 
 每台节点需要提前在固定业务 profile 下进行基准测试，形成历史基准能力表。
@@ -257,15 +259,16 @@ Content-Type: application/json
 
 ```text
 1. 校验 routing_request 是否存在，状态是否 pending/computing。
-2. 校验 placements 覆盖 DAG 中所有逻辑节点。
-3. 根据 node_name 或 node_id 匹配平台 nodes 表。
+2. 校验 placements 覆盖 DAG 中所有逻辑节点。第一阶段平台兼容 `{"compute": "compute-3"}` 简单格式，也兼容 `{"compute": {"node_name": "compute-3", "gpu_indices": [0]}}` 完整格式。
+3. 根据 node_name、worker_host、hostname 或平台 node_id 匹配平台 nodes 表。
 4. 校验 worker 节点可调度、Node Agent 可达、GPU 编号格式合法。
 5. 保存 result_payload、placements、selected_strategy、external_routing_id。
 6. 将 routing_request.status 置为 completed。
 7. 将 task_order.routing_status 置为 completed。
-8. 根据 placements 创建或更新 TaskInstance。
-9. 将业务时间窗口映射为 scheduled_start_time / scheduled_end_time。
-10. 如果已到开始时间，则进入调度启动流程；否则等待调度器扫描启动。
+8. 将 routing_result 同步写入 task_order.runtime_config，便于后续业务目标评估按 compute/worker 节点查找 baseline。
+9. 根据 placements 创建或更新 TaskInstance。
+10. 将业务时间窗口映射为 scheduled_start_time / scheduled_end_time。
+11. 如果已到开始时间，则进入调度启动流程；否则等待调度器扫描启动。
 ```
 
 收到 `failed`：
@@ -278,6 +281,30 @@ task_order.error_message = error_message
 ```
 
 ## GPU 分配落地
+
+平台兼容两类 placements 格式。调试或 mock 路由可以使用简单格式：
+
+```json
+{
+  "source": "compute-1",
+  "compute": "compute-3",
+  "sink": "compute-2"
+}
+```
+
+正式外部路由对接建议使用完整格式：
+
+```json
+{
+  "compute": {
+    "node_name": "compute-3",
+    "gpu_indices": [0],
+    "allocated_resources": {
+      "gpu_units": 1
+    }
+  }
+}
+```
 
 路由结果中的：
 

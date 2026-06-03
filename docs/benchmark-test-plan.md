@@ -1,7 +1,7 @@
 # 业务目标验收测试方案
 
-> 最后更新：2026-06-03
-> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，仍需四节点真实压测留档
+> 最后更新：2026-06-04
+> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情；仍需四节点真实压测留档
 
 ## 目标
 
@@ -19,11 +19,14 @@
 矩阵乘法任务使用过程性计算速率指标，不用绝对完成时间作为业务目标。
 
 ```text
-effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds / 1e9
+单次采样 effective_gflops = 2 x matrix_size^3 x sample_batch_count / sample_elapsed_seconds / 1e9
+单任务 actual_gflops = 有效观测窗口内多次采样的 median(effective_gflops)
 单任务达标条件：actual_gflops >= baseline_gflops x 0.8
 ```
 
 其中 `baseline_gflops` 是该节点在相同业务 profile 下的历史基准能力，`0.8` 是科研验收阶段的容忍系数。这样可以屏蔽输入数据量差异，重点评价“任务运行后的过程性能力是否达到该节点历史水平”。
+
+矩阵乘法任务不以端到端完成时间作为目标。Worker 在启动后先执行 warmup，再在固定观测窗口内持续采样，任务结束后由 sink 上报汇总指标。若任务运行时间不足、未达到最小采样数，或未上报指标，则不能作为成功样本；正式验收页面会将其保留在工单证据链中，并通过“已评估任务数不足”或失败原因提示出来。
 
 ## 测试环境
 
@@ -52,6 +55,10 @@ effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds /
 | 矩阵规模 | `1024` | 与 baseline profile 保持一致 |
 | 批次数 | `50` | 与 baseline profile 保持一致 |
 | warmup | `3` | 前 3 批不计入有效吞吐 |
+| 观测窗口 | `10s` | 与 baseline profile 保持一致 |
+| 采样间隔 | `1s` | 每秒最多采集一组吞吐样本 |
+| 单次采样批次 | `5` | 每个采样点执行 5 批矩阵乘法 |
+| 最少样本数 | `5` | 少于 5 个有效样本不作为正式成功证据 |
 | 随机种子 | `42` | 保持重复性 |
 
 ## 页面流程
@@ -67,9 +74,9 @@ effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds /
 
 ### Step 2 批量压测
 
-在一行内配置任务数、矩阵规模、批次数，然后点击“创建压测工单”。
+在一行内配置任务数、矩阵规模、批次数、观测秒数和最少样本数，然后点击“创建压测工单”。
 
-创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。
+创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。压测工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
 
 ### Step 3 执行
 
@@ -84,6 +91,14 @@ effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds /
 - “一键路由”：仅用于当前批量验收流程的 mock 路由，为 `is_benchmark=true` 的待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
 - “一键启动”：启动所有已路由且已物化的验收实例。
 - “刷新”：重新拉取状态。
+
+### 工单证据链
+
+页面在执行区后展示“验收工单证据链”表：
+
+- 列出最近压测工单的任务状态、路由状态、部署状态、实例 ID 和 placements 摘要。
+- 点击“详情”可查看业务参数 JSON、路由结果 JSON、source/compute/sink 实际部署节点、compute GPU 编号、业务目标评估结果和指标采集元数据。
+- 该区域用于专家复核“成功率不是静态造数”，而是由每个真实工单、实例、路由放置和指标上报汇总而来。
 
 ### Step 4 结果
 
@@ -105,8 +120,9 @@ effective_gflops = 2 x matrix_size^3 x effective_batch_count / elapsed_seconds /
 外部路由系统接入时：
 
 - 工单创建时生成 `task_orders.routing_input_dag`。
-- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。
-- 平台接收结果后物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。
+- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号，可使用简单格式 `{"compute": "compute-3"}`，也可使用包含 `node_name`、`gpu_indices`、`allocated_resources` 的完整格式。
+- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。
+- 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 
 当前 `/benchmark` 页面的一键路由仅作为验收 mock 路由，页面和文档均需明确其边界：它用于跑通部署与评价闭环，不替代外部路由算法，不证明路由最优。
 
@@ -160,3 +176,4 @@ MATMUL_BATCH_COUNT=50 \
 - 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
 - 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
 - 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。
+- 截图建议包含 Step 1 基线表、Step 3 状态分布、工单证据链详情抽屉和 Step 4 成功率进度条。
