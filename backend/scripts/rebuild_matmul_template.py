@@ -42,10 +42,18 @@ MATMUL_IMAGE = f"{WORKER_IMAGE}:{WORKER_TAG}"
 SOURCE_PORT = 18801
 COMPUTE_PORT = 18802
 SINK_PORT = 18803
+PORT_RANGE = [18000, 19999]
 
-PORT_HC_SOURCE = {"type": "port", "port": SOURCE_PORT, "timeout": 120, "interval": 2, "retry": 30}
-PORT_HC_COMPUTE = {"type": "port", "port": COMPUTE_PORT, "timeout": 300, "interval": 3, "retry": 40}
-PORT_HC_SINK = {"type": "port", "port": SINK_PORT, "timeout": 300, "interval": 3, "retry": 40}
+
+def auto_port(name: str, label: str, default: int) -> dict:
+    """Declare a named host-network port that is allocated per instance."""
+    return {
+        "name": name,
+        "label": label,
+        "default": default,
+        "auto": True,
+        "range": PORT_RANGE,
+    }
 
 
 def _resolve_mysql_config() -> dict:
@@ -140,36 +148,27 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
                     "name": "source",
                     "image": MATMUL_IMAGE,
                     "command": "python /app/src/source_main.py",
-                    "port_defs": [
-                        {"name": "source", "label": "source HTTP", "default": SOURCE_PORT}
-                    ],
+                    "port_defs": [auto_port("source", "source HTTP", SOURCE_PORT)],
                     "node_id": node_ids["compute-1"],
                     "restart_policy": "no",
-                    "health_check": PORT_HC_SOURCE,
                 },
                 {
                     "client_id": "compute",
                     "name": "compute",
                     "image": MATMUL_IMAGE,
                     "command": "python /app/src/compute_main.py",
-                    "port_defs": [
-                        {"name": "compute", "label": "compute HTTP", "default": COMPUTE_PORT}
-                    ],
+                    "port_defs": [auto_port("compute", "compute HTTP", COMPUTE_PORT)],
                     "node_id": node_ids["compute-2"],
                     "restart_policy": "no",
-                    "health_check": PORT_HC_COMPUTE,
                 },
                 {
                     "client_id": "sink",
                     "name": "sink",
                     "image": MATMUL_IMAGE,
                     "command": "python /app/src/sink_main.py",
-                    "port_defs": [
-                        {"name": "sink", "label": "sink HTTP", "default": SINK_PORT}
-                    ],
+                    "port_defs": [auto_port("sink", "sink HTTP", SINK_PORT)],
                     "node_id": node_ids["compute-3"],
                     "restart_policy": "no",
-                    "health_check": PORT_HC_SINK,
                 },
             ],
             "edges": [
