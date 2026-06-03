@@ -121,23 +121,23 @@
       </template>
       <div class="status-grid">
         <div class="status-cell waiting">
-          <div class="status-num">{{ orderStats.waitingRoute }}</div>
+          <div class="status-num">{{ executionStats.waitingRoute }}</div>
           <div class="status-label">待路由</div>
         </div>
         <div class="status-cell routed">
-          <div class="status-num">{{ orderStats.routed }}</div>
+          <div class="status-num">{{ executionStats.routed }}</div>
           <div class="status-label">已路由</div>
         </div>
         <div class="status-cell running">
-          <div class="status-num">{{ orderStats.running }}</div>
+          <div class="status-num">{{ executionStats.running }}</div>
           <div class="status-label">运行中</div>
         </div>
         <div class="status-cell done">
-          <div class="status-num">{{ orderStats.completed }}</div>
-          <div class="status-label">已完成</div>
+          <div class="status-num">{{ executionStats.completed }}</div>
+          <div class="status-label">已评估完成</div>
         </div>
         <div class="status-cell failed">
-          <div class="status-num">{{ orderStats.failed }}</div>
+          <div class="status-num">{{ executionStats.failed }}</div>
           <div class="status-label">失败</div>
         </div>
       </div>
@@ -259,8 +259,6 @@ const orderStats = computed(() => {
   return stats
 })
 
-const pendingWorkCount = computed(() => orderStats.value.waitingRoute + orderStats.value.routed)
-
 const summaryRowsForTask = computed(() =>
   summary.value.filter(row => row.task_type === taskType.value)
 )
@@ -277,6 +275,30 @@ const summaryAggregate = computed(() => {
     ? aggregate.success_count / aggregate.evaluated_count
     : null
   return aggregate
+})
+
+const executionStats = computed(() => {
+  const stats = { ...orderStats.value }
+  const aggregate = summaryAggregate.value
+  if (!aggregate || !aggregate.count) return stats
+
+  const evaluated = aggregate.evaluated_count || 0
+  const total = aggregate.count || 0
+  stats.completed = evaluated
+  stats.running = Math.max(0, total - evaluated - stats.failed)
+  if (evaluated > 0) {
+    stats.waitingRoute = 0
+    stats.routed = 0
+  }
+  return stats
+})
+
+const pendingWorkCount = computed(() => {
+  const aggregate = summaryAggregate.value
+  if (aggregate?.count) {
+    return Math.max(0, (aggregate.count || 0) - (aggregate.evaluated_count || 0))
+  }
+  return orderStats.value.waitingRoute + orderStats.value.routed
 })
 
 const successPercent = computed(() =>
