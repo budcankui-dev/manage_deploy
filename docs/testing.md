@@ -154,14 +154,57 @@ http://10.112.244.94:8182/benchmark
 
 1. Step 1 批量测试所有可调度节点 baseline，确认每行都有基线值且稳定。
 2. Step 2 创建 30 个压测工单，矩阵 profile 与 baseline 保持一致，默认使用 10 秒观测窗口和最少 5 个有效样本。
-3. Step 3 使用外部路由系统回写 placements；联调阶段可用页面“一键路由”mock，仅用于验证部署与评价闭环。
-4. Step 3 启动已路由实例，等待状态进入已评估完成。
-5. 打开“验收工单证据链”中若干工单详情，核对业务参数 JSON、路由结果 JSON、source/compute/sink 节点、compute GPU 编号、实测指标和采集元数据。
-6. Step 4 截图最终结果，要求已评估任务数 >= 30 且业务目标成功率 >= 90%。
+3. 记录页面顶部显示的当前 `benchmark_run_id`；后续列表、路由、启动和 Step 4 统计都应限定在该轮次。
+4. Step 3 使用外部路由系统回写 placements；联调阶段可用页面“一键路由”mock，仅用于验证部署与评价闭环。
+5. Step 3 启动已路由实例，等待状态进入已评估完成。
+6. 打开“验收工单证据链”中若干工单详情，核对业务参数 JSON、路由结果 JSON、source/compute/sink 节点、compute GPU 编号、实测指标和采集元数据。
+7. Step 4 截图最终结果，要求同一 `benchmark_run_id` 下已评估任务数 >= 30 且业务目标成功率 >= 90%。
 
 管理员验收页面应能看到全部 `is_benchmark=true` 压测工单；普通用户页面仍只展示自己的工单。如果 Step 4 有 30 个已评估任务但证据链表为空，应优先检查 `/api/orders` 的管理员可见性、登录 token 和 nginx `/api` 代理，而不是只截图成功率进度条。
 
 如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建压测工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
+
+## 视频推理扩展业务验证
+
+当前视频业务是轻量工业检测抽帧 surrogate，主要用于扩展模态演示和后续联调。它不上载完整视频流，而是让 source 生成固定帧元数据，compute 统计逐帧推理 surrogate 的 `frame_latency_p90_ms`，sink 上报业务指标。
+
+本地单测：
+
+```bash
+PYTHONPATH=workers/low-latency-video/src backend/venv/bin/python -m pytest -q workers/low-latency-video/tests
+```
+
+本地 baseline fallback：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python - <<'PY'
+from services.baseline_runner import run_benchmark
+print(run_benchmark("low_latency_video_pipeline", runs=1))
+PY
+```
+
+远端镜像构建：
+
+```bash
+WORKER_KIND=video \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+WORKER_PLATFORM=linux/amd64 \
+WORKER_PUSH=1 \
+./scripts/build_workers.sh
+```
+
+注册视频业务模板和 catalog：
+
+```bash
+cd backend
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+DEMO_BASE_URL=http://127.0.0.1:8181 \
+PYTHONPATH=. \
+/home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_video_template.py
+```
 
 ## 端口冲突验收
 

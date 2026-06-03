@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the scientific-matmul worker image.
+# Build worker images.
 #
 # Two modes:
 #
@@ -22,6 +22,9 @@
 #   WORKER_IMAGE     Full image repo name. Default: manage-deploy/scientific-matmul.
 #                    Set to e.g. 10.112.244.94:5000/scientific-matmul when pushing
 #                    to the test-lab private registry.
+#   WORKER_KIND      Worker type. Default: matmul. Supported: matmul, video.
+#                    When WORKER_KIND=video and WORKER_IMAGE is not set, the
+#                    default image is manage-deploy/low-latency-video.
 #   WORKER_TAG       Image tag. Default: dev.
 #   WORKER_PLATFORM  Target platform passed to buildx (e.g. linux/amd64,
 #                    linux/arm64, or linux/amd64,linux/arm64 for multi-arch).
@@ -57,9 +60,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CTX="${ROOT}/workers"
-DOCKERFILE="${CTX}/high-throughput-matmul/Dockerfile"
+KIND="${WORKER_KIND:-matmul}"
+case "${KIND}" in
+  matmul)
+    DOCKERFILE="${CTX}/high-throughput-matmul/Dockerfile"
+    DEFAULT_IMAGE="manage-deploy/scientific-matmul"
+    ;;
+  video)
+    DOCKERFILE="${CTX}/low-latency-video/Dockerfile"
+    DEFAULT_IMAGE="manage-deploy/low-latency-video"
+    ;;
+  *)
+    echo "ERROR: unsupported WORKER_KIND=${KIND}; expected matmul or video." >&2
+    exit 1
+    ;;
+esac
 
-IMAGE="${WORKER_IMAGE:-manage-deploy/scientific-matmul}"
+IMAGE="${WORKER_IMAGE:-${DEFAULT_IMAGE}}"
 TAG="${WORKER_TAG:-dev}"
 PLATFORM="${WORKER_PLATFORM:-}"
 PUSH="${WORKER_PUSH:-0}"

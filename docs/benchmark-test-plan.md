@@ -14,6 +14,8 @@
 
 当前支持业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker 雏形 `workers/low-latency-video/`，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline 和构建镜像，用于扩展业务演示和后续联调准备；正式四节点 30 任务验收主链路仍优先使用矩阵乘法，避免一次验收同时引入过多变量。
+
 ## 验收指标
 
 矩阵乘法任务使用过程性计算速率指标，不用绝对完成时间作为业务目标。
@@ -156,6 +158,27 @@ PYTHONPATH=backend \
 /home/bupt/miniconda3/envs/manage_deploy/bin/python backend/scripts/rebuild_matmul_template.py
 ```
 
+视频推理 worker 构建命令：
+
+```bash
+WORKER_KIND=video \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+WORKER_PLATFORM=linux/amd64 \
+WORKER_PUSH=1 \
+./scripts/build_workers.sh
+```
+
+本地快速验证视频 baseline fallback：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python - <<'PY'
+from services.baseline_runner import run_benchmark
+print(run_benchmark("low_latency_video_pipeline", runs=1))
+PY
+```
+
 如果实验网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，可以复用 registry 中已验证为 `linux/amd64` 的旧 `scientific-matmul:dev` 镜像作为基础层，只刷新 `/app/src` 和 `/app/_common` 业务代码层：
 
 ```bash
@@ -205,6 +228,7 @@ MATMUL_BATCH_COUNT=50 \
 - 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
 - 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
 - 当前业务目标统计接口和订单列表支持按 `benchmark_run_id` 过滤，验收页面默认按当前轮次统计，避免新旧压测结果互相污染。
+- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，但尚未在 `/benchmark` 页面作为正式 30 任务验收类型开放；如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
 - 当前验收证据链依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部压测工单并打开详情。
 - 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。
 - 截图建议包含 Step 1 基线表、Step 3 状态分布、工单证据链详情抽屉和 Step 4 成功率进度条。

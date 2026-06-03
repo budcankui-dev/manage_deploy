@@ -43,11 +43,11 @@
 | 用例编号 | 1-2 |
 | 测试目的 | 验证视频AI推理业务场景下的业务目标成功率 |
 | 组网拓扑 | 同 1-1 |
-| 前置条件 | 1. 同 1-1 前置条件 1-4。2. 构建并分发视频推理 Worker 镜像（含预训练模型权重）。3. 完成各节点视频推理 baseline 基准测试。4. 准备固定测试视频序列（720p，100 帧）。 |
-| 测试参数 | 业务 profile：resolution=720p, frames=100, model=yolov8。warmup：前 10 帧不计入指标。有效推理：后 90 帧。测试次数：30 次独立任务。 |
-| 测试步骤 | 1. 提交 30 次视频推理任务请求。2. 路由系统分配推理节点。3. 平台部署推理容器并启动。4. 推理节点接收视频帧，逐帧执行 AI 推理。5. 前 10 帧为 warmup，后 90 帧统计帧推理时延。6. 计算 P90 帧推理时延（frame_latency_p90_ms）。7. Sink 节点上报 frame_latency_p90_ms 至 Task Manager。8. Task Manager 查询该节点的 baseline_p90。9. 判定：frame_latency_p90_ms ≤ baseline_p90 × 1.2 → 达标。10. 统计成功率。 |
+| 前置条件 | 1. 同 1-1 前置条件 1-4。2. 构建并分发视频推理 Worker 镜像 `low-latency-video:dev`。3. 完成各节点视频推理 baseline 基准测试。4. 采用固定工业检测抽帧 profile；后续可将 surrogate 替换为真实模型权重。 |
+| 测试参数 | 业务 profile：resolution=720p, frame_count=120, frame_stride=30, warmup_frames=2, measured_frames=30, work_units=60000。测试次数：30 次独立任务。 |
+| 测试步骤 | 1. 提交 30 次视频推理任务请求。2. 路由系统分配 source/compute/sink 节点。3. 平台部署视频推理容器并启动。4. Source 节点生成固定视频帧元数据，并按 frame_stride 抽帧发送给 compute 节点，模拟工业检测场景。5. Compute 节点对抽样帧执行固定 profile 的推理 surrogate，跳过 warmup 后统计逐帧处理时延。6. 计算 P90 帧推理时延（frame_latency_p90_ms）。7. Sink 节点上报 frame_latency_p90_ms 至 Task Manager。8. Task Manager 查询该节点的 baseline_p90。9. 判定：frame_latency_p90_ms ≤ baseline_p90 × 1.2 → 达标。10. 统计成功率。 |
 | 预期结果 | 业务目标成功率 ≥ 90% |
-| 测试结果 | （待填写，附截图） |
+| 测试结果 | 已新增轻量视频推理 Worker 原型、benchmark mode 和本地 baseline fallback；真实四节点 30 任务视频业务压测待后续执行并附截图。 |
 
 ---
 
@@ -78,7 +78,7 @@
 | 测试目的 | 为各计算节点建立历史基准能力数据，作为业务目标判定的参照阈值 |
 | 前置条件 | 1. 目标节点 Node Agent 正常运行。2. Benchmark 容器镜像已构建（复用业务 Worker 镜像，MODE=benchmark）。3. 节点处于空闲状态（无其他业务容器运行）。 |
 | 测试参数 | 每种业务类型使用固定 profile（见下表）。每个节点每种业务重复 3 次，取中位数。 |
-| Baseline Profile | 通用计算：matrix_size=1024, batch_count=50, seed=42, warmup=3。视频推理：resolution=720p, frames=100, warmup=10。模型训练：model=gpt2-small, dataset=wikitext-2, steps=100, warmup=5。 |
+| Baseline Profile | 通用计算：matrix_size=1024, batch_count=50, seed=42, warmup=3。视频推理：resolution=720p, frame_count=120, frame_stride=30, warmup_frames=2, measured_frames=30, work_units=60000。模型训练：model=gpt2-small, dataset=wikitext-2, steps=100, warmup=5。 |
 | 测试步骤 | 1. 对目标节点部署 benchmark 容器。2. 容器执行固定 profile 负载，跳过 warmup 阶段。3. 采集有效阶段的过程性指标。4. 重复 3 次。5. 取 3 次结果的中位数作为该节点的 baseline。6. 写入 node_baselines 表，记录 node_id、business_type、profile_id、baseline_metric_value、measured_at。 |
 | 自动化命令 | 管理后台 `/benchmark` Step 1 调用 `/api/baselines/batch-run`，通过目标节点 Node Agent 远程启动 benchmark 容器；命令行验收可参考 `docs/benchmark-test-plan.md` 中的四节点 runbook。 |
 | 有效性规则 | 新节点加入必须执行 baseline。节点硬件变更后需重新测试。建议每季度复测。Baseline 为纯本地计算指标，不受网络拓扑变化影响。 |
