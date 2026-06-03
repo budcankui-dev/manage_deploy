@@ -337,6 +337,96 @@ async def test_business_task_summary_can_filter_benchmark_orders(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_benchmark_summary_and_orders_can_filter_by_run_id(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    admin_headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="benchmark-run-admin",
+        role=UserRole.ADMIN,
+    )
+
+    def runtime_config(run_id: str):
+        return {
+            "benchmark": {"run_id": run_id},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "data_profile": {"matrix_size": 1024, "batch_count": 50},
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            },
+        }
+
+    run_a_order = TaskOrder(
+        template_id=template_id,
+        name="run-a benchmark order",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config("run-a"),
+        materialized_instance_id="run-a-instance",
+        is_benchmark=True,
+    )
+    run_b_order = TaskOrder(
+        template_id=template_id,
+        name="run-b benchmark order",
+        status=OrderStatus.COMPLETED,
+        runtime_config=runtime_config("run-b"),
+        materialized_instance_id="run-b-instance",
+        is_benchmark=True,
+    )
+    db_session.add_all([run_a_order, run_b_order])
+    db_session.add_all(
+        [
+            BusinessObjectiveEvaluation(
+                instance_id="run-a-instance",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=90,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=True,
+            ),
+            BusinessObjectiveEvaluation(
+                instance_id="run-b-instance",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=60,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=False,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    summary_response = await client.get(
+        "/api/business-tasks/summary",
+        params={"is_benchmark": True, "benchmark_run_id": "run-a"},
+    )
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert len(summary) == 1
+    assert summary[0]["count"] == 1
+    assert summary[0]["success_count"] == 1
+    assert summary[0]["business_success_rate"] == 1.0
+
+    orders_response = await client.get(
+        "/api/orders",
+        params={"is_benchmark": True, "benchmark_run_id": "run-a"},
+        headers=admin_headers,
+    )
+    assert orders_response.status_code == 200
+    assert [row["name"] for row in orders_response.json()] == ["run-a benchmark order"]
+
+
+@pytest.mark.asyncio
 async def test_admin_can_list_all_benchmark_orders(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     owner_headers, owner = await _auth_headers(client, db_session, username="order-owner")

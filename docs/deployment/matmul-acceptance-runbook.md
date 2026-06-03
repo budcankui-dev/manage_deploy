@@ -8,7 +8,7 @@
 
 ```text
 任务类型：矩阵乘法计算任务
-统计范围：is_benchmark=true 的验收压测工单
+统计范围：当前 benchmark_run_id 下 is_benchmark=true 的验收压测工单
 正式通过：已评估任务数 >= 30 且业务目标成功率 >= 90%
 ```
 
@@ -170,16 +170,20 @@ http://10.112.244.94:8182/benchmark
 操作顺序：
 
 1. Step 1 点击“批量测试所有节点”，确认 `compute-1/2/3` 都有稳定 baseline。
-2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建压测工单”。
-3. Step 3 点击“一键路由”，再点击“一键启动”，等待状态进入“已完成”或“失败”。
+2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建压测工单”，记录页面顶部显示的 `benchmark_run_id`。
+3. Step 3 点击“一键路由”，再点击“一键启动”，等待当前轮次状态进入“已评估完成”或“失败”。
 4. Step 4 点击“刷新结果”，确认“已评估数 >= 30”。
 5. 若成功率 `>= 90%`，保存页面截图和后端 summary JSON；若不足，保存失败任务详情和容器日志。
 
 后端结果留档：
 
 ```bash
-curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true" \
+RUN_ID="high_throughput_matmul-YYYYMMDDHHMMSS"
+curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true&benchmark_run_id=${RUN_ID}" \
   | tee reports/business_objective_summary_$(date +%Y%m%d_%H%M%S).json
+
+curl -sS "http://10.112.244.94:8181/api/orders?is_benchmark=true&benchmark_run_id=${RUN_ID}&limit=100" \
+  | tee reports/business_objective_orders_${RUN_ID}.json
 ```
 
 ## 7. 常见失败定位

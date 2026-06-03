@@ -28,7 +28,7 @@
 | 组网拓扑 | 3 台计算节点（compute-1/2/3），1 台管理节点（Task Manager），通过管理面网络互联。正式验收时增加数据面（IPv6）网络。 |
 | 前置条件 | 1. 依据组网拓扑搭建测试网络，确保管理面网络连通。2. 各计算节点部署 Node Agent 并通过健康检查。3. 在 AMD64 环境构建矩阵乘法 Worker 镜像并推送至 `10.112.244.94:5000/scientific-matmul:dev`。4. 部署并启动 Task Manager 后端服务和管理员前端。5. 完成各节点 baseline 基准测试（见 2.4 节），确认 `node_baselines` 表中有对应记录且稳定性满足要求。6. 外部路由系统可用；验收闭环调试阶段可使用管理后台 mock 路由写回 placements。 |
 | 测试参数 | 业务 profile：matrix_size=1024, batch_count=50, seed=42。warmup：前 3 批不计入指标。观测窗口：10 秒；采样间隔：1 秒；单次采样 batch_count=5；最少有效样本数：5。正式测试次数：30 次独立可评价任务。路由策略：由外部路由系统或验收 mock 路由生成节点放置结果；业务目标成功率只评价部署与业务指标达标，不证明路由算法全局最优。 |
-| 测试步骤 | 1. 管理员进入 `/benchmark` 验收测试页，确认当前任务类型为“矩阵乘法计算任务”。2. 执行 Step 1，对 `compute-1/2/3` 批量运行远程 baseline，确认所有节点均有稳定基线。3. 执行 Step 2，创建 30 个带 `is_benchmark=true` 标记的压测工单。4. 执行 Step 3，由外部路由系统或页面验收 mock 路由为每个任务写回 source/compute/sink placements 和 compute GPU 编号，然后一键启动已路由实例。5. Worker 按 source -> compute -> sink 的随路计算数据流执行矩阵乘法，先 warmup，再在固定观测窗口内持续采集吞吐样本。6. 单次采样计算 effective_gflops = (2 × N³ × sample_batch_count) / sample_elapsed_seconds / 1e9；单任务 actual_gflops 取有效样本中位数。7. Sink 节点将 actual_gflops 和采样元数据上报至 Task Manager。8. Task Manager 根据 routing_result 中的 compute/worker placement 查询该节点 baseline_gflops。9. 判定：actual_gflops ≥ baseline_gflops × 0.8 → 达标；指标缺失、无 baseline 或样本数不足需保留工单证据并重跑补足。10. Step 4 仅统计 `is_benchmark=true` 工单，展示成功率、达标数、已评估数和样本是否充足；工单证据链可展开查看业务参数、路由结果、节点/GPU 分配和指标 JSON。 |
+| 测试步骤 | 1. 管理员进入 `/benchmark` 验收测试页，确认当前任务类型为“矩阵乘法计算任务”。2. 执行 Step 1，对 `compute-1/2/3` 批量运行远程 baseline，确认所有节点均有稳定基线。3. 执行 Step 2，创建 30 个带 `is_benchmark=true` 标记的压测工单，系统生成本轮 `benchmark_run_id` 并写入每个工单。4. 执行 Step 3，由外部路由系统或页面验收 mock 路由为本轮工单写回 source/compute/sink placements 和 compute GPU 编号，然后一键启动本轮已路由实例。5. Worker 按 source -> compute -> sink 的随路计算数据流执行矩阵乘法，先 warmup，再在固定观测窗口内持续采集吞吐样本。6. 单次采样计算 effective_gflops = (2 × N³ × sample_batch_count) / sample_elapsed_seconds / 1e9；单任务 actual_gflops 取有效样本中位数。7. Sink 节点将 actual_gflops 和采样元数据上报至 Task Manager。8. Task Manager 根据 routing_result 中的 compute/worker placement 查询该节点 baseline_gflops。9. 判定：actual_gflops ≥ baseline_gflops × 0.8 → 达标；指标缺失、无 baseline 或样本数不足需保留工单证据并重跑补足。10. Step 4 按当前 `benchmark_run_id` 统计成功率、达标数、已评估数和样本是否充足；工单证据链可展开查看业务参数、路由结果、节点/GPU 分配和指标 JSON。 |
 | 预期结果 | 已评估任务数 ≥ 30，业务目标成功率 ≥ 90%（即至少 27 个任务达标） |
 | 测试结果 | 当前本地页面与 API 闭环已验证；真实四节点 30 任务压测待执行并附截图/报告。 |
 
@@ -145,6 +145,7 @@ cd backend
 | tokens_per_second | 训练吞吐量 = 有效训练阶段处理的 token 总数 / 有效训练耗时（秒） |
 | frame_latency_p90_ms | 帧推理时延 P90 = 有效推理阶段所有帧推理时延的第 90 百分位值（毫秒） |
 | baseline | 节点历史基准能力值，通过在空闲状态下执行固定 profile 负载 3 次取中位数获得 |
+| benchmark_run_id | 单轮验收压测编号，由 `/benchmark` 页面创建批量工单时生成；正式截图、工单证据链和成功率统计应保持同一编号 |
 | warmup | 预热阶段，用于排除容器启动、JIT 编译、缓存冷启动等干扰，不计入指标统计 |
 | success_ratio (0.8) | 越高越好指标的容忍系数，actual ≥ baseline × 0.8 即达标 |
 | tolerance_ratio (1.2) | 越低越好指标的容忍系数，actual ≤ baseline × 1.2 即达标 |

@@ -5,6 +5,11 @@
         <p class="eyebrow">验收测试</p>
         <h1>业务目标成功率闭环验证</h1>
         <p class="hero-subtitle">按基线、批量压测、路由执行、成功率统计四步完成专家验收演示；正式判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
+        <div class="run-strip">
+          <span>当前验收轮次</span>
+          <strong>{{ currentBenchmarkRunId || '历史全部数据' }}</strong>
+          <small>{{ currentBenchmarkRunId ? '本页列表、执行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史压测工单统计。' }}</small>
+        </div>
       </div>
       <div class="hero-actions">
         <span class="field-label">任务类型</span>
@@ -106,6 +111,7 @@
           当前待处理工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
+      <p class="status-note">创建压测工单会生成新的验收轮次 ID，后续路由、启动、统计和工单证据表默认只针对这一轮，避免历史数据影响验收截图。</p>
     </el-card>
 
     <el-card class="step-card">
@@ -212,7 +218,7 @@
         <div class="result-meta-grid">
           <div>
             <span>统计口径</span>
-            <strong>仅验收压测工单</strong>
+            <strong>{{ currentBenchmarkRunId ? '当前验收轮次' : '全部历史压测工单' }}</strong>
           </div>
           <div>
             <span>总工单数</span>
@@ -310,6 +316,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 
+const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
 const taskType = ref('high_throughput_matmul')
 const nodes = ref([])
 const nodesLoading = ref(false)
@@ -328,6 +335,7 @@ const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
 const selectedOrderId = ref('')
 const selectedOrderDetail = ref(null)
+const currentBenchmarkRunId = ref(localStorage.getItem(BENCHMARK_RUN_STORAGE_KEY) || '')
 const formalEvaluationCount = 30
 const benchmarkForm = reactive({
   count: formalEvaluationCount,
@@ -559,18 +567,59 @@ async function loadBaselines() {
 }
 
 async function loadOrders() {
-  const { data } = await ordersApi.list({ is_benchmark: true, limit: 100 })
+  const params = { is_benchmark: true, limit: 100 }
+  if (currentBenchmarkRunId.value) {
+    params.benchmark_run_id = currentBenchmarkRunId.value
+  }
+  const { data } = await ordersApi.list(params)
   orders.value = Array.isArray(data) ? data : (data.items || [])
+  if (!currentBenchmarkRunId.value) {
+    const latestRunId = orders.value.find(order => order.runtime_config?.benchmark?.run_id)
+      ?.runtime_config?.benchmark?.run_id
+    if (latestRunId) {
+      setCurrentBenchmarkRunId(latestRunId)
+      await loadOrders()
+    }
+  }
 }
 
 async function loadSummary() {
-  const { data } = await businessApi.summary({ is_benchmark: true })
+  const params = { is_benchmark: true }
+  if (currentBenchmarkRunId.value) {
+    params.benchmark_run_id = currentBenchmarkRunId.value
+  }
+  const { data } = await businessApi.summary(params)
   summary.value = data
   dashboardUpdatedAt.value = formatTime(new Date())
 }
 
+function newBenchmarkRunId() {
+  const now = new Date()
+  const pad = value => String(value).padStart(2, '0')
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join('')
+  return `${taskType.value}-${stamp}`
+}
+
+function setCurrentBenchmarkRunId(runId) {
+  currentBenchmarkRunId.value = runId || ''
+  if (runId) {
+    localStorage.setItem(BENCHMARK_RUN_STORAGE_KEY, runId)
+  } else {
+    localStorage.removeItem(BENCHMARK_RUN_STORAGE_KEY)
+  }
+}
+
 async function loadAll() {
-  await Promise.all([loadNodes(), loadBaselines(), loadOrders(), loadSummary()])
+  await Promise.all([loadNodes(), loadBaselines()])
+  await loadOrders()
+  await loadSummary()
 }
 
 async function runSingleBaseline(row) {
@@ -598,9 +647,11 @@ async function runBatchBaseline() {
 async function createBatch() {
   batchCreateLoading.value = true
   try {
+    const runId = newBenchmarkRunId()
     const { data } = await ordersApi.batchBenchmark({
       task_type: taskType.value,
       count: benchmarkForm.count,
+      benchmark_run_id: runId,
       data_profile: {
         matrix_size: benchmarkForm.matrix_size,
         batch_count: benchmarkForm.batch_count,
@@ -613,6 +664,7 @@ async function createBatch() {
         max_samples: benchmarkForm.max_samples,
       },
     })
+    setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条压测工单`)
     await Promise.all([loadOrders(), loadSummary()])
     return data
@@ -636,7 +688,7 @@ async function openOrderDetail(row) {
 async function doAutoRoute() {
   routeLoading.value = true
   try {
-    const { data } = await ordersApi.batchAutoRoute()
+    const { data } = await ordersApi.batchAutoRoute({ benchmark_run_id: currentBenchmarkRunId.value || null })
     ElMessage.success(`已路由 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
     await loadOrders()
     return data
@@ -648,7 +700,7 @@ async function doAutoRoute() {
 async function doStartAll() {
   startLoading.value = true
   try {
-    const { data } = await ordersApi.startAllRouted()
+    const { data } = await ordersApi.startAllRouted({ benchmark_run_id: currentBenchmarkRunId.value || null })
     ElMessage.success(`已启动 ${data.started ?? data.routed ?? '全部'} 个实例`)
     await Promise.all([loadOrders(), loadSummary()])
     return data
@@ -713,6 +765,28 @@ onMounted(loadAll)
 
 .hero-subtitle {
   margin: 8px 0 0;
+  color: #606266;
+}
+
+.run-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(64, 158, 255, 0.08);
+  color: #425466;
+  font-size: 13px;
+}
+
+.run-strip strong {
+  color: #1f2d3d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.run-strip small {
   color: #606266;
 }
 

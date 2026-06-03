@@ -38,6 +38,15 @@ from .instances import _create_instance_from_template
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 
+def _benchmark_run_id(order: TaskOrder) -> str | None:
+    config = order.runtime_config or {}
+    benchmark = config.get("benchmark")
+    if isinstance(benchmark, dict):
+        value = benchmark.get("run_id")
+        return str(value) if value else None
+    return None
+
+
 def _order_to_response(
     order: TaskOrder,
     instance_exists: bool | None = None,
@@ -110,6 +119,7 @@ async def create_order(payload: TaskOrderCreate, db: AsyncSession = Depends(get_
 async def list_orders(
     status: OrderStatus | None = None,
     is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
     limit: int = 100,
     include_cancelled: bool = False,
     reconcile: bool = True,
@@ -129,8 +139,11 @@ async def list_orders(
         query = query.where(TaskOrder.status == status)
     elif not include_cancelled:
         query = query.where(TaskOrder.status != OrderStatus.CANCELLED)
-    rows = await db.execute(query.order_by(TaskOrder.created_at.desc()).limit(max(1, min(limit, 500))))
+    rows = await db.execute(query.order_by(TaskOrder.created_at.desc()))
     orders = rows.scalars().all()
+    if benchmark_run_id:
+        orders = [order for order in orders if _benchmark_run_id(order) == benchmark_run_id]
+    orders = orders[: max(1, min(limit, 500))]
 
     responses: list[TaskOrderResponse] = []
     for order in orders:
@@ -456,6 +469,7 @@ async def receive_routing_result(
 class BatchBenchmarkRequest(BaseModel):
     task_type: str = "high_throughput_matmul"
     count: int = Field(default=10, ge=1, le=30)
+    benchmark_run_id: Optional[str] = None
     data_profile: dict = Field(default_factory=lambda: {
         "matrix_size": 1024,
         "batch_count": 50,
@@ -486,8 +500,9 @@ async def create_batch_benchmark(
     order_ids = []
     business_start_time = datetime.utcnow()
     business_end_time = business_start_time + timedelta(hours=1)
+    run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     for i in range(payload.count):
-        order_id_placeholder = f"benchmark-{payload.task_type}-{i + 1}"
+        order_id_placeholder = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
         routing_dag = build_matmul_dag(
             order_id=order_id_placeholder,
             source_name=None,
@@ -499,6 +514,12 @@ async def create_batch_benchmark(
             routing_strategy=payload.routing_strategy,
         )
         runtime_config = {
+            "benchmark": {
+                "run_id": run_id,
+                "created_at": business_start_time.isoformat(),
+                "sample_count": payload.count,
+                "profile": payload.data_profile,
+            },
             "business_task": {
                 "task_type": payload.task_type,
                 "data_profile": payload.data_profile,
@@ -526,11 +547,16 @@ async def create_batch_benchmark(
         order_ids.append(order.id)
 
     await db.commit()
-    return {"created": len(order_ids), "order_ids": order_ids}
+    return {"created": len(order_ids), "order_ids": order_ids, "benchmark_run_id": run_id}
+
+
+class BenchmarkRunScopedRequest(BaseModel):
+    benchmark_run_id: Optional[str] = None
 
 
 @router.post("/batch-auto-route")
 async def batch_auto_route(
+    payload: BenchmarkRunScopedRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -544,6 +570,9 @@ async def batch_auto_route(
         )
     )
     orders = rows.scalars().all()
+    run_id = payload.benchmark_run_id if payload else None
+    if run_id:
+        orders = [order for order in orders if _benchmark_run_id(order) == run_id]
 
     schedulable_rows = await db.execute(
         select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
@@ -568,6 +597,7 @@ async def batch_auto_route(
 
 @router.post("/start-all-routed")
 async def start_all_routed_benchmark_orders(
+    payload: BenchmarkRunScopedRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -582,6 +612,9 @@ async def start_all_routed_benchmark_orders(
         )
     )
     orders = rows.scalars().all()
+    run_id = payload.benchmark_run_id if payload else None
+    if run_id:
+        orders = [order for order in orders if _benchmark_run_id(order) == run_id]
 
     started: list[str] = []
     skipped: list[str] = []

@@ -33,6 +33,15 @@ def _extract_business_task(order: TaskOrder) -> dict[str, Any] | None:
     return None
 
 
+def _extract_benchmark_run_id(order: TaskOrder) -> str | None:
+    config = order.runtime_config or {}
+    benchmark = config.get("benchmark")
+    if isinstance(benchmark, dict):
+        value = benchmark.get("run_id")
+        return str(value) if value else None
+    return None
+
+
 def _routing_policy_from_order(order: TaskOrder) -> str | None:
     business_task = _extract_business_task(order)
     if not business_task:
@@ -214,6 +223,7 @@ async def summarize_business_tasks(
     db: AsyncSession,
     include_cancelled: bool = False,
     is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     query = select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
     if not include_cancelled:
@@ -224,6 +234,8 @@ async def summarize_business_tasks(
     business_orders: list[tuple[TaskOrder, dict[str, Any]]] = []
     for order in rows.scalars():
         if not include_cancelled and order.status == OrderStatus.CANCELLED:
+            continue
+        if benchmark_run_id and _extract_benchmark_run_id(order) != benchmark_run_id:
             continue
         business_task = _extract_business_task(order)
         if business_task:

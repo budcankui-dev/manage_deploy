@@ -14,6 +14,8 @@
 - Task Manager：接收路由结果，校验节点和 GPU 分配，物化 TaskInstance，并按业务时间窗口调度部署。
 - 业务目标评估：任务运行后采集过程性指标，与所部署节点对应历史基准比较，判断业务目标是否达成。
 
+正式验收建议以“单轮压测”为统计边界。每次批量创建验收工单时生成 `benchmark_run_id`，同一轮的工单创建、路由回写、实例启动、指标上报和成功率统计均绑定该编号。这样可以重复跑多轮测试而不混淆历史数据，也便于专家根据页面截图、后端 JSON 和工单详情复核证据链。
+
 ## 任务结构假设
 
 第一阶段默认每个任务只有一个核心业务计算节点：
@@ -63,6 +65,10 @@ failure_reason = metrics_incomplete
 ```
 
 当前矩阵乘法实现采用“任务结束后汇总过程性指标”的轻量方案：compute 节点在 warmup 后持续采样，sink 节点一次性上报 `effective_gflops` 中位数以及 `sample_count`、`observed_duration_sec`、`mean/min/max_effective_gflops`、`samples` 等元数据。这样既能说明指标来自运行过程，又避免为了验收页面引入实时监控系统。后续如要增强演示效果，可在 UI 中轮询工单详情和实例事件，但正式判定仍以最终上报的业务指标为准。
+
+视频推理业务可以采用轻量“工业检测抽帧”负载，不强制真实传输完整视频流。推荐 source 节点生成固定视频帧元数据或小尺寸合成图片，并按 `frame_stride=30` 抽帧发送给 worker；worker 模拟或执行固定模型推理，记录每帧处理时延；sink 汇总有效阶段 `frame_latency_p90_ms`。这样符合“低时延视频 AI 推理/工业检测”模态，又避免批量压测时完整视频流量压垮实验网络。
+
+文本模型训练业务建议使用固定小文本模型和固定 token 序列，指标为 `tokens_per_second`。第一阶段可使用轻量训练 surrogate：worker 以固定 batch_size 和 sequence_length 执行若干 training step，跳过 warmup 后统计有效 token 数和耗时；如果后续需要更强真实性，再替换为小型 Transformer/GPT-2 训练容器。验收口径不依赖训练是否达到某个 loss，而是评价该节点在固定 profile 下的训练吞吐是否达到历史基准。
 
 ## 历史基准能力
 
