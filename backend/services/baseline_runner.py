@@ -152,6 +152,11 @@ def _parse_benchmark_result(logs: str) -> float:
     for line in logs.splitlines():
         line = line.strip()
         if "benchmark_result" in line:
+            json_start = line.find("{")
+            if json_start > 0:
+                # Docker logs can include an RFC3339 timestamp prefix when
+                # Node Agent reads logs with timestamps=True.
+                line = line[json_start:]
             try:
                 data = json.loads(line)
                 return float(data["benchmark_result"]["effective_gflops"])
