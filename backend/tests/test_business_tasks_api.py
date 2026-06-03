@@ -337,6 +337,63 @@ async def test_business_task_summary_can_filter_benchmark_orders(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_admin_can_list_all_benchmark_orders(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    owner_headers, owner = await _auth_headers(client, db_session, username="order-owner")
+    other_headers, other = await _auth_headers(client, db_session, username="order-other")
+    admin_headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="order-admin",
+        role=UserRole.ADMIN,
+    )
+
+    owner_order = TaskOrder(
+        template_id=template_id,
+        name="owner benchmark order",
+        status=OrderStatus.COMPLETED,
+        user_id=owner.id,
+        is_benchmark=True,
+    )
+    other_order = TaskOrder(
+        template_id=template_id,
+        name="other benchmark order",
+        status=OrderStatus.COMPLETED,
+        user_id=other.id,
+        is_benchmark=True,
+    )
+    db_session.add_all([owner_order, other_order])
+    await db_session.commit()
+
+    owner_response = await client.get(
+        "/api/orders",
+        params={"is_benchmark": True},
+        headers=owner_headers,
+    )
+    assert owner_response.status_code == 200
+    assert [row["name"] for row in owner_response.json()] == ["owner benchmark order"]
+
+    other_response = await client.get(
+        "/api/orders",
+        params={"is_benchmark": True},
+        headers=other_headers,
+    )
+    assert other_response.status_code == 200
+    assert [row["name"] for row in other_response.json()] == ["other benchmark order"]
+
+    admin_response = await client.get(
+        "/api/orders",
+        params={"is_benchmark": True},
+        headers=admin_headers,
+    )
+    assert admin_response.status_code == 200
+    assert {row["name"] for row in admin_response.json()} == {
+        "owner benchmark order",
+        "other benchmark order",
+    }
+
+
+@pytest.mark.asyncio
 async def test_business_task_summary_ignores_orphan_evaluations(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
 

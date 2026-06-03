@@ -84,6 +84,30 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
   ./scripts/build_workers.sh"
 ```
 
+如果现场网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，但 registry 中已有可运行的 `linux/amd64` 旧镜像，可用“刷新业务代码层”的备用路径，避免重新下载系统依赖：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  docker pull localhost:5000/scientific-matmul:dev && \
+  docker tag localhost:5000/scientific-matmul:dev scientific-matmul:base-cache && \
+  cat >/tmp/Dockerfile.matmul-refresh <<'EOF'
+FROM scientific-matmul:base-cache
+COPY _common /app/_common
+COPY high-throughput-matmul/src /app/src
+ENV PYTHONPATH=/app/src:/app
+ENV USE_GPU=true
+CMD [\"python3\", \"/app/src/source_main.py\"]
+EOF
+  docker build --pull=false --platform linux/amd64 \
+    -f /tmp/Dockerfile.matmul-refresh \
+    -t localhost:5000/scientific-matmul:dev workers && \
+  docker run --rm --entrypoint python3 localhost:5000/scientific-matmul:dev \
+    -c 'import pathlib; t=pathlib.Path(\"/app/src/compute_main.py\").read_text(); print(\"observation_duration_sec\" in t, \"sample_count\" in t)' && \
+  docker push localhost:5000/scientific-matmul:dev"
+```
+
+该备用路径只适用于已确认旧镜像基础依赖正确的验收环境。若改动涉及系统包、Python 依赖或 CUDA 版本，仍需恢复网络后完整重建。
+
 重建矩阵乘法模板，确保模板镜像指向私有仓库：
 
 ```bash

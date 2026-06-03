@@ -128,7 +128,7 @@
 
 ## 真实四节点执行要求
 
-从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再在 `admin-server` 拉取更新并重启服务。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并重启 Node Agent。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
+从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再在 `admin-server` 更新部署目录并重启服务。若 `admin-server` 的 `/home/bupt/manage_deploy` 是 Git 仓库，使用 `git pull`/`git switch`；若它是手工部署目录，则使用 `git archive <commit>` 或只同步本次提交涉及的文件，避免把本地未提交改动、数据库、`.env` 或报告产物带到远端。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
 
 完整操作清单见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
@@ -150,6 +150,30 @@ DEMO_BASE_URL=http://127.0.0.1:8181 \
 PYTHONPATH=backend \
 /home/bupt/miniconda3/envs/manage_deploy/bin/python backend/scripts/rebuild_matmul_template.py
 ```
+
+如果实验网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，可以复用 registry 中已验证为 `linux/amd64` 的旧 `scientific-matmul:dev` 镜像作为基础层，只刷新 `/app/src` 和 `/app/_common` 业务代码层：
+
+```bash
+cd /home/bupt/manage_deploy
+docker pull localhost:5000/scientific-matmul:dev
+docker tag localhost:5000/scientific-matmul:dev scientific-matmul:base-cache
+cat >/tmp/Dockerfile.matmul-refresh <<'EOF'
+FROM scientific-matmul:base-cache
+COPY _common /app/_common
+COPY high-throughput-matmul/src /app/src
+ENV PYTHONPATH=/app/src:/app
+ENV USE_GPU=true
+CMD ["python3", "/app/src/source_main.py"]
+EOF
+docker build --pull=false --platform linux/amd64 \
+  -f /tmp/Dockerfile.matmul-refresh \
+  -t localhost:5000/scientific-matmul:dev workers
+docker run --rm --entrypoint python3 localhost:5000/scientific-matmul:dev \
+  -c 'import pathlib; t=pathlib.Path("/app/src/compute_main.py").read_text(); print("observation_duration_sec" in t, "sample_count" in t)'
+docker push localhost:5000/scientific-matmul:dev
+```
+
+该方式不改变运行环境依赖，只更新业务代码层，适合验收现场外网不可用但旧镜像已验证可运行的场景。
 
 ```bash
 # 本地或 admin-server 运行真实远程 E2E preflight，不能跳过镜像/架构/agent 检查
@@ -175,5 +199,6 @@ MATMUL_BATCH_COUNT=50 \
 - 当前验收页面的 UI 四步流程已基本具备。
 - 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
 - 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
+- 当前验收证据链依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部压测工单并打开详情。
 - 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。
 - 截图建议包含 Step 1 基线表、Step 3 状态分布、工单证据链详情抽屉和 Step 4 成功率进度条。

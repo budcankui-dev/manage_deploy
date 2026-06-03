@@ -120,7 +120,9 @@ async def list_orders(
         if await reconcile_orphan_orders(db):
             await db.commit()
 
-    query = select(TaskOrder).where(TaskOrder.user_id == current_user.id)
+    query = select(TaskOrder)
+    if current_user.role != "admin":
+        query = query.where(TaskOrder.user_id == current_user.id)
     if is_benchmark is not None:
         query = query.where(TaskOrder.is_benchmark == is_benchmark)
     if status:
