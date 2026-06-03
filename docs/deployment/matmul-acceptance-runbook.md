@@ -39,15 +39,12 @@ backend/api/orders.py
 backend/services/baseline_runner.py
 backend/services/business_task_query.py
 backend/tests/test_business_tasks_api.py
-frontend/src/App.vue
 frontend/src/api/index.js
-frontend/src/router.js
-frontend/src/stores/auth.js
 frontend/src/views/BenchmarkView.vue
 docs/benchmark-test-plan.md
-docs/evaluation-plan-formal.md
 docs/deployment/test-lab.md
 docs/deployment/matmul-acceptance-runbook.md
+docs/roadmap.md
 ```
 
 其中 `frontend/src/App.vue`、`frontend/src/router.js`、`frontend/src/stores/auth.js` 只有在本次提交确实修改了 `/benchmark` 入口或认证逻辑时才需要纳入；若这些文件只包含其它功能线（例如意图评测）的改动，不要纳入 matmul 验收最小提交。`frontend/src/api/index.js` 当前只需要纳入 `businessApi.summary(params)` 的 hunk，避免把其它未完成页面的 API 一起提交。
