@@ -114,7 +114,7 @@
           <span class="step-num">3</span>
           <div>
             <div class="step-title">执行</div>
-            <div class="step-desc">实时查看待路由、已路由、运行中和已完成数量；当前一键路由为验收 mock 路由，不替代外部路由系统。</div>
+            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；当前一键路由为验收 mock 路由，不替代外部路由系统。</div>
           </div>
           <div class="header-actions">
             <el-button size="small" type="primary" :loading="routeLoading" @click="doAutoRoute">一键路由</el-button>
@@ -145,6 +145,7 @@
           <div class="status-label">失败</div>
         </div>
       </div>
+      <p class="status-note">说明：已评估完成表示业务指标已上报并完成判定；实例状态仍可能为运行中，直到任务结束时间到达或人工停止。</p>
     </el-card>
 
     <el-card class="step-card evidence-card">
@@ -162,18 +163,18 @@
         <el-table-column prop="name" label="工单" min-width="210" show-overflow-tooltip />
         <el-table-column label="任务状态" width="110">
           <template #default="{ row }">
-            <el-tag size="small">{{ row.status }}</el-tag>
+            <el-tag size="small">{{ orderStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="路由状态" width="110">
           <template #default="{ row }">
             <el-tag size="small" :type="row.routing_status === 'completed' ? 'success' : 'warning'">
-              {{ row.routing_status || '—' }}
+              {{ routingStatusLabel(row.routing_status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="部署状态" width="110">
-          <template #default="{ row }">{{ row.deployment_status || '—' }}</template>
+        <el-table-column label="实例状态" width="110">
+          <template #default="{ row }">{{ instanceStatusLabel(row.deployment_status || row.instance_status) }}</template>
         </el-table-column>
         <el-table-column label="实例" min-width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialized_instance_id || '未物化' }}</template>
@@ -465,6 +466,44 @@ function formatMetric(value, unit = '') {
   const numeric = Number(value)
   const text = Number.isFinite(numeric) ? numeric.toFixed(2) : String(value)
   return `${text} ${unit || ''}`.trim()
+}
+
+function orderStatusLabel(value) {
+  const labels = {
+    pending: '待提交',
+    routing: '路由中',
+    routed: '已路由',
+    materialized: '已物化',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+  return labels[value] || value || '—'
+}
+
+function routingStatusLabel(value) {
+  const labels = {
+    not_required: '无需路由',
+    pending: '待路由',
+    computing: '计算中',
+    completed: '已完成',
+    failed: '失败',
+  }
+  return labels[value] || value || '—'
+}
+
+function instanceStatusLabel(value) {
+  const labels = {
+    pending: '待启动',
+    scheduled: '已调度',
+    starting: '启动中',
+    running: '运行中',
+    stopping: '停止中',
+    stopped: '已停止',
+    failed: '失败',
+    expired: '已过期',
+  }
+  return labels[value] || value || '—'
 }
 
 function summarizePlacements(placements) {
@@ -798,6 +837,12 @@ onMounted(loadAll)
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
   gap: 14px;
+}
+
+.status-note {
+  margin: 12px 0 0;
+  color: #606266;
+  font-size: 12px;
 }
 
 .status-cell {
