@@ -14,6 +14,24 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _allocate_from_range(
+    auto_ports: list[dict[str, Any]],
+    start: int,
+    end: int,
+    exclude_ports: list[int] | None = None,
+) -> list[int]:
+    excluded = set(exclude_ports or [])
+    allocated: list[int] = []
+    for port in range(start, end + 1):
+        if port in excluded:
+            continue
+        allocated.append(port)
+        excluded.add(port)
+        if len(allocated) >= len(auto_ports):
+            break
+    return allocated
+
+
 async def auto_allocate_ports(
     agent_address: str,
     port_defs: list[dict[str, Any]] | None,
@@ -73,12 +91,7 @@ async def auto_allocate_ports(
             data = resp.json()
     except Exception as exc:
         logger.warning(f"auto_allocate_ports: agent call failed: {exc}")
-        for item in auto_ports:
-            name = item["name"]
-            default = item.get("default")
-            if default is not None:
-                result[name] = int(default)
-        return result
+        data = {"ports": _allocate_from_range(auto_ports, start, end, all_exclude)}
 
     allocated = data.get("ports", [])
     for i, item in enumerate(auto_ports):
