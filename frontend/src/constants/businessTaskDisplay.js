@@ -78,9 +78,12 @@ export function describeDataProfile(taskType, profile) {
   }
   if (taskType === 'low_latency_video_pipeline') {
     return [
-      { label: '视频文件', value: profile.file || '-' },
-      { label: '数据集', value: profile.dataset || '-' },
       { label: '画像 ID', value: profile.profile_id || '-' },
+      { label: '分辨率', value: profile.resolution || '-' },
+      { label: '总帧数', value: String(profile.frame_count ?? '-') },
+      { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
+      { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
+      { label: '计算强度', value: String(profile.work_units ?? '-') },
     ]
   }
   return Object.entries(profile).map(([key, value]) => ({

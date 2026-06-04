@@ -270,9 +270,19 @@
       </div>
     </el-card>
 
-    <el-drawer v-model="detailDrawerVisible" title="压测工单详情" size="56%">
+    <el-drawer v-model="detailDrawerVisible" title="压测工单详情" size="64%">
       <div v-if="!selectedOrderDetail" class="empty-hint">请选择一个工单查看详情。</div>
       <div v-else class="detail-drawer-body">
+        <div class="detail-toolbar">
+          <div>
+            <strong>{{ taskTypeLabel(selectedOrderDetail.task_type) }}</strong>
+            <span>{{ detailTaskSummary }}</span>
+          </div>
+          <el-button type="primary" plain size="small" @click="openBusinessTaskDetail">
+            在业务任务中心查看完整详情
+          </el-button>
+        </div>
+
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="工单 ID">{{ selectedOrderDetail.id }}</el-descriptions-item>
           <el-descriptions-item label="实例 ID">{{ selectedOrderDetail.materialized_instance_id || '未物化' }}</el-descriptions-item>
@@ -293,6 +303,47 @@
             </el-table-column>
             <el-table-column prop="status" label="节点状态" width="110" />
           </el-table>
+        </section>
+
+        <section class="detail-section business-proof-card">
+          <h3>业务输入与结果展示</h3>
+          <p class="proof-summary">{{ detailObjectiveMeaning }}</p>
+          <ol class="pipeline-steps">
+            <li v-for="step in detailPipelineSteps" :key="step.role">
+              <strong>{{ step.role }}</strong>
+              <span>{{ step.title }}：{{ step.detail }}</span>
+            </li>
+          </ol>
+
+          <div class="proof-grid">
+            <div>
+              <h4>输入参数</h4>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item v-for="row in detailInputRows" :key="row.label" :label="row.label">
+                  {{ row.value }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+            <div>
+              <h4>计算输出</h4>
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item v-for="row in detailOutputRows" :key="row.label" :label="row.label">
+                  {{ row.value }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+          </div>
+
+          <div v-if="detailParamConsistency" class="consistency-row">
+            <el-tag :type="detailParamConsistency.ok ? 'success' : 'warning'" size="small">
+              {{ detailParamConsistency.label }}
+            </el-tag>
+            <span>{{ detailParamConsistency.detail }}</span>
+          </div>
+          <div class="result-verdict" :class="detailVerdict.statusClass">
+            <strong>{{ detailVerdict.title }}</strong>
+            <p>{{ detailVerdict.subtitle }}</p>
+          </div>
         </section>
 
         <section class="detail-section">
@@ -327,10 +378,23 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
+import {
+  MATMUL_PIPELINE_STEPS,
+  buildMatmulInputRows,
+  buildMatmulOutputRows,
+  buildMatmulParamConsistency,
+  buildMatmulVerdict,
+  describeDataProfile,
+  describeObjectiveMeaning,
+  formatObjectiveSentence,
+  taskTypeSummary,
+} from '@/constants/businessTaskDisplay'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
+const router = useRouter()
 const taskConfigs = {
   high_throughput_matmul: {
     label: '矩阵乘法计算任务',
@@ -488,6 +552,116 @@ const resultProgressStatus = computed(() =>
 const resultVerdictText = computed(() =>
   hasEnoughEvaluations.value ? (isPassing.value ? '验收通过' : '未达标') : '样本不足'
 )
+
+const detailTaskType = computed(() => selectedOrderDetail.value?.business_task?.task_type || selectedOrderDetail.value?.task_type || '')
+const detailTaskSummary = computed(() => taskTypeSummary(detailTaskType.value))
+const detailResultMetadata = computed(() => selectedOrderDetail.value?.evaluation?.result_metadata || null)
+const detailObjectiveForDisplay = computed(() => {
+  const objective = { ...(selectedOrderDetail.value?.business_task?.business_objective || {}) }
+  const evaluation = selectedOrderDetail.value?.evaluation
+  if (objective.target_value == null && evaluation?.target_value != null) {
+    objective.target_value = evaluation.target_value
+  }
+  if (!objective.unit && evaluation?.unit) {
+    objective.unit = evaluation.unit
+  }
+  if (!objective.operator && evaluation?.metric_key === 'frame_latency_p90_ms') {
+    objective.operator = '<='
+  }
+  if (!objective.operator && evaluation?.metric_key === 'effective_gflops') {
+    objective.operator = '>='
+  }
+  if (!objective.metric_key && evaluation?.metric_key) {
+    objective.metric_key = evaluation.metric_key
+  }
+  return objective
+})
+const detailObjectiveMeaning = computed(() =>
+  describeObjectiveMeaning(detailTaskType.value, detailObjectiveForDisplay.value)
+)
+const detailPipelineSteps = computed(() => {
+  if (detailTaskType.value === 'high_throughput_matmul') return MATMUL_PIPELINE_STEPS
+  if (detailTaskType.value === 'low_latency_video_pipeline') {
+    return [
+      { role: 'source', title: '生成抽帧任务', detail: '按固定 profile 生成工业检测视频帧元数据并发送给 compute' },
+      { role: 'compute', title: '执行推理替身负载', detail: '对抽样帧执行确定性推理计算，记录每帧处理时延' },
+      { role: 'sink', title: '汇总 P90 时延', detail: '接收推理结果，向 Manager 上报 frame_latency_p90_ms 和帧级统计' },
+    ]
+  }
+  return [
+    { role: 'source', title: '提交输入', detail: '准备业务输入并发送给计算节点' },
+    { role: 'compute', title: '执行业务', detail: '按路由结果在指定节点执行计算' },
+    { role: 'sink', title: '上报结果', detail: '汇总业务指标并回传平台用于判定' },
+  ]
+})
+const detailInputRows = computed(() => {
+  const profile = selectedOrderDetail.value?.business_task?.data_profile
+  if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulInputRows(profile)
+  if (detailTaskType.value === 'low_latency_video_pipeline') {
+    const data = profile || {}
+    return [
+      { label: '业务画像', value: data.profile_id || 'video_industrial_inspection_720p' },
+      { label: '分辨率', value: data.resolution || '720p' },
+      { label: '总帧数', value: String(data.frame_count ?? '-') },
+      { label: '抽帧间隔', value: `每 ${data.frame_stride ?? '-'} 帧取 1 帧` },
+      { label: '有效统计帧', value: String(data.measured_frames ?? '-') },
+      { label: '计算强度', value: String(data.work_units ?? '-') },
+    ]
+  }
+  return describeDataProfile(detailTaskType.value, profile)
+})
+const detailOutputRows = computed(() => {
+  const evaluation = selectedOrderDetail.value?.evaluation
+  const meta = detailResultMetadata.value || {}
+  if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulOutputRows(meta, evaluation)
+  if (detailTaskType.value === 'low_latency_video_pipeline') {
+    const rows = []
+    if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
+    if (meta.frame_latency_avg_ms != null) rows.push({ label: '平均帧时延', value: `${Number(meta.frame_latency_avg_ms).toFixed(2)} ms` })
+    if (meta.frame_latency_p90_ms != null) rows.push({ label: 'P90 帧时延', value: `${Number(meta.frame_latency_p90_ms).toFixed(2)} ms` })
+    if (meta.frame_latency_min_ms != null && meta.frame_latency_max_ms != null) {
+      rows.push({ label: '时延范围', value: `${Number(meta.frame_latency_min_ms).toFixed(2)} - ${Number(meta.frame_latency_max_ms).toFixed(2)} ms` })
+    }
+    if (evaluation) {
+      rows.push({ label: '上报指标', value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() })
+    }
+    return rows.length ? rows : [{ label: '状态', value: '尚未收到视频推理输出' }]
+  }
+  if (evaluation) {
+    return [{ label: '上报指标', value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() }]
+  }
+  return [{ label: '状态', value: '尚未收到计算输出' }]
+})
+const detailParamConsistency = computed(() => {
+  if (detailTaskType.value === 'high_throughput_matmul') {
+    return buildMatmulParamConsistency(
+      selectedOrderDetail.value?.business_task?.data_profile,
+      detailResultMetadata.value
+    )
+  }
+  return null
+})
+const detailVerdict = computed(() => {
+  const evaluation = selectedOrderDetail.value?.evaluation
+  if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulVerdict(evaluation)
+  if (!evaluation) {
+    return {
+      title: '等待业务结果',
+      subtitle: '任务运行并上报指标后，将在这里展示输入、输出和业务目标判定。',
+      statusClass: 'pending',
+    }
+  }
+  const actual = Number(evaluation.actual_value).toFixed(2)
+  const unit = evaluation.unit || ''
+  const target = evaluation.target_value != null ? Number(evaluation.target_value).toFixed(2) : '-'
+  return {
+    title: evaluation.business_success ? '业务已完成，目标达标' : '业务已完成，目标未达标',
+    subtitle: evaluation.business_success
+      ? `实际 ${actual} ${unit}，满足 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.metric_key === 'frame_latency_p90_ms' ? '<=' : '>=', target_value: target, unit })}。`
+      : (evaluation.failure_reason || `实际 ${actual} ${unit}，未达到目标 ${target} ${unit}。`),
+    statusClass: evaluation.business_success ? 'success' : 'danger',
+  }
+})
 
 function formatTime(value) {
   return new Date(value).toLocaleString('zh-CN', {
@@ -737,6 +911,11 @@ async function openOrderDetail(row) {
   } finally {
     detailLoading.value = false
   }
+}
+
+function openBusinessTaskDetail() {
+  if (!selectedOrderDetail.value?.id) return
+  router.push({ path: '/business-tasks', query: { orderId: selectedOrderDetail.value.id } })
 }
 
 async function doAutoRoute() {
@@ -1132,10 +1311,124 @@ onMounted(loadAll)
   gap: 18px;
 }
 
+.detail-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+}
+
+.detail-toolbar strong,
+.detail-toolbar span {
+  display: block;
+}
+
+.detail-toolbar span {
+  margin-top: 4px;
+  color: #606266;
+  font-size: 13px;
+}
+
 .detail-section h3 {
   margin: 0 0 10px;
   color: #303133;
   font-size: 15px;
+}
+
+.business-proof-card {
+  padding: 16px;
+  border: 1px solid #ebeef5;
+  border-radius: 12px;
+  background: #fffdf7;
+}
+
+.proof-summary {
+  margin: 0 0 12px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.pipeline-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.pipeline-steps li {
+  padding: 12px;
+  border: 1px solid #f3d19e;
+  border-radius: 10px;
+  background: #fffaf0;
+}
+
+.pipeline-steps strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #b88230;
+}
+
+.pipeline-steps span {
+  color: #606266;
+  font-size: 13px;
+}
+
+.proof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.proof-grid h4 {
+  margin: 0 0 8px;
+  color: #303133;
+}
+
+.consistency-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  color: #606266;
+}
+
+.result-verdict {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #dcdfe6;
+  background: #f8fafc;
+}
+
+.result-verdict strong {
+  display: block;
+}
+
+.result-verdict p {
+  margin: 6px 0 0;
+  color: #606266;
+}
+
+.result-verdict.success {
+  border-color: #b3e19d;
+  background: #f0f9eb;
+}
+
+.result-verdict.danger {
+  border-color: #fab6b6;
+  background: #fef0f0;
+}
+
+.result-verdict.warning,
+.result-verdict.pending {
+  border-color: #f3d19e;
+  background: #fdf6ec;
 }
 
 .metric-grid {
@@ -1228,7 +1521,9 @@ onMounted(loadAll)
   }
 
   .metric-grid,
-  .json-grid {
+  .json-grid,
+  .proof-grid,
+  .pipeline-steps {
     grid-template-columns: 1fr;
   }
 
