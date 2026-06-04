@@ -28,7 +28,12 @@ from schemas import (
 from services.business_task_query import get_order_detail_context
 from services.dag_executor import DAGExecutor
 from services.order_materialize import _resolve_node_id
-from services.order_sync import purge_order_instance_artifacts, reconcile_orphan_orders
+from services.instance_lifecycle import cleanup_instance_runtime
+from services.order_sync import (
+    purge_instance_artifacts_preserve_evidence,
+    purge_order_instance_artifacts,
+    reconcile_orphan_orders,
+)
 from services.port_plan import format_service_url, get_business_address
 from services.routing_payload_builder import build_routing_payload
 from services.scheduler import TaskScheduler
@@ -59,6 +64,7 @@ BENCHMARK_TASK_CONFIGS = {
             "operator": ">=",
             "unit": "GFLOPS",
         },
+        "default_compute_gpu": "0",
         "source_name": "benchmark-source",
         "destination_name": "benchmark-sink",
     },
@@ -81,6 +87,7 @@ BENCHMARK_TASK_CONFIGS = {
             "operator": "<=",
             "unit": "ms",
         },
+        "default_compute_gpu": "0",
         "source_name": "benchmark-video-source",
         "destination_name": "benchmark-video-sink",
     },
@@ -105,6 +112,39 @@ def _benchmark_task_type(order: TaskOrder) -> str | None:
     return None
 
 
+async def _resolve_batch_orders(
+    db: AsyncSession,
+    request: BatchOperationRequest,
+) -> tuple[list[TaskOrder], dict[str, str]]:
+    """Resolve explicit order IDs or a benchmark run scope for batch operations."""
+    if request.order_ids:
+        rows = await db.execute(select(TaskOrder).where(TaskOrder.id.in_(request.order_ids)))
+        order_by_id = {order.id: order for order in rows.scalars().all()}
+        missing = {
+            order_id: "Order not found"
+            for order_id in request.order_ids
+            if order_id not in order_by_id
+        }
+        return [order_by_id[order_id] for order_id in request.order_ids if order_id in order_by_id], missing
+
+    if not request.benchmark_run_id:
+        raise HTTPException(status_code=400, detail="order_ids or benchmark_run_id is required")
+
+    query = select(TaskOrder)
+    if request.is_benchmark is not None:
+        query = query.where(TaskOrder.is_benchmark == request.is_benchmark)
+    else:
+        query = query.where(TaskOrder.is_benchmark == True)
+    rows = await db.execute(query)
+    orders = [
+        order
+        for order in rows.scalars().all()
+        if _benchmark_run_id(order) == request.benchmark_run_id
+        and (not request.task_type or _benchmark_task_type(order) == request.task_type)
+    ]
+    return orders, {}
+
+
 async def _catalog_for_order(db: AsyncSession, order: TaskOrder) -> BusinessTemplateCatalog | None:
     query = select(BusinessTemplateCatalog).where(
         BusinessTemplateCatalog.template_id == order.template_id
@@ -126,6 +166,44 @@ def _benchmark_config(task_type: str) -> dict:
 def _merged_benchmark_profile(task_type: str, data_profile: dict | None) -> dict:
     config = _benchmark_config(task_type)
     return {**config["default_profile"], **(data_profile or {})}
+
+
+def _default_compute_gpu_for_order(order: TaskOrder) -> str | None:
+    task_type = _benchmark_task_type(order)
+    if not task_type:
+        return None
+    try:
+        return _benchmark_config(task_type).get("default_compute_gpu")
+    except HTTPException:
+        return None
+
+
+def _gpu_from_routing_result(routing_result: dict | None, role: str) -> str | None:
+    if not isinstance(routing_result, dict):
+        return None
+    placements = routing_result.get("placements")
+    if isinstance(placements, list):
+        for placement in placements:
+            if not isinstance(placement, dict):
+                continue
+            if placement.get("node_id") != role:
+                continue
+            gpu_device = placement.get("gpu_device")
+            if gpu_device is not None:
+                return str(gpu_device)
+            gpu_indices = placement.get("gpu_indices")
+            if isinstance(gpu_indices, list) and gpu_indices:
+                return str(gpu_indices[0])
+    if isinstance(placements, dict):
+        placement = placements.get(role)
+        if isinstance(placement, dict):
+            gpu_device = placement.get("gpu_device")
+            if gpu_device is not None:
+                return str(gpu_device)
+            gpu_indices = placement.get("gpu_indices")
+            if isinstance(gpu_indices, list) and gpu_indices:
+                return str(gpu_indices[0])
+    return None
 
 
 def _order_to_response(
@@ -257,6 +335,8 @@ async def get_order(
     config = order.runtime_config or {}
     business_task = config.get("business_task")
     routing_result = config.get("routing_result")
+    if not isinstance(routing_result, dict) and isinstance(business_task, dict):
+        routing_result = business_task.get("routing_result")
 
     instance_exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
     base = _order_to_response(
@@ -281,14 +361,20 @@ async def get_order(
                 select(NodeModel).where(NodeModel.id == inst_node.node_id)
             )).scalar_one_or_none()
             env = inst_node.env or {}
+            role = env.get("TASK_ROLE") or inst_node.name
+            gpu_device = env.get("GPU_DEVICE")
+            gpu_id = inst_node.gpu_id
+            if role in ("compute", "worker") and not (gpu_device or gpu_id):
+                routing_gpu = _gpu_from_routing_result(routing_result, role)
+                gpu_device = routing_gpu or None
             node_placements.append(
                 TaskOrderNodePlacementSummary(
-                    role=env.get("TASK_ROLE") or inst_node.name,
+                    role=role,
                     instance_node_name=inst_node.name,
                     node_id=inst_node.node_id,
                     hostname=machine.hostname if machine else None,
-                    gpu_id=inst_node.gpu_id,
-                    gpu_device=env.get("GPU_DEVICE"),
+                    gpu_id=gpu_id,
+                    gpu_device=gpu_device,
                     port_values=inst_node.port_values,
                     status=inst_node.status,
                 )
@@ -348,21 +434,64 @@ async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/batch/delete", response_model=BatchOperationResponse)
-async def batch_delete_orders(request: BatchOperationRequest, db: AsyncSession = Depends(get_db)):
+async def batch_delete_orders(
+    request: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
     succeeded: list[str] = []
-    failed: dict[str, str] = {}
-    for order_id in request.order_ids:
+    orders, failed = await _resolve_batch_orders(db, request)
+    for order in orders:
         try:
-            row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
-            order = row.scalar_one_or_none()
-            if not order:
-                failed[order_id] = "Order not found"
-                continue
             await purge_order_instance_artifacts(db, order.materialized_instance_id)
             await db.delete(order)
-            succeeded.append(order_id)
+            succeeded.append(order.id)
         except Exception as exc:
-            failed[order_id] = str(exc)
+            failed[order.id] = str(exc)
+    await db.commit()
+    return BatchOperationResponse(succeeded=succeeded, failed=failed)
+
+
+@router.post("/batch/cleanup-instances", response_model=BatchOperationResponse)
+async def batch_cleanup_order_instances(
+    request: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """清理工单关联实例，保留工单、路由结果、评估结果和结果对象作为验收证据。"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    succeeded: list[str] = []
+    orders, failed = await _resolve_batch_orders(db, request)
+    task_scheduler = TaskScheduler()
+
+    for order in orders:
+        try:
+            if not order.materialized_instance_id:
+                succeeded.append(order.id)
+                continue
+
+            result = await db.execute(
+                select(TaskInstance)
+                .options(selectinload(TaskInstance.nodes))
+                .where(TaskInstance.id == order.materialized_instance_id)
+            )
+            instance = result.scalar_one_or_none()
+            if not instance:
+                succeeded.append(order.id)
+                continue
+
+            await task_scheduler.cancel_all_schedules(instance.id)
+            await cleanup_instance_runtime(db, instance)
+            await purge_instance_artifacts_preserve_evidence(db, instance.id)
+            if order.status == OrderStatus.MATERIALIZED:
+                order.status = OrderStatus.COMPLETED
+            succeeded.append(order.id)
+        except Exception as exc:
+            failed[order.id] = str(exc)
+
     await db.commit()
     return BatchOperationResponse(succeeded=succeeded, failed=failed)
 
@@ -502,12 +631,19 @@ async def receive_routing_result(
             env["TASK_INSTANCE_ID"] = order.id  # will be updated after instance creation
         if placement.gpu_device is not None:
             env["GPU_DEVICE"] = placement.gpu_device
+        elif order.is_benchmark and role in ("compute", "worker"):
+            default_gpu = _default_compute_gpu_for_order(order)
+            if default_gpu is not None:
+                env["GPU_DEVICE"] = default_gpu
 
+        gpu_id = placement.gpu_device
+        if gpu_id is None and order.is_benchmark and role in ("compute", "worker"):
+            gpu_id = _default_compute_gpu_for_order(order)
         overrides.append(TaskInstanceNodeOverride(
             template_node_name=template_node_name,
             node_id=resolved_node_id,
             env=env,
-            gpu_id=placement.gpu_device if placement.gpu_device is not None else None,
+            gpu_id=gpu_id,
         ))
 
     # Create instance
@@ -778,7 +914,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
             env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
             env["TASK_INSTANCE_ID"] = order.id
-        gpu_id = "0" if role == "compute" else None
+        gpu_id = _default_compute_gpu_for_order(order) if role == "compute" else None
         if gpu_id is not None:
             env["GPU_DEVICE"] = gpu_id
         overrides.append(TaskInstanceNodeOverride(
@@ -792,7 +928,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
         {
             "node_id": role,
             "worker_host": node.hostname,
-            **({"gpu_device": "0"} if role == "compute" else {}),
+            **({"gpu_device": _default_compute_gpu_for_order(order)} if role == "compute" and _default_compute_gpu_for_order(order) is not None else {}),
         }
         for role, node in picked.items()
     ]

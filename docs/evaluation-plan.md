@@ -188,9 +188,9 @@ python backend/scripts/run_baseline.py \
 
 | 业务类型 | 任务数 | 说明 |
 |----------|--------|------|
-| 通用计算（matmul） | 30 | 第一阶段仅验证 matmul 闭环 |
+| 通用计算（matmul） | 30 | 正式主验收链路，优先用于四节点留档和专家截图 |
 
-后续扩展：模型训练 10 次 + 视频推理 10 次 + matmul 10 次 = 30 次
+扩展演示：`/benchmark` 页面已支持视频推理业务类型，可按同样流程创建视频抽帧推理工单，验证多模态扩展能力。模型训练/文本生成业务在测试方案中保留指标定义和接口契约，第一阶段可先不作为四节点 30 任务主验收样本，避免现场同时引入过多变量。
 
 #### 4.4.3 测试参数
 
@@ -246,14 +246,14 @@ python backend/scripts/run_baseline.py \
 - 网络：单一管理面网络，节点直连
 - 节点：3 台计算节点（compute-1/2/3）
 - 路由：手动路由或简单自动分配
-- 业务：仅 matmul
+- 业务：matmul 作为主验收业务，视频推理作为页面可选扩展演示业务
 
 ### 5.2 第二阶段（正式验收）
 
 - 网络：管理面 + 数据面（IPv6）
 - 节点：按实际部署规模
 - 路由：外部路由系统根据 CPU/GPU 资源选择节点，建立数据面路由
-- 业务：matmul + 模型训练 + 视频推理
+- 业务：matmul + 视频推理扩展演示；模型训练/文本生成按相同 `tokens_per_second` 契约预留
 
 ### 5.3 环境差异对指标的影响
 
@@ -269,21 +269,24 @@ python backend/scripts/run_baseline.py \
 
 ```json
 {
-  "eval_id": "intent-eval-20260601",
-  "model": "qwen-plus",
+  "evaluation_id": "intent-eval-20260603-222617-90569be4",
+  "model": "qwen3.7-plus",
   "temperature": 0.1,
-  "dataset": "datasets/intent_eval/matmul_30.jsonl",
-  "total": 30,
-  "correct": 28,
-  "accuracy": 0.933,
-  "pass": true,
+  "dataset": "datasets/intent_eval/multi_business.jsonl",
+  "total": 360,
+  "correct": 330,
+  "accuracy": 0.917,
+  "passed": true,
+  "batch_id": "batch_8a23fd90-3758-44df-8598-f3c22519a1d2",
+  "report_path": "reports/intent_eval_llm.json",
   "results": [
     {
+      "sample_id": "sample-0000",
       "utterance": "...",
       "expected": {...},
-      "actual": {...},
+      "parsed_result": {...},
       "match": true,
-      "votes": [true, true, true]
+      "details": {...}
     }
   ]
 }
@@ -321,7 +324,7 @@ python backend/scripts/run_baseline.py \
 
 | 维度 | 措施 |
 |------|------|
-| 意图解析 | 固定样本集 + 固定模型版本 + 3 次投票 |
+| 意图解析 | 固定 360 条样本集 + 固定模型版本/温度 + DashScope Batch 输入/输出留档；相对时间按 `expected_time.duration_minutes` 校验 `结束时间-开始时间`；评测模型需先通过 1 条样例 Batch smoke 测试 |
 | 业务计算 | 固定 seed + 固定 profile + warmup 隔离 |
 | Baseline | 固定参数 + 3 次取中位数 + 记录测试时间 |
 | 环境 | 记录节点硬件信息、Docker 版本、镜像 tag |
@@ -331,7 +334,8 @@ python backend/scripts/run_baseline.py \
 
 ### 8.1 准备阶段
 
-- [ ] 扩充意图解析样本集至 30 条
+- [x] 固定意图解析样本集至 360 条
+- [x] Batch 评测模型 smoke 测试完成，当前正式评测下拉保留 `qwen3.7-plus`、`qwen-long`
 - [ ] 完成所有节点 baseline 测试
 - [ ] Worker 镜像更新（上报 effective_gflops）
 - [ ] 评估逻辑更新（基于 baseline 判定）
@@ -339,13 +343,16 @@ python backend/scripts/run_baseline.py \
 
 ### 8.2 执行阶段
 
-- [ ] 运行意图解析评测（3 轮 × 30 条）
+- [x] 运行意图解析真实大模型/智能体 Batch 评测（360 条，qwen3.7-plus，360/360）
 - [ ] 运行业务目标评测（30 次任务部署）
-- [ ] 收集评测报告
+- [x] 收集意图解析评测报告
 
 ### 8.3 输出物
 
-- [ ] 意图解析评测报告（JSON）
+- [x] 意图解析评测报告（JSON，含 Batch 输入/输出留档）
+- [x] `/intent-evaluation` 页面截图（统计卡、Batch 状态、样本明细、评测文件下载）
+- [x] Batch 任务状态、输入 JSONL、输出 JSONL 留档
+- [x] 前端看板展示评测编号、生成时间、Batch 请求计数，并在 Batch 运行中自动同步状态
 - [ ] 业务目标成功率报告（JSON）
 - [ ] 评测环境说明
 - [ ] 可复现执行命令清单

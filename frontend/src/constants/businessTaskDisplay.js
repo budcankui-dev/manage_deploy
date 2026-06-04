@@ -29,7 +29,7 @@ const OPERATOR_LABELS = {
 
 export const MATMUL_PIPELINE_STEPS = [
   { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
-  { role: 'compute', title: '执行计算', detail: 'NumPy 执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
+  { role: 'compute', title: '执行计算', detail: '按路由分配的 CPU/GPU 后端执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
   { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 effective_gflops 和采样元数据' },
 ]
 
@@ -132,6 +132,12 @@ export function buildMatmulOutputRows(resultMetadata, evaluation) {
   }
   if (meta.sample_count != null) {
     rows.push({ label: '有效样本数', value: String(meta.sample_count) })
+  }
+  if (meta.backend) {
+    rows.push({ label: '执行后端', value: String(meta.backend) })
+  }
+  if (meta.gpu_device !== undefined && meta.gpu_device !== null && String(meta.gpu_device) !== '') {
+    rows.push({ label: 'GPU 设备', value: String(meta.gpu_device) })
   }
   if (evaluation) {
     const unit = evaluation.unit || 'ms'

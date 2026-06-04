@@ -84,6 +84,19 @@ async def purge_order_instance_artifacts(db: AsyncSession, instance_id: str | No
     if not instance_id:
         return
 
+    # Evidence tables only reference the logical instance_id. They must be
+    # purged even when the TaskInstance row was already removed by
+    # "cleanup instance but keep order" flows.
+    await db.execute(
+        delete(BusinessObjectiveEvaluation).where(
+            BusinessObjectiveEvaluation.instance_id == instance_id
+        )
+    )
+    await db.execute(
+        delete(TaskResultObject).where(TaskResultObject.instance_id == instance_id)
+    )
+    await db.execute(delete(TaskEvent).where(TaskEvent.instance_id == instance_id))
+
     # 先收集 node IDs（用于清理叶子节点的外键引用）
     node_rows = await db.execute(
         select(TaskInstance)
@@ -95,11 +108,6 @@ async def purge_order_instance_artifacts(db: AsyncSession, instance_id: str | No
         return  # 实例已不存在，幂等
 
     node_ids = [n.id for n in (instance.nodes or [])]
-
-    # 1. task_events — 引用 task_instances.instance_id
-    await db.execute(
-        delete(TaskEvent).where(TaskEvent.instance_id == instance_id)
-    )
 
     # 2. task_instance_edges — 引用 task_instance_nodes
     if node_ids:
@@ -115,15 +123,41 @@ async def purge_order_instance_artifacts(db: AsyncSession, instance_id: str | No
         delete(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id)
     )
 
-    # 4. evaluation + result_objects
-    await db.execute(
-        delete(BusinessObjectiveEvaluation).where(
-            BusinessObjectiveEvaluation.instance_id == instance_id
-        )
-    )
-    await db.execute(
-        delete(TaskResultObject).where(TaskResultObject.instance_id == instance_id)
-    )
-
     # 5. TaskInstance 本身
     await db.execute(delete(TaskInstance).where(TaskInstance.id == instance_id))
+
+
+async def purge_instance_artifacts_preserve_evidence(
+    db: AsyncSession, instance_id: str | None
+) -> bool:
+    """删除实例运行态数据，但保留工单、业务评估和结果对象作为验收证据。
+
+    工单继续保留 materialized_instance_id，前端通过 instance_exists=false 表示
+    “实例已清理，仅保留工单证据”。这样压测环境可以释放容器/实例表数据，又不丢失
+    success rate、输入参数、路由结果和业务输出。
+    """
+    if not instance_id:
+        return False
+
+    result = await db.execute(
+        select(TaskInstance)
+        .where(TaskInstance.id == instance_id)
+        .options(selectinload(TaskInstance.nodes))
+    )
+    instance = result.scalar_one_or_none()
+    if not instance:
+        return False
+
+    node_ids = [node.id for node in (instance.nodes or [])]
+
+    await db.execute(delete(TaskEvent).where(TaskEvent.instance_id == instance_id))
+    if node_ids:
+        await db.execute(
+            delete(TaskInstanceEdge).where(
+                (TaskInstanceEdge.from_node_id.in_(node_ids))
+                | (TaskInstanceEdge.to_node_id.in_(node_ids))
+            )
+        )
+    await db.execute(delete(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id))
+    await db.execute(delete(TaskInstance).where(TaskInstance.id == instance_id))
+    return True

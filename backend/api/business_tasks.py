@@ -244,6 +244,8 @@ async def list_business_tasks_api(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     task_type: str | None = None,
+    is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
     routing_policy: str | None = None,
     order_status: OrderStatus | None = None,
     deployment_status: TaskStatus | None = None,
@@ -258,6 +260,8 @@ async def list_business_tasks_api(
         page=page,
         page_size=page_size,
         task_type=task_type,
+        is_benchmark=is_benchmark,
+        benchmark_run_id=benchmark_run_id,
         routing_policy=routing_policy,
         order_status=order_status,
         deployment_status=deployment_status,
@@ -515,6 +519,8 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
                 "matrix_size",
                 "batch_count",
                 "seed",
+                "backend",
+                "gpu_device",
                 "aggregation",
                 "mean_effective_gflops",
                 "min_effective_gflops",
@@ -531,7 +537,7 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
             if raw.get(key) is not None
         }
     metadata: dict[str, Any] = {}
-    for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed"):
+    for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed", "backend", "gpu_device"):
         if tags.get(key) is not None:
             metadata[key] = tags[key]
     return metadata

@@ -12,6 +12,7 @@ const ADMIN_ROUTES = new Set([
   'AdminConsole',
   'Users',
   'Benchmark',
+  'IntentEvaluation',
 ])
 
 const routes = [
@@ -91,6 +92,11 @@ const routes = [
     path: '/benchmark',
     name: 'Benchmark',
     component: () => import('@/views/BenchmarkView.vue'),
+  },
+  {
+    path: '/intent-evaluation',
+    name: 'IntentEvaluation',
+    component: () => import('@/views/IntentEvaluationView.vue'),
   },
   {
     path: '/admin',

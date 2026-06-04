@@ -6,6 +6,7 @@ eliminating inconsistencies between dag_builder and routing_payload_builder.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -55,15 +56,30 @@ def _estimate_matmul(profile: dict[str, Any]) -> dict[str, dict[str, int]]:
 
 
 def _estimate_video(profile: dict[str, Any]) -> dict[str, dict[str, int]]:
-    resolution = profile.get("resolution", 1080)
+    resolution = _parse_resolution_height(profile.get("resolution", 1080))
     gpu_mem_mb = 2048 if resolution <= 720 else 4096
 
     return {
         "source": _base_node(cpu=2, cpu_mem=512, gpu=0, gpu_mem=0, disk=512),
-        "video": _base_node(cpu=2, cpu_mem=512, gpu=0, gpu_mem=0, disk=512),
-        "infer": _base_node(cpu=4, cpu_mem=2048, gpu=1, gpu_mem=gpu_mem_mb, disk=1024),
+        "compute": _base_node(cpu=4, cpu_mem=2048, gpu=1, gpu_mem=gpu_mem_mb, disk=1024),
         "sink": _base_node(cpu=2, cpu_mem=512, gpu=0, gpu_mem=0, disk=512),
     }
+
+
+def _parse_resolution_height(value: Any) -> int:
+    """Accept values such as 720, "720p" or "1920x1080" for routing estimates."""
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return 1080
+    if "x" in text:
+        try:
+            return int(text.rsplit("x", 1)[1].removesuffix("p"))
+        except ValueError:
+            return 1080
+    match = re.search(r"(\d+)", text)
+    return int(match.group(1)) if match else 1080
 
 
 def _estimate_llm(profile: dict[str, Any]) -> dict[str, dict[str, int]]:

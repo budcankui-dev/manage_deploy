@@ -36,7 +36,7 @@ async def run_intent_workflow(
         except Exception as exc:
             logger.warning(f"LLM intent parse failed, falling back to rule parser: {exc}")
 
-    result = parse_intent(utterance, existing_draft)
+    result = parse_intent(utterance, existing_draft, valid_nodes)
     trace = {
         "engine": "rule_parser",
         "parser_name": result.parser_name,

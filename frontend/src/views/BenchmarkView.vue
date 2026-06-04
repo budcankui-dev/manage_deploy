@@ -173,13 +173,41 @@
         <div class="step-header">
           <span class="step-num muted-step">证</span>
           <div>
-            <div class="step-title">验收工单证据链</div>
-            <div class="step-desc">查看每个压测工单的路由结果、实例、节点/GPU 分配和业务指标，证明任务真实运行。</div>
+            <div class="step-title">{{ currentTaskConfig.label }}运行证据</div>
+            <div class="step-desc">查看当前任务类型的压测工单、路由放置、实例状态、节点/GPU 分配和业务输入输出，证明任务真实运行。</div>
           </div>
-          <el-button class="header-action" size="small" plain @click="loadOrders">刷新工单列表</el-button>
+          <div class="header-actions">
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              :disabled="!selectedOrderIds.length"
+              :loading="cleanupLoading"
+              @click="cleanupSelectedOrderInstances"
+            >
+              清理实例保留工单
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="!selectedOrderIds.length"
+              :loading="deleteLoading"
+              @click="deleteSelectedOrders"
+            >
+              删除选中工单
+            </el-button>
+            <el-button size="small" plain @click="loadOrders">刷新工单列表</el-button>
+          </div>
         </div>
       </template>
-      <el-table :data="orders" size="small" empty-text="暂无压测工单">
+      <el-table
+        :data="orders"
+        size="small"
+        empty-text="暂无压测工单"
+        @selection-change="handleOrderSelectionChange"
+      >
+        <el-table-column type="selection" width="44" />
         <el-table-column prop="name" label="工单" min-width="210" show-overflow-tooltip />
         <el-table-column label="任务状态" width="110">
           <template #default="{ row }">
@@ -299,7 +327,9 @@
             <el-table-column prop="hostname" label="物理节点" min-width="140" />
             <el-table-column prop="instance_node_name" label="实例节点" min-width="120" />
             <el-table-column label="GPU" width="90">
-              <template #default="{ row }">{{ row.gpu_device || row.gpu_id || '无' }}</template>
+              <template #default="{ row }">
+                <span :class="{ 'warning-text': isGpuMissingForCompute(row) }">{{ gpuDisplay(row) }}</span>
+              </template>
             </el-table-column>
             <el-table-column prop="status" label="节点状态" width="110" />
           </el-table>
@@ -379,7 +409,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
@@ -399,11 +429,13 @@ const taskConfigs = {
   high_throughput_matmul: {
     label: '矩阵乘法计算任务',
     unit: 'GFLOPS',
+    requiresGpu: true,
     objectiveText: '业务目标：计算节点 effective_gflops 不低于该节点同 profile 历史基线的 0.8 倍。',
   },
   low_latency_video_pipeline: {
     label: '视频AI推理任务',
     unit: 'ms',
+    requiresGpu: true,
     objectiveText: '业务目标：工业检测抽帧推理的 frame_latency_p90_ms 不高于该节点同 profile 历史基线的 1.2 倍。',
   },
 }
@@ -423,7 +455,10 @@ const fullFlowLoading = ref(false)
 const dashboardUpdatedAt = ref('')
 const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
+const cleanupLoading = ref(false)
+const deleteLoading = ref(false)
 const selectedOrderId = ref('')
+const selectedOrderIds = ref([])
 const selectedOrderDetail = ref(null)
 const currentBenchmarkRunId = ref(localStorage.getItem(BENCHMARK_RUN_STORAGE_KEY) || '')
 const formalEvaluationCount = 30
@@ -724,6 +759,32 @@ function instanceStatusLabel(value) {
   return labels[value] || value || '—'
 }
 
+function requiresGpu(row) {
+  const config = taskConfigs[detailTaskType.value]
+  return Boolean(config?.requiresGpu) && row?.role === 'compute'
+}
+
+function hasGpuValue(value) {
+  return value !== null && value !== undefined && String(value) !== ''
+}
+
+function selectedGpuValue(row) {
+  if (hasGpuValue(row?.gpu_device)) return row.gpu_device
+  if (hasGpuValue(row?.gpu_id)) return row.gpu_id
+  return null
+}
+
+function isGpuMissingForCompute(row) {
+  return requiresGpu(row) && !hasGpuValue(selectedGpuValue(row))
+}
+
+function gpuDisplay(row) {
+  const gpu = selectedGpuValue(row)
+  if (hasGpuValue(gpu)) return gpu
+  if (requiresGpu(row)) return '未记录（GPU任务）'
+  return '不需要'
+}
+
 function summarizePlacements(placements) {
   if (!placements) return '待路由'
   if (Array.isArray(placements)) {
@@ -736,7 +797,9 @@ function summarizePlacements(placements) {
     return Object.entries(placements).map(([role, placement]) => {
       if (typeof placement === 'string') return `${role}:${placement}`
       const node = placement?.node_name || placement?.worker_host || placement?.node_id || '—'
-      const gpu = Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length
+      const gpu = placement?.gpu_device != null
+        ? ` GPU ${placement.gpu_device}`
+        : Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length
         ? ` GPU ${placement.gpu_indices.join(',')}`
         : ''
       return `${role}:${node}${gpu}`
@@ -754,6 +817,10 @@ function baselineRowClass({ row }) {
   if (row.baseline_value == null) return 'baseline-missing-row'
   if (row.stable === false) return 'baseline-unstable-row'
   return ''
+}
+
+function handleOrderSelectionChange(rows) {
+  selectedOrderIds.value = rows.map(row => row.id).filter(Boolean)
 }
 
 async function loadNodes() {
@@ -910,6 +977,40 @@ async function openOrderDetail(row) {
     detailDrawerVisible.value = true
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function cleanupSelectedOrderInstances() {
+  if (!selectedOrderIds.value.length) return
+  cleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
+    ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
+    await Promise.all([loadOrders(), loadSummary()])
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+async function deleteSelectedOrders() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${selectedOrderIds.value.length} 个压测工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
+      '确认删除工单',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  deleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
+    selectedOrderIds.value = []
+    await Promise.all([loadOrders(), loadSummary()])
+  } finally {
+    deleteLoading.value = false
   }
 }
 
@@ -1462,6 +1563,11 @@ onMounted(loadAll)
 
 .danger-text {
   color: #f56c6c !important;
+}
+
+.warning-text {
+  color: #e6a23c;
+  font-weight: 700;
 }
 
 .json-grid {

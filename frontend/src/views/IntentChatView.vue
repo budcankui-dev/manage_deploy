@@ -144,7 +144,7 @@
           <el-table-column label="达标" width="90">
             <template #default="{ row }">
               <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-              <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+              <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
               <span v-else>待评估</span>
             </template>
           </el-table-column>
@@ -572,9 +572,9 @@ const displayMessages = computed(() => {
 function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
-  '矩阵计算，从compute-1到compute-3，跑2小时',
-  '视频转发任务，低延迟要求',
-  '大模型推理服务部署',
+  '矩阵乘法任务，从 compute-1 到 compute-3，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
+  '从 compute-2 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
+  '矩阵计算，源节点 compute-1 目的节点 compute-2，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)

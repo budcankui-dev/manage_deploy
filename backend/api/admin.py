@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,9 +23,29 @@ from schemas.conversation import (
     IntentDraftResponse,
     RoutingRequestResponse,
 )
-from services.intent_parser import parse_intent, ParseResult
+from services.intent_batch_eval import (
+    VALID_NODES,
+    BATCH_DIR,
+    DATASET_PATH,
+    LLM_REPORT_PATH,
+    RULE_REPORT_PATH,
+    latest_status,
+    cancel_latest_llm_batch,
+    read_report,
+    read_latest_batch_job,
+    refresh_latest_llm_batch,
+    run_rule_evaluation,
+    submit_llm_batch_evaluation,
+)
+from services.intent_parser import parse_intent
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _format_dt(value: datetime | None) -> str | None:
+    if not value:
+        return None
+    return value.replace(microsecond=0).isoformat(sep=" ")
 
 
 # ─── 用户管理 ───────────────────────────────────────────────
@@ -252,19 +273,118 @@ async def parse_one(
     """管理员测试单条意图解析。"""
     utterance = payload.get("utterance", "")
     context = payload.get("context")
-    result = parse_intent(utterance, context)
+    result = parse_intent(utterance, context, valid_nodes=VALID_NODES)
     return {
         "task_type": result.task_type,
         "modality": result.modality,
         "source_name": result.source_name,
         "destination_name": result.destination_name,
-        "business_start_time": str(result.business_start_time) if result.business_start_time else None,
-        "business_end_time": str(result.business_end_time) if result.business_end_time else None,
+        "business_start_time": _format_dt(result.business_start_time),
+        "business_end_time": _format_dt(result.business_end_time),
         "data_profile": result.data_profile,
         "business_objective": result.business_objective,
+        "runtime_plan": result.runtime_plan,
+        "resource_requirement": result.resource_requirement,
         "parse_status": result.parse_status,
         "validation_errors": result.validation_errors,
         "assistant_message": result.assistant_message,
         "parser_name": result.parser_name,
         "parser_version": result.parser_version,
     }
+
+
+@router.get("/intent-parser/evaluations/latest")
+async def get_intent_eval_latest(
+    _admin: User = Depends(require_admin),
+):
+    """返回固定意图数据集的最新评测摘要。"""
+    return latest_status()
+
+
+@router.get("/intent-parser/evaluations/reports/{report_type}")
+async def get_intent_eval_report(
+    report_type: str,
+    _admin: User = Depends(require_admin),
+):
+    """读取完整评测报告。report_type 支持 rule 或 llm。"""
+    report_paths = {
+        "rule": RULE_REPORT_PATH,
+        "llm": LLM_REPORT_PATH,
+    }
+    path = report_paths.get(report_type)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"Unknown report type: {report_type}")
+    report = read_report(path)
+    if not report:
+        raise HTTPException(status_code=404, detail=f"{report_type} report not found")
+    return report
+
+
+@router.get("/intent-parser/evaluations/files/{file_type}")
+async def download_intent_eval_file(
+    file_type: str,
+    _admin: User = Depends(require_admin),
+):
+    """下载固定数据集、评测报告和最近一次 Batch 相关文件。"""
+    latest_job = read_latest_batch_job()
+    paths = {
+        "dataset": DATASET_PATH,
+        "rule-report": RULE_REPORT_PATH,
+        "llm-report": LLM_REPORT_PATH,
+        "batch-job": BATCH_DIR / "latest.json",
+    }
+    if latest_job:
+        job_dir = BATCH_DIR / latest_job["job_id"]
+        paths["batch-input"] = job_dir / "input.jsonl"
+        paths["batch-output"] = job_dir / "output.jsonl"
+
+    path = paths.get(file_type)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"Unknown intent evaluation file: {file_type}")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_type}")
+
+    media_type = "application/jsonl" if path.suffix == ".jsonl" else "application/json"
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@router.post("/intent-parser/evaluations/rule/run")
+async def run_intent_eval_rule(
+    _admin: User = Depends(require_admin),
+):
+    """运行固定数据集的本地规则解析评测，用于快速回归。"""
+    return run_rule_evaluation()
+
+
+@router.post("/intent-parser/evaluations/llm-batch/submit")
+async def submit_intent_eval_llm_batch(
+    payload: dict[str, Any] | None = None,
+    _admin: User = Depends(require_admin),
+):
+    """提交固定数据集到阿里云百炼 DashScope Batch API。"""
+    try:
+        return await submit_llm_batch_evaluation((payload or {}).get("model"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/intent-parser/evaluations/llm-batch/refresh")
+async def refresh_intent_eval_llm_batch(
+    _admin: User = Depends(require_admin),
+):
+    """刷新最近一次 LLM Batch 任务；完成后下载输出并生成评分报告。"""
+    try:
+        return await refresh_latest_llm_batch()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/intent-parser/evaluations/llm-batch/cancel")
+async def cancel_intent_eval_llm_batch(
+    _admin: User = Depends(require_admin),
+):
+    """取消最近一次仍在运行中的 LLM Batch 评测任务。"""
+    try:
+        return await cancel_latest_llm_batch()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

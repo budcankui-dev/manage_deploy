@@ -43,6 +43,8 @@ def benchmark_mode() -> int:
             "matrix_size": matrix_size,
             "batch_count": result["batch_count"],
             "seed": seed,
+            "backend": result.get("backend"),
+            "gpu_device": result.get("gpu_device"),
             "warmup_batches": warmup,
             "aggregation": result.get("aggregation"),
             "sample_count": result.get("sample_count"),
@@ -87,6 +89,8 @@ def _run_observation_window(job: dict) -> dict:
             "batch_count": _as_int(job.get("batch_count"), 50),
             "seed": seed,
             "result_preview": metrics["checksum"],
+            "backend": metrics.get("backend"),
+            "gpu_device": os.environ.get("GPU_DEVICE"),
             "aggregation": "single_run",
             "sample_count": 1,
         }
@@ -97,6 +101,7 @@ def _run_observation_window(job: dict) -> dict:
     window_start = time.perf_counter()
     samples: list[dict] = []
     sample_index = 0
+    backend_label = None
     while len(samples) < max_samples:
         now = time.perf_counter()
         if samples and len(samples) >= min_samples and now - window_start >= observation_duration_sec:
@@ -105,6 +110,7 @@ def _run_observation_window(job: dict) -> dict:
         sample_t0 = time.perf_counter()
         metrics = run_matmul(matrix_size, sample_batch_count, seed + sample_index)
         sample_t1 = time.perf_counter()
+        backend_label = metrics.get("backend") or backend_label
         sample_index += 1
         samples.append(
             {
@@ -130,6 +136,8 @@ def _run_observation_window(job: dict) -> dict:
         "matrix_size": matrix_size,
         "batch_count": sample_batch_count * len(samples),
         "seed": seed,
+        "backend": backend_label,
+        "gpu_device": os.environ.get("GPU_DEVICE"),
         "aggregation": "median_after_warmup",
         "mean_effective_gflops": mean_gflops,
         "min_effective_gflops": min(values) if values else 0.0,
@@ -176,6 +184,8 @@ def main() -> int:
         "matrix_size": metrics["matrix_size"],
         "batch_count": metrics["batch_count"],
         "seed": metrics["seed"],
+        "backend": metrics.get("backend"),
+        "gpu_device": metrics.get("gpu_device"),
     }
     for key in (
         "result_preview",

@@ -47,37 +47,109 @@
     <section class="card">
       <div class="card-header">
         <h2>工单列表</h2>
+        <div class="batch-actions">
+          <span>已选 {{ selectedOrderIds.length }} 个</span>
+          <el-button
+            size="small"
+            type="warning"
+            plain
+            :disabled="!selectedOrderIds.length"
+            :loading="batchCleanupLoading"
+            @click="cleanupSelectedOrderInstances"
+          >
+            清理实例保留工单
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="!selectedOrderIds.length"
+            :loading="batchDeleteLoading"
+            @click="deleteSelectedOrders"
+          >
+            删除选中工单
+          </el-button>
+          <el-button
+            size="small"
+            type="warning"
+            :disabled="!hasBenchmarkRunScope"
+            :loading="runCleanupLoading"
+            @click="cleanupCurrentBenchmarkRun"
+          >
+            清理本轮实例
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            :disabled="!hasBenchmarkRunScope"
+            :loading="runDeleteLoading"
+            @click="deleteCurrentBenchmarkRun"
+          >
+            删除本轮工单
+          </el-button>
+        </div>
         <div class="filters">
-          <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="loadList" />
-          <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="loadList">
+          <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="applyFilters" />
+          <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="applyFilters">
             <el-option v-for="t in taskTypeOptions" :key="t" :label="t" :value="t" />
           </el-select>
-          <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="loadList">
+          <el-select v-model="filters.is_benchmark" placeholder="工单来源" clearable style="width: 130px" @change="applyFilters">
+            <el-option label="验收压测" :value="true" />
+            <el-option label="普通工单" :value="false" />
+          </el-select>
+          <el-input
+            v-model="filters.benchmark_run_id"
+            placeholder="验收轮次ID"
+            clearable
+            style="width: 230px"
+            @keyup.enter="applyFilters"
+            @clear="applyFilters"
+          />
+          <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="applyFilters">
             <el-option v-for="(label, key) in ROUTING_POLICY_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="loadList">
+          <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="applyFilters">
             <el-option v-for="(label, key) in ORDER_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="loadList">
+          <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="applyFilters">
             <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.business_success" placeholder="性能达标" clearable style="width: 120px" @change="loadList">
+          <el-select v-model="filters.business_success" placeholder="性能达标" clearable style="width: 120px" @change="applyFilters">
             <el-option label="达标" :value="true" />
             <el-option label="未达标" :value="false" />
           </el-select>
-          <el-checkbox v-model="filters.include_cancelled" @change="loadList">显示已取消</el-checkbox>
+          <el-checkbox v-model="filters.include_cancelled" @change="applyFilters">显示已取消</el-checkbox>
+          <el-button size="small" @click="applyFilters">应用筛选</el-button>
         </div>
+        <p class="batch-hint">
+          清理实例会释放远端容器和实例记录，但保留工单、路由结果、业务指标和结果文件；删除工单用于清掉废弃压测轮次。
+        </p>
       </div>
 
-      <el-table :data="items" size="small" v-loading="listLoading">
+      <el-table
+        :data="items"
+        size="small"
+        v-loading="listLoading"
+        @selection-change="handleOrderSelectionChange"
+      >
+        <el-table-column type="selection" width="44" />
         <el-table-column label="工单ID" width="120">
-          <template #default="{ row }"><code style="font-size:11px">{{ row.id?.slice(0,8) }}</code></template>
+          <template #default="{ row }"><code style="font-size:11px">{{ row.order_id?.slice(0,8) }}</code></template>
         </el-table-column>
         <el-table-column label="任务类型" min-width="160">
-          <template #default="{ row }">{{ taskTypeLabel(row.task_type) || '-' }}</template>
+          <template #default="{ row }">
+            {{ taskTypeLabel(row.task_type) || '-' }}
+            <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain" style="margin-left:6px">压测</el-tag>
+          </template>
         </el-table-column>
         <el-table-column label="路由策略" min-width="130">
           <template #default="{ row }">{{ routingPolicyLabel(row.routing_policy) }}</template>
+        </el-table-column>
+        <el-table-column label="验收轮次" min-width="190">
+          <template #default="{ row }">
+            <code v-if="row.benchmark_run_id" style="font-size:11px">{{ row.benchmark_run_id }}</code>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
         <el-table-column label="工单状态" width="110">
           <template #default="{ row }">
@@ -104,7 +176,7 @@
         <el-table-column label="性能达标" width="90">
           <template #default="{ row }">
             <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-            <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+            <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -242,10 +314,18 @@
               <el-table-column prop="role" label="角色" width="120" />
               <el-table-column label="部署节点" min-width="220">
                 <template #default="{ row }">
-                  <span v-if="row.node_id === '未部署'" style="color: #909399">未部署容器</span>
-                  <span v-else>{{ row.node_id }}</span>
+                  <span v-if="row.worker_host === '未部署'" style="color: #909399">未部署容器</span>
+                  <span v-else>{{ row.worker_host }}</span>
                 </template>
               </el-table-column>
+              <el-table-column label="GPU" width="120">
+                <template #default="{ row }">
+                  <span :class="{ 'warning-text': row.requires_gpu && !hasGpuValue(row.gpu_device) }">
+                    {{ row.gpu_display }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="node_id" label="路由角色" width="110" />
             </el-table>
           </template>
           <el-empty v-else description="无路由结果" />
@@ -430,17 +510,24 @@ const summary = ref([])
 const summaryLoading = ref(false)
 const listLoading = ref(false)
 const detailLoading = ref(false)
+const batchCleanupLoading = ref(false)
+const batchDeleteLoading = ref(false)
+const runCleanupLoading = ref(false)
+const runDeleteLoading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const nodes = ref([])
+const selectedOrderIds = ref([])
 
 const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
 
 const filters = reactive({
   q: '',
   task_type: '',
+  is_benchmark: '',
+  benchmark_run_id: '',
   routing_policy: '',
   order_status: '',
   deployment_status: '',
@@ -463,6 +550,9 @@ const taskTypeOptions = computed(() => {
 const totalEvaluated = computed(() => summary.value.reduce((s, r) => s + (r.evaluated_count || 0), 0))
 const totalSuccessCount = computed(() => summary.value.reduce((s, r) => s + (r.success_count || 0), 0))
 const totalSuccessRate = computed(() => totalEvaluated.value > 0 ? (totalSuccessCount.value / totalEvaluated.value) * 100 : 0)
+const hasBenchmarkRunScope = computed(() =>
+  filters.is_benchmark === true && Boolean(String(filters.benchmark_run_id || '').trim())
+)
 const successRateByType = computed(() => {
   const map = {}
   summary.value.forEach(row => {
@@ -489,19 +579,52 @@ const manualPlacements = ref({
 const placementRows = computed(() => {
   const placements = orderDetail.value?.routing_result?.placements
   if (!placements) return []
+  const rowFor = (role, placement) => {
+    const roleName = { source: '数据源', worker: '计算', compute: '计算', sink: '汇总' }[role] || role
+    const requiresGpu = ['worker', 'compute'].includes(role)
+    if (!placement) {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: '未部署',
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    if (typeof placement === 'string') {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: placement,
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
+    return {
+      role: roleName,
+      node_id: placement.node_id || role,
+      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      gpu_device: gpu,
+      gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
+      requires_gpu: requiresGpu,
+    }
+  }
   if (Array.isArray(placements)) {
     const map = {}
-    placements.forEach(p => { map[p.node_id] = p.worker_host })
+    placements.forEach(p => { map[p.node_id] = p })
     return [
-      { role: '数据源', node_id: map.source || '未部署' },
-      { role: '计算', node_id: map.compute || map.worker || '未部署' },
-      { role: '汇总', node_id: map.sink || '未部署' },
+      rowFor('source', map.source),
+      rowFor('compute', map.compute || map.worker),
+      rowFor('sink', map.sink),
     ]
   }
   return [
-    { role: '数据源', node_id: placements.source || '未部署' },
-    { role: '计算', node_id: placements.compute || placements.worker || '未部署' },
-    { role: '汇总', node_id: placements.sink || '未部署' },
+    rowFor('source', placements.source),
+    rowFor('compute', placements.compute || placements.worker),
+    rowFor('sink', placements.sink),
   ]
 })
 
@@ -575,6 +698,7 @@ const resultVerdictSubtitle = computed(() => {
 })
 
 onMounted(async () => {
+  applyRouteFilters()
   await refreshAll()
   const orderId = route.query.orderId
   if (typeof orderId === 'string' && orderId) {
@@ -592,6 +716,15 @@ watch(
     }
   }
 )
+
+function applyRouteFilters() {
+  const query = route.query
+  if (typeof query.task_type === 'string') filters.task_type = query.task_type
+  if (typeof query.benchmark_run_id === 'string') filters.benchmark_run_id = query.benchmark_run_id
+  if (typeof query.is_benchmark === 'string') {
+    filters.is_benchmark = query.is_benchmark === 'true'
+  }
+}
 
 
 function percent(value) {
@@ -629,6 +762,10 @@ function pretty(value) {
   return JSON.stringify(value, null, 2)
 }
 
+function hasGpuValue(value) {
+  return value !== null && value !== undefined && String(value) !== ''
+}
+
 function orderStatusTag(status) {
   return { pending: 'info', materialized: 'success', failed: 'danger', cancelled: 'warning' }[status] || 'info'
 }
@@ -647,17 +784,48 @@ function deploymentStatusTag(status) {
 }
 
 function canStart(status) {
-  return ['pending', 'stopped', 'failed'].includes(status)
+  return ['pending', 'scheduled', 'stopped', 'failed'].includes(status)
+}
+
+function handleOrderSelectionChange(rows) {
+  selectedOrderIds.value = rows.map(row => row.order_id).filter(Boolean)
 }
 
 async function refreshAll() {
   await Promise.all([loadSummary(), loadList(), loadNodes()])
 }
 
+function buildFilterParams({ includePaging = false } = {}) {
+  const params = {
+    include_cancelled: filters.include_cancelled,
+  }
+  if (includePaging) {
+    params.page = page.value
+    params.page_size = pageSize.value
+  }
+  if (filters.q && includePaging) params.q = filters.q
+  if (filters.task_type) params.task_type = filters.task_type
+  if (filters.is_benchmark !== '' && filters.is_benchmark != null) params.is_benchmark = filters.is_benchmark
+  if (filters.benchmark_run_id) params.benchmark_run_id = String(filters.benchmark_run_id).trim()
+  if (filters.routing_policy && includePaging) params.routing_policy = filters.routing_policy
+  if (filters.order_status && includePaging) params.order_status = filters.order_status
+  if (filters.deployment_status && includePaging) params.deployment_status = filters.deployment_status
+  if (filters.business_success !== '' && filters.business_success != null && includePaging) {
+    params.business_success = filters.business_success
+  }
+  return params
+}
+
+async function applyFilters() {
+  page.value = 1
+  selectedOrderIds.value = []
+  await Promise.all([loadSummary(), loadList()])
+}
+
 async function loadSummary() {
   summaryLoading.value = true
   try {
-    const { data } = await businessApi.summary()
+    const { data } = await businessApi.summary(buildFilterParams())
     summary.value = data
   } finally {
     summaryLoading.value = false
@@ -672,22 +840,10 @@ async function loadNodes() {
 async function loadList() {
   listLoading.value = true
   try {
-    const params = {
-      page: page.value,
-      page_size: pageSize.value,
-      include_cancelled: filters.include_cancelled,
-    }
-    if (filters.q) params.q = filters.q
-    if (filters.task_type) params.task_type = filters.task_type
-    if (filters.routing_policy) params.routing_policy = filters.routing_policy
-    if (filters.order_status) params.order_status = filters.order_status
-    if (filters.deployment_status) params.deployment_status = filters.deployment_status
-    if (filters.business_success !== '' && filters.business_success != null) {
-      params.business_success = filters.business_success
-    }
-    const { data } = await businessApi.list(params)
+    const { data } = await businessApi.list(buildFilterParams({ includePaging: true }))
     items.value = data.items
     total.value = data.total
+    selectedOrderIds.value = []
   } finally {
     listLoading.value = false
   }
@@ -703,12 +859,16 @@ async function openDetail(orderId, tab = 'business') {
   try {
     const { data } = await ordersApi.get(orderId)
     orderDetail.value = data
+    const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
     if (data.instance?.id) {
       const [instResp, objectsResp] = await Promise.all([
         instancesApi.get(data.instance.id),
-        businessApi.results(data.instance.id).catch(() => ({ data: [] })),
+        evidenceInstanceId ? businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })) : { data: [] },
       ])
       instanceDetail.value = instResp.data
+      resultObjects.value = objectsResp.data
+    } else if (evidenceInstanceId) {
+      const objectsResp = await businessApi.results(evidenceInstanceId).catch(() => ({ data: [] }))
       resultObjects.value = objectsResp.data
     }
   } finally {
@@ -751,6 +911,108 @@ async function deleteOrder(row) {
   ElMessage.success('工单已删除')
   drawerOpen.value = false
   await refreshAll()
+}
+
+async function cleanupSelectedOrderInstances() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将清理 ${selectedOrderIds.value.length} 个已选工单的容器实例，工单、路由和评估结果会保留，继续吗？`,
+      '清理实例保留证据',
+      { type: 'warning', confirmButtonText: '清理实例', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  batchCleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
+    ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
+    selectedOrderIds.value = []
+    await refreshAll()
+  } finally {
+    batchCleanupLoading.value = false
+  }
+}
+
+async function deleteSelectedOrders() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${selectedOrderIds.value.length} 个工单及其关联实例，删除后不可恢复，继续吗？`,
+      '确认批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  batchDeleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
+    selectedOrderIds.value = []
+    drawerOpen.value = false
+    await refreshAll()
+  } finally {
+    batchDeleteLoading.value = false
+  }
+}
+
+function buildBenchmarkRunScopePayload() {
+  return {
+    benchmark_run_id: String(filters.benchmark_run_id || '').trim(),
+    task_type: filters.task_type || undefined,
+    is_benchmark: true,
+  }
+}
+
+async function cleanupCurrentBenchmarkRun() {
+  if (!hasBenchmarkRunScope.value) return
+  const payload = buildBenchmarkRunScopePayload()
+  const typeText = filters.task_type ? `，任务类型 ${taskTypeLabel(filters.task_type)}` : ''
+  try {
+    await ElMessageBox.confirm(
+      `将清理验收轮次 ${payload.benchmark_run_id}${typeText} 的全部容器实例，但保留工单、路由和评估证据，继续吗？`,
+      '清理本轮实例',
+      { type: 'warning', confirmButtonText: '清理实例', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  runCleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.cleanupInstances(payload)
+    ElMessage.success(`本轮已清理 ${data.succeeded?.length || 0} 个工单实例，证据已保留`)
+    selectedOrderIds.value = []
+    await refreshAll()
+  } finally {
+    runCleanupLoading.value = false
+  }
+}
+
+async function deleteCurrentBenchmarkRun() {
+  if (!hasBenchmarkRunScope.value) return
+  const payload = buildBenchmarkRunScopePayload()
+  const typeText = filters.task_type ? `，任务类型 ${taskTypeLabel(filters.task_type)}` : ''
+  try {
+    await ElMessageBox.confirm(
+      `将删除验收轮次 ${payload.benchmark_run_id}${typeText} 的全部工单及关联实例。删除后该轮不会再计入验收统计，继续吗？`,
+      '删除本轮工单',
+      { type: 'error', confirmButtonText: '删除本轮', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  runDeleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(payload)
+    ElMessage.success(`本轮已删除 ${data.succeeded?.length || 0} 个工单`)
+    selectedOrderIds.value = []
+    drawerOpen.value = false
+    await refreshAll()
+  } finally {
+    runDeleteLoading.value = false
+  }
 }
 
 function openManualRouting(row) {
@@ -914,6 +1176,22 @@ async function submitSample() {
   align-items: center;
 }
 
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.batch-hint {
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .pagination-wrap {
   display: flex;
   justify-content: flex-end;
@@ -1035,6 +1313,11 @@ async function submitSample() {
 .consistency-detail {
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.warning-text {
+  color: #e6a23c;
+  font-weight: 700;
 }
 
 .text-success {

@@ -84,6 +84,8 @@ def main() -> int:
         "matrix_size",
         "batch_count",
         "seed",
+        "backend",
+        "gpu_device",
         "result_preview",
         "aggregation",
         "mean_effective_gflops",

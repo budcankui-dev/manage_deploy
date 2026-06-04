@@ -17,6 +17,8 @@ class BusinessTaskListFilters:
     page: int = 1
     page_size: int = 20
     task_type: str | None = None
+    is_benchmark: bool | None = None
+    benchmark_run_id: str | None = None
     routing_policy: str | None = None
     order_status: OrderStatus | None = None
     deployment_status: TaskStatus | None = None
@@ -67,6 +69,10 @@ def _matches_filters(
         return False
     if filters.task_type and business_task.get("task_type") != filters.task_type:
         return False
+    if filters.is_benchmark is not None and bool(order.is_benchmark) != filters.is_benchmark:
+        return False
+    if filters.benchmark_run_id and _extract_benchmark_run_id(order) != filters.benchmark_run_id:
+        return False
     routing_policy = _routing_policy_from_order(order)
     if filters.routing_policy and routing_policy != filters.routing_policy:
         return False
@@ -102,6 +108,8 @@ def _build_list_item(
         external_task_id=order.external_task_id or business_task.get("external_task_id"),
         name=order.name,
         task_type=business_task.get("task_type"),
+        is_benchmark=bool(order.is_benchmark),
+        benchmark_run_id=_extract_benchmark_run_id(order),
         modality=business_task.get("modality"),
         routing_policy=_routing_policy_from_order(order),
         order_status=order.status,
@@ -300,7 +308,6 @@ async def get_order_detail_context(
             .options(selectinload(TaskInstance.nodes))
         )
         instance = inst_row.scalar_one_or_none()
-        if instance:
-            eval_map = await _latest_evaluations(db, [instance.id])
-            evaluation = eval_map.get(instance.id)
+        eval_map = await _latest_evaluations(db, [order.materialized_instance_id])
+        evaluation = eval_map.get(order.materialized_instance_id)
     return order, instance, evaluation

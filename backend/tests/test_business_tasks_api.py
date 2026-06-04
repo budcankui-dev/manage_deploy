@@ -4,7 +4,7 @@ from sqlalchemy import select
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
 from enums import OrderStatus, RoutingStatus, UserRole
-from models import BusinessObjectiveEvaluation, TaskOrder, User
+from models import BusinessObjectiveEvaluation, TaskInstance, TaskInstanceNode, TaskOrder, User
 
 
 async def _create_user(db_session, username: str, role: UserRole = UserRole.USER) -> User:
@@ -617,6 +617,31 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
     assert video_order.routing_status == "pending"
     assert video_order.materialized_instance_id is None
 
+    detail_response = await client.get(f"/api/orders/{matmul_order_id}", headers=headers)
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    placements = {item["role"]: item for item in detail["node_placements"]}
+    assert placements["compute"]["gpu_id"] == "0"
+    assert placements["compute"]["gpu_device"] == "0"
+    routing_placements = detail["routing_result"]["placements"]
+    compute_route = next(item for item in routing_placements if item["node_id"] == "compute")
+    assert compute_route["gpu_device"] == "0"
+
+    inst_nodes = (
+        await db_session.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == matmul_order.materialized_instance_id)
+        )
+    ).scalars().all()
+    by_role = {node.env.get("TASK_ROLE"): node for node in inst_nodes}
+    assert by_role["compute"].gpu_id == "0"
+    assert by_role["compute"].env["GPU_DEVICE"] == "0"
+
+    detail_response = await client.get(f"/api/orders/{matmul_order_id}", headers=headers)
+    assert detail_response.status_code == 200
+    placements = {item["role"]: item for item in detail_response.json()["node_placements"]}
+    assert placements["compute"]["gpu_id"] == "0"
+    assert placements["compute"]["gpu_device"] == "0"
+
 
 @pytest.mark.asyncio
 async def test_mock_auto_route_single_order_is_benchmark_only(client, db_session):
@@ -787,6 +812,157 @@ async def test_delete_order_purges_evaluation(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_order_instance_preserves_business_evidence(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(client, db_session, username="cleanup-admin", role=UserRole.ADMIN)
+
+    payload = {
+        "external_task_id": "intent-cleanup-evidence",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "清理实例保留证据测试",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": {
+                "source": node_ids[0],
+                "compute": node_ids[1],
+                "sink": node_ids[2],
+            },
+        },
+        "auto_start": False,
+    }
+    create_response = await client.post("/api/business-tasks", json=payload)
+    assert create_response.status_code == 200
+    body = create_response.json()
+    order_id = body["order_id"]
+    instance_id = body["instance_id"]
+
+    metric_response = await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
+    )
+    assert metric_response.status_code == 200
+
+    cleanup_response = await client.post(
+        "/api/orders/batch/cleanup-instances",
+        json={"order_ids": [order_id]},
+        headers=headers,
+    )
+    assert cleanup_response.status_code == 200
+    assert cleanup_response.json()["succeeded"] == [order_id]
+
+    instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance_id))
+    assert instance_row.scalar_one_or_none() is None
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    ).scalar_one()
+    assert order.status == OrderStatus.COMPLETED
+    assert order.materialized_instance_id == instance_id
+
+    evaluation_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
+    assert evaluation_response.status_code == 200
+    assert evaluation_response.json()["business_success"] is True
+
+    list_response = await client.get("/api/business-tasks", headers=headers)
+    assert list_response.status_code == 200
+    item = next(row for row in list_response.json()["items"] if row["order_id"] == order_id)
+    assert item["instance_exists"] is False
+    assert item["business_success"] is True
+
+    detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["instance"] is None
+    assert detail_response.json()["evaluation"]["business_success"] is True
+
+    delete_response = await client.delete(f"/api/orders/{order_id}")
+    assert delete_response.status_code == 200
+    eval_after_delete_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
+    assert eval_after_delete_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cleanup_order_instances_can_scope_by_benchmark_run_and_task_type(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="cleanup-run-admin",
+        role=UserRole.ADMIN,
+    )
+
+    def runtime_config(task_type: str):
+        return {
+            "benchmark": {"run_id": "cleanup-run-a"},
+            "business_task": {
+                "task_type": task_type,
+                "routing_result": {
+                    "strategy": "resource_guarantee",
+                    "placements": {"compute": {"worker_host": "worker-a", "gpu_device": "0"}},
+                },
+            },
+        }
+
+    matmul_instance = TaskInstance(template_id=template_id, name="matmul-instance")
+    video_instance = TaskInstance(template_id=template_id, name="video-instance")
+    db_session.add_all([matmul_instance, video_instance])
+    await db_session.flush()
+
+    matmul_order = TaskOrder(
+        template_id=template_id,
+        name="matmul cleanup target",
+        status=OrderStatus.MATERIALIZED,
+        runtime_config=runtime_config("high_throughput_matmul"),
+        materialized_instance_id=matmul_instance.id,
+        is_benchmark=True,
+    )
+    video_order = TaskOrder(
+        template_id=template_id,
+        name="video should stay",
+        status=OrderStatus.MATERIALIZED,
+        runtime_config=runtime_config("low_latency_video_pipeline"),
+        materialized_instance_id=video_instance.id,
+        is_benchmark=True,
+    )
+    db_session.add_all([matmul_order, video_order])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders/batch/cleanup-instances",
+        json={
+            "benchmark_run_id": "cleanup-run-a",
+            "task_type": "high_throughput_matmul",
+            "is_benchmark": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == [matmul_order.id]
+
+    matmul_remaining = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == matmul_instance.id))
+    ).scalar_one_or_none()
+    video_remaining = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == video_instance.id))
+    ).scalar_one_or_none()
+    assert matmul_remaining is None
+    assert video_remaining is not None
+
+    refreshed_matmul_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == matmul_order.id))
+    ).scalar_one()
+    assert refreshed_matmul_order.materialized_instance_id == matmul_instance.id
+    assert refreshed_matmul_order.status == OrderStatus.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_business_task_list_api(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
     headers, _admin = await _auth_headers(client, db_session, username="admin-list", role=UserRole.ADMIN)
@@ -828,12 +1004,14 @@ async def test_business_task_list_api(client, db_session):
     assert item["task_type"] == "low_latency_video_pipeline"
     assert item["routing_policy"] == "completion_time_first"
     assert item["instance_id"] == instance_id
+    assert item["is_benchmark"] is False
     # Business tasks are always SCHEDULED mode (status = "scheduled")
     assert item["deployment_status"] == "scheduled"
     assert item["scheduled_start_time"] is not None
     assert item["scheduled_end_time"] is not None
     assert item["keep_after_stop"] is False
     assert item["business_success"] is None
+    assert item["is_benchmark"] is False
 
     filtered = await client.get(
         "/api/business-tasks",
@@ -842,6 +1020,30 @@ async def test_business_task_list_api(client, db_session):
     )
     assert filtered.status_code == 200
     assert any(row["order_id"] == order_id for row in filtered.json()["items"])
+
+    normal_only = await client.get(
+        "/api/business-tasks",
+        params={"is_benchmark": False},
+        headers=headers,
+    )
+    assert normal_only.status_code == 200
+    assert any(row["order_id"] == order_id for row in normal_only.json()["items"])
+
+    benchmark_only = await client.get(
+        "/api/business-tasks",
+        params={"is_benchmark": True},
+        headers=headers,
+    )
+    assert benchmark_only.status_code == 200
+    assert all(row["is_benchmark"] is True for row in benchmark_only.json()["items"])
+
+    benchmark_filtered = await client.get(
+        "/api/business-tasks",
+        params={"is_benchmark": True},
+        headers=headers,
+    )
+    assert benchmark_filtered.status_code == 200
+    assert all(row["is_benchmark"] is True for row in benchmark_filtered.json()["items"])
 
     await client.post(
         f"/api/instances/{instance_id}/metrics",
@@ -857,6 +1059,8 @@ async def test_business_task_list_api(client, db_session):
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
+    assert detail["routing_result"]["strategy"] == "completion_time_first"
+    assert detail["routing_result"]["placements"]["compute"] == node_ids[1]
     assert detail["instance"]["id"] == instance_id
     assert detail["evaluation"]["business_success"] is True
     placements = {item["role"]: item for item in detail["node_placements"]}

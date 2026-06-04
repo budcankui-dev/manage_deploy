@@ -11,6 +11,7 @@
    - 参数面板实时更新
    - 确认按钮出现时机正确
    - 工单列表/详情数据完整
+   - 用户要求可视化时，必须使用有头浏览器或 Codex Browser，让用户能看到页面过程和结果截图
 
 2. **API 数据验证**：httpx/curl 验证后端返回
    - 工单字段完整（source_name, destination_name, routing_status, routing_input_dag）
@@ -44,6 +45,9 @@ PYTHONPATH=backend backend/venv/bin/python scripts/evaluate_intent_parser.py
 # 前端 E2E（如有 Playwright）
 cd frontend && npm run test:e2e
 
+# 前端 E2E（用户需要看到浏览器过程）
+cd frontend && npm run test:e2e:headed
+
 # 容器状态
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
@@ -54,9 +58,11 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 - 判断是环境问题、数据问题还是代码问题
 - 代码问题交给 Coder，环境问题交给 Deployer
 - 不自行修复代码
+- 如果用户要求“看到效果”，测试报告必须包含浏览器访问地址、操作步骤、关键截图或页面状态描述
 
 ## 禁止
 
 - 不修改业务代码（只能改测试脚本）
 - 不跳过验证步骤
 - 不用"接口返回 200"替代业务数据验证
+- 不用纯命令行 E2E 替代用户要求的有头浏览器可视化验证

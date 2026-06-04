@@ -15,8 +15,16 @@ function withTimeout(ms) {
   return { timeout: ms }
 }
 
+function safeLocalStorage() {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('access_token')
+  const token = safeLocalStorage()?.getItem('access_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -27,7 +35,7 @@ api.interceptors.response.use(
   response => response,
   error => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('access_token')
+      safeLocalStorage()?.removeItem('access_token')
       const currentPath = window.location.pathname
       if (currentPath !== '/login' && currentPath !== '/register') {
         window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`
@@ -84,7 +92,10 @@ export const ordersApi = {
   get: (id) => api.get(`/orders/${id}`),
   create: (data) => api.post('/orders', data),
   delete: (id) => api.delete(`/orders/${id}`),
-  batchDelete: (ids) => api.post('/orders/batch/delete', { instance_ids: ids }),
+  batchDelete: (payload) => api.post(
+    '/orders/batch/delete',
+    Array.isArray(payload) ? { order_ids: payload } : payload
+  ),
   materialize: (id) => api.post(`/orders/${id}/materialize`),
   materializePending: () => api.post('/orders/materialize/pending'),
   submitRoutingResult: (id, data) => api.post(`/orders/${id}/routing-result`, data),
@@ -92,6 +103,11 @@ export const ordersApi = {
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
   batchAutoRoute: (data = {}) => api.post('/orders/batch-auto-route', data),
   startAllRouted: (data = {}) => api.post('/orders/start-all-routed', data),
+  cleanupInstances: (payload) => api.post(
+    '/orders/batch/cleanup-instances',
+    Array.isArray(payload) ? { order_ids: payload } : payload,
+    withTimeout(LONG_RUNNING_TIMEOUT)
+  ),
 }
 
 export const businessApi = {
@@ -149,6 +165,13 @@ export const adminApi = {
   listRoutingRequests: (params = {}) => api.get('/admin/routing-requests', { params }),
   listOrders: (params = {}) => api.get('/admin/orders', { params }),
   parseOne: (data) => api.post('/admin/intent-parser/parse-one', data),
+  intentEvalLatest: () => api.get('/admin/intent-parser/evaluations/latest'),
+  intentEvalReport: (type) => api.get(`/admin/intent-parser/evaluations/reports/${type}`),
+  downloadIntentEvalFile: (type) => api.get(`/admin/intent-parser/evaluations/files/${type}`, { responseType: 'blob', timeout: 180000 }),
+  runIntentEvalRule: () => api.post('/admin/intent-parser/evaluations/rule/run', null, { timeout: 180000 }),
+  submitIntentEvalBatch: (data = {}) => api.post('/admin/intent-parser/evaluations/llm-batch/submit', data, { timeout: 180000 }),
+  refreshIntentEvalBatch: () => api.post('/admin/intent-parser/evaluations/llm-batch/refresh', null, { timeout: 180000 }),
+  cancelIntentEvalBatch: () => api.post('/admin/intent-parser/evaluations/llm-batch/cancel', null, { timeout: 180000 }),
 }
 
 export default api
