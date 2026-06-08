@@ -120,6 +120,11 @@
               {{ taskTypeLabel(row.task_type) || row.task_type || '-' }}
             </template>
           </el-table-column>
+          <el-table-column label="所属模态" min-width="140">
+            <template #default="{ row }">
+              {{ modalityLabel(row.modality) }}
+            </template>
+          </el-table-column>
           <el-table-column label="路由策略" min-width="120">
             <template #default="{ row }">
               {{ routingPolicyLabel(row.routing_policy) || row.routing_policy || '-' }}
@@ -301,6 +306,7 @@
               </el-descriptions-item>
               <el-descriptions-item label="任务名称">{{ selectedOrderDetail.name || '-' }}</el-descriptions-item>
               <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail.business_task?.task_type) || selectedOrderDetail.business_task?.task_type || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="所属模态">{{ modalityLabel(selectedOrderDetail.business_task?.modality) }}</el-descriptions-item>
               <el-descriptions-item label="路由策略">{{ routingPolicyLabel(selectedOrderDetail.business_task?.runtime_plan?.routing_strategy) || '-' }}</el-descriptions-item>
               <el-descriptions-item label="源节点">{{ selectedOrderDetail.source_name || '-' }}</el-descriptions-item>
               <el-descriptions-item label="目的节点">{{ selectedOrderDetail.destination_name || '-' }}</el-descriptions-item>
@@ -318,6 +324,11 @@
 
           <!-- Tab 2: 路由结果 -->
           <el-tab-pane label="路由结果" name="routing">
+            <el-collapse v-if="selectedOrderDetail.routing_input_dag" class="raw-collapse" style="margin-bottom:12px">
+              <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input-dag">
+                <pre class="json-block">{{ pretty(selectedOrderDetail.routing_input_dag) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
             <div v-if="orderPlacementRows.length">
               <el-table :data="orderPlacementRows" size="small" border>
                 <el-table-column label="逻辑节点" prop="node_id" width="100" />

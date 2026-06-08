@@ -265,7 +265,7 @@
             <el-descriptions :column="1" border class="detail-desc">
               <el-descriptions-item label="外部任务ID">{{ orderDetail.external_task_id || '-' }}</el-descriptions-item>
               <el-descriptions-item label="任务类型">{{ taskTypeLabel(orderDetail.business_task.task_type) }}</el-descriptions-item>
-              <el-descriptions-item label="模态">{{ orderDetail.business_task.modality || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="模态">{{ modalityLabel(orderDetail.business_task.modality) }}</el-descriptions-item>
               <el-descriptions-item label="描述">{{ orderDetail.description || orderDetail.business_task.description || '-' }}</el-descriptions-item>
             </el-descriptions>
 
@@ -308,6 +308,11 @@
         </el-tab-pane>
 
         <el-tab-pane label="路由" name="routing">
+          <el-collapse v-if="orderDetail?.routing_input_dag" class="raw-collapse">
+            <el-collapse-item title="提交给外部路由系统的 DAG JSON" name="routing_input_dag">
+              <pre class="json-block">{{ pretty(orderDetail.routing_input_dag) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
           <template v-if="orderDetail?.routing_result">
             <el-descriptions :column="1" border class="detail-desc">
               <el-descriptions-item label="路由策略">
@@ -333,7 +338,7 @@
               <el-table-column prop="node_id" label="路由角色" width="110" />
             </el-table>
           </template>
-          <el-empty v-else description="无路由结果" />
+          <el-empty v-else-if="!orderDetail?.routing_input_dag" description="无路由结果" />
         </el-tab-pane>
 
         <el-tab-pane label="部署" name="deployment">

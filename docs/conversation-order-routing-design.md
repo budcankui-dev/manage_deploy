@@ -248,7 +248,8 @@ API 预留模式：
     {
       "from": "video",
       "to": "infer",
-      "data_mb": 20
+      "data_mb": 20,
+      "bandwidth_mbps": 20
     }
   ]
 }
@@ -268,6 +269,7 @@ API 预留模式：
 - `nodes[].exec.est_runtime_ms`：估计运行时间，可由业务模板默认值、用户输入或规则估算得到。
 - `edges[].from/to`：引用 `nodes[].node_id`，表达业务数据流向。
 - `edges[].data_mb`：边上的估计数据量，可由用户上传文件大小、业务画像或默认规则估算。
+- `edges[].bandwidth_mbps`：边上的估计带宽需求，可由业务画像、抽帧策略、文件大小或历史基准估算。该字段用于外部路由系统判断链路是否满足业务数据流转要求。
 
 该 payload 是给外部路由系统计算路径和节点选择的输入，不直接等同于 Task Manager 的 `TaskTemplate` 或 `TaskInstance`。外部路由系统回写 placements 后，平台再把逻辑节点映射到实际部署节点，并物化为可启动的 DAG 实例。
 

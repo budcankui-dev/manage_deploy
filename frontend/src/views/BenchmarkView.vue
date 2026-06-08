@@ -317,7 +317,7 @@
           <el-descriptions-item label="任务状态">{{ selectedOrderDetail.status }}</el-descriptions-item>
           <el-descriptions-item label="部署状态">{{ selectedOrderDetail.deployment_status || selectedOrderDetail.instance?.status || '—' }}</el-descriptions-item>
           <el-descriptions-item label="业务类型">{{ taskTypeLabel(selectedOrderDetail.task_type) }}</el-descriptions-item>
-          <el-descriptions-item label="路由策略">{{ selectedOrderDetail.routing_policy || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="路由策略">{{ routingPolicyLabel(selectedOrderDetail.routing_policy) }}</el-descriptions-item>
         </el-descriptions>
 
         <section class="detail-section">
@@ -393,6 +393,10 @@
             <pre>{{ prettyJson(selectedOrderDetail.business_task) }}</pre>
           </div>
           <div>
+            <h3>提交给路由系统的 DAG JSON</h3>
+            <pre>{{ prettyJson(selectedOrderDetail.routing_input_dag) }}</pre>
+          </div>
+          <div>
             <h3>路由结果 JSON</h3>
             <pre>{{ prettyJson(selectedOrderDetail.routing_result) }}</pre>
           </div>
@@ -436,7 +440,7 @@ const taskConfigs = {
     label: '视频AI推理任务',
     unit: 'ms',
     requiresGpu: true,
-    objectiveText: '业务目标：工业检测抽帧推理的 frame_latency_p90_ms 不高于该节点同 profile 历史基线的 1.2 倍。',
+    objectiveText: '业务目标：工业检测抽帧推理的 frame_latency_p90_ms 不高于该节点同 profile 历史基线的 1.5 倍。',
   },
 }
 const taskType = ref('high_throughput_matmul')

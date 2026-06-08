@@ -55,7 +55,7 @@
               <el-descriptions :column="1" border class="detail-desc">
                 <el-descriptions-item label="任务类型">{{ taskTypeLabel(detail.business_task.task_type) }}</el-descriptions-item>
                 <el-descriptions-item label="路由">{{ detail.source_name || '-' }} → {{ detail.destination_name || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="模态">{{ detail.business_task.modality || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="模态">{{ modalityLabel(detail.business_task.modality) }}</el-descriptions-item>
               </el-descriptions>
 
               <h3 class="section-title">数据画像</h3>
@@ -81,8 +81,13 @@
           <el-tab-pane label="路由" name="routing">
             <template v-if="detail?.routing_result">
               <el-descriptions :column="1" border class="detail-desc">
-                <el-descriptions-item label="路由策略">{{ detail.routing_result.strategy || detail.routing_result.selected_strategy || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="路由策略">{{ routingPolicyLabel(detail.routing_result.strategy || detail.routing_result.selected_strategy) }}</el-descriptions-item>
               </el-descriptions>
+              <el-collapse v-if="detail.routing_input_dag" class="raw-collapse" style="margin:12px 0">
+                <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input-dag">
+                  <pre class="json-block">{{ prettyJson(detail.routing_input_dag) }}</pre>
+                </el-collapse-item>
+              </el-collapse>
               <h3 class="section-title">节点放置</h3>
               <el-table :data="placementRows" size="small">
                 <el-table-column prop="role" label="角色" width="120" />
@@ -182,8 +187,10 @@ import {
   describeObjectiveMeaning,
   describeRuntimePlan,
   formatObjectiveSentence,
+  modalityLabel,
   taskTypeLabel,
 } from '@/constants/businessTaskDisplay'
+import { routingPolicyLabel } from '@/constants/routingPolicy'
 
 const orders = ref([])
 const selectedOrder = ref(null)
@@ -256,6 +263,11 @@ const portAccessRows = computed(() => {
   }
   return rows
 })
+
+function prettyJson(value) {
+  if (!value) return '暂无数据'
+  return JSON.stringify(value, null, 2)
+}
 
 const matmulInputRows = computed(() => buildMatmulInputRows(detail.value?.business_task?.data_profile))
 const matmulOutputRows = computed(() =>

@@ -11,7 +11,8 @@
         {
             "to": "infer",
             "from": "video",
-            "data_mb": 20
+            "data_mb": 20,
+            "bandwidth_mbps": 20
         }
     ],
 

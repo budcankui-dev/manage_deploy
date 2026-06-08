@@ -47,6 +47,9 @@ def run_video_profile(job: dict) -> dict:
     measured_frames = max(1, int(job.get("measured_frames", 30)))
     work_units = max(1, int(job.get("work_units", 60000)))
     seed = int(job.get("seed", 42))
+    profile_id = job.get("profile_id", "video_industrial_inspection")
+    resolution = job.get("resolution", "720p")
+    fps = int(job.get("fps", 30))
 
     candidate_frames = list(range(0, max(frame_count, 1), frame_stride))
     while len(candidate_frames) < warmup_frames + measured_frames:
@@ -73,6 +76,9 @@ def run_video_profile(job: dict) -> dict:
         "frame_latency_max_ms": max(latencies) if latencies else 0.0,
         "observed_duration_sec": observed_duration_sec,
         "frame_count": frame_count,
+        "profile_id": profile_id,
+        "resolution": resolution,
+        "fps": fps,
         "frame_stride": frame_stride,
         "warmup_frames": warmup_frames,
         "measured_frames": len(samples),

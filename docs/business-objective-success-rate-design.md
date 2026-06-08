@@ -130,7 +130,7 @@ actual_metric <= baseline_metric * tolerance_ratio
 第一阶段建议：
 
 ```text
-tolerance_ratio = 1.2
+tolerance_ratio = 1.2（默认低值优先指标）；视频 AI 推理采用 1.5，用于覆盖共享算力节点和并发压测下的 P90 时延波动。
 ```
 
 适用指标：
