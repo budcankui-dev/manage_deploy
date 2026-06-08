@@ -357,6 +357,12 @@ class TaskOrderResponse(BaseModel):
     updated_at: Optional[datetime] = None
     task_type: Optional[str] = None
     routing_policy: Optional[str] = None
+    metric_key: Optional[str] = None
+    actual_value: Optional[float] = None
+    target_value: Optional[float] = None
+    unit: Optional[str] = None
+    business_success: Optional[bool] = None
+    failure_reason: Optional[str] = None
 
 
 class TaskMetricReport(BaseModel):

@@ -10,6 +10,7 @@ const api = axios.create({
 })
 
 const LONG_RUNNING_TIMEOUT = 180000
+const BENCHMARK_FLOW_TIMEOUT = 600000
 
 function withTimeout(ms) {
   return { timeout: ms }
@@ -103,6 +104,11 @@ export const ordersApi = {
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
   batchAutoRoute: (data = {}) => api.post('/orders/batch-auto-route', data),
   startAllRouted: (data = {}) => api.post('/orders/start-all-routed', data),
+  startControlledRouted: (data = {}) => api.post(
+    '/orders/start-controlled-routed',
+    data,
+    withTimeout(BENCHMARK_FLOW_TIMEOUT)
+  ),
   cleanupInstances: (payload) => api.post(
     '/orders/batch/cleanup-instances',
     Array.isArray(payload) ? { order_ids: payload } : payload,

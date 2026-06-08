@@ -44,7 +44,7 @@ BENCHMARK_PROFILES = {
             "MIN_SAMPLES": "5",
             "MAX_SAMPLES": "12",
         },
-        "profile_id": "cpu_standard",
+        "profile_id": "gpu_standard",
     },
     "low_latency_video_pipeline": {
         "metric_key": "frame_latency_p90_ms",

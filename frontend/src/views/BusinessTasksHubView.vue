@@ -13,37 +13,6 @@
       </div>
     </header>
 
-    <div class="success-rate-cards" v-if="totalEvaluated > 0">
-      <div v-for="item in successRateByType" :key="item.task_type" class="success-rate-card">
-        <div class="rate-number" :class="{ pass: item.rate >= 90, fail: item.rate < 90 }">
-          {{ item.rate.toFixed(1) }}%
-        </div>
-        <div class="rate-label">{{ taskTypeLabel(item.task_type) }}</div>
-        <div class="rate-detail">{{ item.success }}/{{ item.evaluated }} 达标</div>
-      </div>
-    </div>
-
-    <el-collapse v-model="summaryOpen">
-      <el-collapse-item title="按任务类型和路由策略统计" name="summary">
-        <el-table :data="summary" size="small" v-loading="summaryLoading">
-          <el-table-column prop="task_type" label="任务类型" min-width="180" />
-          <el-table-column label="路由策略" min-width="140">
-            <template #default="{ row }">{{ routingPolicyLabel(row.routing_strategy) }}</template>
-          </el-table-column>
-          <el-table-column prop="count" label="工单数" width="80" />
-          <el-table-column label="已评估" width="80">
-            <template #default="{ row }">{{ row.evaluated_count ?? 0 }}</template>
-          </el-table-column>
-          <el-table-column label="成功率" min-width="140">
-            <template #default="{ row }">
-              <span v-if="row.business_success_rate == null">-</span>
-              <span v-else>{{ successRateLabel(row) }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-collapse-item>
-    </el-collapse>
-
     <section class="card">
       <div class="card-header">
         <h2>工单列表</h2>
@@ -91,7 +60,7 @@
         <div class="filters">
           <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="applyFilters" />
           <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="applyFilters">
-            <el-option v-for="t in taskTypeOptions" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in taskTypeOptions" :key="t" :label="taskTypeLabel(t)" :value="t" />
           </el-select>
           <el-select v-model="filters.is_benchmark" placeholder="工单来源" clearable style="width: 130px" @change="applyFilters">
             <el-option label="验收压测" :value="true" />
@@ -500,6 +469,7 @@ import {
 } from '@/constants/routingPolicy'
 import {
   MATMUL_PIPELINE_STEPS,
+  TASK_TYPE_LABELS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
@@ -516,9 +486,6 @@ import {
 const route = useRoute()
 const router = useRouter()
 const demoRunning = ref(false)
-const summaryOpen = ref(['summary'])
-const summary = ref([])
-const summaryLoading = ref(false)
 const listLoading = ref(false)
 const detailLoading = ref(false)
 const batchCleanupLoading = ref(false)
@@ -552,28 +519,10 @@ const orderDetail = ref(null)
 const instanceDetail = ref(null)
 const resultObjects = ref([])
 
-const taskTypeOptions = computed(() => {
-  const fromSummary = summary.value.map((row) => row.task_type).filter(Boolean)
-  const fromList = items.value.map((row) => row.task_type).filter(Boolean)
-  return [...new Set([...fromSummary, ...fromList])]
-})
-
-const totalEvaluated = computed(() => summary.value.reduce((s, r) => s + (r.evaluated_count || 0), 0))
-const totalSuccessCount = computed(() => summary.value.reduce((s, r) => s + (r.success_count || 0), 0))
-const totalSuccessRate = computed(() => totalEvaluated.value > 0 ? (totalSuccessCount.value / totalEvaluated.value) * 100 : 0)
+const taskTypeOptions = computed(() => Object.keys(TASK_TYPE_LABELS))
 const hasBenchmarkRunScope = computed(() =>
   filters.is_benchmark === true && Boolean(String(filters.benchmark_run_id || '').trim())
 )
-const successRateByType = computed(() => {
-  const map = {}
-  summary.value.forEach(row => {
-    const t = row.task_type || 'unknown'
-    if (!map[t]) map[t] = { task_type: t, evaluated: 0, success: 0 }
-    map[t].evaluated += row.evaluated_count || 0
-    map[t].success += row.success_count || 0
-  })
-  return Object.values(map).filter(x => x.evaluated > 0).map(x => ({ ...x, rate: (x.success / x.evaluated) * 100 }))
-})
 
 const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
 
@@ -738,17 +687,6 @@ function applyRouteFilters() {
 }
 
 
-function percent(value) {
-  return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`
-}
-
-function successRateLabel(row) {
-  const rate = percent(row.business_success_rate)
-  const evaluated = row.evaluated_count ?? 0
-  const success = row.success_count ?? 0
-  return `${rate}（${success}/${evaluated}）`
-}
-
 function formatMetric(value) {
   return value == null ? '-' : Number(value)
 }
@@ -803,7 +741,7 @@ function handleOrderSelectionChange(rows) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadList(), loadNodes()])
+  await Promise.all([loadList(), loadNodes()])
 }
 
 function buildFilterParams({ includePaging = false } = {}) {
@@ -830,17 +768,7 @@ function buildFilterParams({ includePaging = false } = {}) {
 async function applyFilters() {
   page.value = 1
   selectedOrderIds.value = []
-  await Promise.all([loadSummary(), loadList()])
-}
-
-async function loadSummary() {
-  summaryLoading.value = true
-  try {
-    const { data } = await businessApi.summary(buildFilterParams())
-    summary.value = data
-  } finally {
-    summaryLoading.value = false
-  }
+  await loadList()
 }
 
 async function loadNodes() {

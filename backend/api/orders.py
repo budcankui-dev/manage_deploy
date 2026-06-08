@@ -1,4 +1,6 @@
+import asyncio
 import random
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,7 +14,15 @@ from typing import Optional
 from api.auth import get_current_user
 from database import get_db
 from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
-from models import BusinessTemplateCatalog, Node as NodeModel, TaskInstance, TaskInstanceNode, TaskOrder, User
+from models import (
+    BusinessObjectiveEvaluation,
+    BusinessTemplateCatalog,
+    Node as NodeModel,
+    TaskInstance,
+    TaskInstanceNode,
+    TaskOrder,
+    User,
+)
 from schemas import (
     BatchOperationRequest,
     BatchOperationResponse,
@@ -30,6 +40,7 @@ from services.dag_executor import DAGExecutor
 from services.order_materialize import _resolve_node_id
 from services.instance_lifecycle import cleanup_instance_runtime
 from services.order_sync import (
+    mark_orders_completed_for_instance,
     purge_instance_artifacts_preserve_evidence,
     purge_order_instance_artifacts,
     reconcile_orphan_orders,
@@ -48,7 +59,7 @@ BENCHMARK_TASK_CONFIGS = {
         "label": "矩阵乘法计算任务",
         "modality": "high_throughput_compute",
         "default_profile": {
-            "profile_id": "cpu_standard",
+            "profile_id": "gpu_standard",
             "matrix_size": 1024,
             "batch_count": 50,
             "seed": 42,
@@ -178,6 +189,61 @@ def _default_compute_gpu_for_order(order: TaskOrder) -> str | None:
         return None
 
 
+def _benchmark_routing_result(order: TaskOrder) -> dict:
+    config = order.runtime_config or {}
+    routing_result = config.get("routing_result")
+    if isinstance(routing_result, dict):
+        return routing_result
+    business_task = config.get("business_task")
+    if isinstance(business_task, dict):
+        routing_result = business_task.get("routing_result")
+        if isinstance(routing_result, dict):
+            return routing_result
+    return {}
+
+
+def _benchmark_compute_slot(order: TaskOrder) -> str:
+    """Return the compute host/GPU slot used to limit benchmark concurrency."""
+    routing_result = _benchmark_routing_result(order)
+    placements = routing_result.get("placements")
+    placement = None
+    if isinstance(placements, list):
+        for item in placements:
+            if isinstance(item, dict) and item.get("node_id") in ("compute", "worker"):
+                placement = item
+                break
+    elif isinstance(placements, dict):
+        placement = placements.get("compute") or placements.get("worker")
+
+    host = "unknown"
+    gpu = _default_compute_gpu_for_order(order) or "none"
+    if isinstance(placement, dict):
+        host = (
+            placement.get("worker_host")
+            or placement.get("hostname")
+            or placement.get("node_name")
+            or placement.get("node_id")
+            or host
+        )
+        gpu = (
+            placement.get("gpu_device")
+            or (placement.get("gpu_indices") or [None])[0]
+            or gpu
+        )
+    elif isinstance(placement, str):
+        host = placement
+    return f"{host}:gpu={gpu}"
+
+
+def _is_gpu_benchmark_order(order: TaskOrder) -> bool:
+    task_type = _benchmark_task_type(order)
+    return task_type in {
+        "high_throughput_matmul",
+        "low_latency_video_pipeline",
+        "llm_text_generation",
+    }
+
+
 def _gpu_from_routing_result(routing_result: dict | None, role: str) -> str | None:
     if not isinstance(routing_result, dict):
         return None
@@ -210,6 +276,7 @@ def _order_to_response(
     order: TaskOrder,
     instance_exists: bool | None = None,
     deployment_status: TaskStatus | None = None,
+    evaluation: BusinessObjectiveEvaluation | None = None,
 ) -> TaskOrderResponse:
     rc = order.runtime_config or {}
     bt = rc.get("business_task") or {}
@@ -223,7 +290,39 @@ def _order_to_response(
         updates["instance_exists"] = instance_exists
     if deployment_status is not None:
         updates["deployment_status"] = deployment_status
+    if evaluation is not None:
+        updates.update(
+            {
+                "metric_key": evaluation.metric_key,
+                "actual_value": evaluation.actual_value,
+                "target_value": evaluation.target_value,
+                "unit": evaluation.unit,
+                "business_success": evaluation.business_success,
+                "failure_reason": evaluation.failure_reason,
+            }
+        )
     return data.model_copy(update=updates)
+
+
+async def _latest_evaluations_by_instance(
+    db: AsyncSession,
+    instance_ids: list[str],
+) -> dict[str, BusinessObjectiveEvaluation]:
+    if not instance_ids:
+        return {}
+    rows = await db.execute(
+        select(BusinessObjectiveEvaluation)
+        .where(BusinessObjectiveEvaluation.instance_id.in_(instance_ids))
+        .order_by(
+            BusinessObjectiveEvaluation.instance_id.asc(),
+            BusinessObjectiveEvaluation.created_at.desc(),
+        )
+    )
+    latest: dict[str, BusinessObjectiveEvaluation] = {}
+    for row in rows.scalars():
+        if row.instance_id not in latest:
+            latest[row.instance_id] = row
+    return latest
 
 
 async def _instance_state(
@@ -308,6 +407,10 @@ async def list_orders(
     orders = orders[: max(1, min(limit, 500))]
 
     responses: list[TaskOrderResponse] = []
+    eval_map = await _latest_evaluations_by_instance(
+        db,
+        [order.materialized_instance_id for order in orders if order.materialized_instance_id],
+    )
     for order in orders:
         exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
         responses.append(
@@ -315,6 +418,7 @@ async def list_orders(
                 order,
                 instance_exists=exists,
                 deployment_status=deployment_status,
+                evaluation=eval_map.get(order.materialized_instance_id or ""),
             )
         )
     return responses
@@ -629,6 +733,8 @@ async def receive_routing_result(
             env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
             env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
             env["TASK_INSTANCE_ID"] = order.id  # will be updated after instance creation
+            if bt.get("task_type") in {"high_throughput_matmul", "low_latency_video_pipeline", "llm_text_generation"} and role in ("compute", "worker"):
+                env["USE_GPU"] = "true"
         if placement.gpu_device is not None:
             env["GPU_DEVICE"] = placement.gpu_device
         elif order.is_benchmark and role in ("compute", "worker"):
@@ -768,6 +874,13 @@ class BenchmarkRunScopedRequest(BaseModel):
     task_type: Optional[str] = None
 
 
+class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
+    max_parallel: int = Field(default=2, ge=1, le=10)
+    per_compute_slot_limit: int = Field(default=1, ge=1, le=4)
+    cleanup_evaluated: bool = True
+    wait_seconds: int = Field(default=0, ge=0, le=30)
+
+
 @router.post("/batch-auto-route")
 async def batch_auto_route(
     payload: BenchmarkRunScopedRequest | None = None,
@@ -889,6 +1002,204 @@ async def start_all_routed_benchmark_orders(
     }
 
 
+async def _controlled_benchmark_orders(
+    db: AsyncSession,
+    payload: BenchmarkRunScopedRequest | None,
+    current_user: User,
+) -> list[TaskOrder]:
+    rows = await db.execute(
+        select(TaskOrder).where(
+            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
+            TaskOrder.is_benchmark == True,
+            TaskOrder.user_id == current_user.id,
+            TaskOrder.materialized_instance_id.is_not(None),
+        )
+    )
+    orders = rows.scalars().all()
+    run_id = payload.benchmark_run_id if payload else None
+    if run_id:
+        orders = [order for order in orders if _benchmark_run_id(order) == run_id]
+    task_type = payload.task_type if payload else None
+    if task_type:
+        _benchmark_config(task_type)
+        orders = [order for order in orders if _benchmark_task_type(order) == task_type]
+    return sorted(orders, key=lambda item: (item.created_at, item.name))
+
+
+async def _instances_for_orders(
+    db: AsyncSession,
+    orders: list[TaskOrder],
+) -> dict[str, TaskInstance]:
+    instance_ids = [
+        order.materialized_instance_id
+        for order in orders
+        if order.materialized_instance_id
+    ]
+    if not instance_ids:
+        return {}
+    rows = await db.execute(
+        select(TaskInstance)
+        .options(selectinload(TaskInstance.nodes))
+        .where(TaskInstance.id.in_(instance_ids))
+    )
+    return {instance.id: instance for instance in rows.scalars().all()}
+
+
+async def _cleanup_evaluated_benchmark_instance(
+    db: AsyncSession,
+    order: TaskOrder,
+    instance: TaskInstance,
+) -> bool:
+    """Stop/remove a benchmark runtime instance while preserving order evidence."""
+    if instance.status not in (TaskStatus.STOPPED, TaskStatus.PENDING):
+        executor = DAGExecutor(db)
+        await executor.execute_dag_stop(instance.id)
+
+    refreshed = (
+        await db.execute(
+            select(TaskInstance)
+            .options(selectinload(TaskInstance.nodes))
+            .where(TaskInstance.id == instance.id)
+        )
+    ).scalar_one_or_none()
+    if not refreshed:
+        if order.status == OrderStatus.MATERIALIZED:
+            order.status = OrderStatus.COMPLETED
+        return False
+
+    await cleanup_instance_runtime(db, refreshed)
+    await purge_instance_artifacts_preserve_evidence(db, refreshed.id)
+    await mark_orders_completed_for_instance(db, refreshed.id)
+    if order.status == OrderStatus.MATERIALIZED:
+        order.status = OrderStatus.COMPLETED
+    return True
+
+
+@router.post("/start-controlled-routed")
+async def start_controlled_routed_benchmark_orders(
+    payload: ControlledBenchmarkStartRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start benchmark orders with compute/GPU-slot concurrency control.
+
+    The acceptance target compares each sample with the historical single-task
+    baseline of the selected compute node. Starting all samples at once measures
+    resource contention instead, so this endpoint advances the run in controlled
+    waves and optionally removes already evaluated runtime containers while
+    keeping order/evaluation evidence.
+    """
+    payload = payload or ControlledBenchmarkStartRequest()
+    orders = await _controlled_benchmark_orders(db, payload, current_user)
+    instance_map = await _instances_for_orders(db, orders)
+    eval_map = await _latest_evaluations_by_instance(
+        db,
+        [order.materialized_instance_id for order in orders if order.materialized_instance_id],
+    )
+
+    cleaned: list[str] = []
+    failed: dict[str, str] = {}
+    if payload.cleanup_evaluated:
+        for order in orders:
+            instance_id = order.materialized_instance_id
+            if not instance_id or instance_id not in eval_map:
+                continue
+            instance = instance_map.get(instance_id)
+            if not instance:
+                continue
+            try:
+                if await _cleanup_evaluated_benchmark_instance(db, order, instance):
+                    cleaned.append(instance_id)
+            except Exception as exc:
+                failed[order.id] = f"cleanup evaluated instance failed: {exc}"
+        if cleaned:
+            await db.commit()
+            instance_map = await _instances_for_orders(db, orders)
+
+    active_by_slot: defaultdict[str, int] = defaultdict(int)
+    active_orders = 0
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        if not instance_id or instance_id in eval_map:
+            continue
+        instance = instance_map.get(instance_id)
+        if instance and instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+            active_by_slot[_benchmark_compute_slot(order)] += 1
+            active_orders += 1
+
+    started: list[str] = []
+    skipped_busy: list[str] = []
+    executor = DAGExecutor(db)
+    for order in orders:
+        if len(started) >= payload.max_parallel:
+            break
+        instance_id = order.materialized_instance_id
+        if not instance_id or instance_id in eval_map:
+            continue
+        instance = instance_map.get(instance_id)
+        if not instance:
+            failed[order.id] = "Materialized instance not found"
+            continue
+        if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+            continue
+        if instance.status not in (
+            TaskStatus.PENDING,
+            TaskStatus.SCHEDULED,
+            TaskStatus.STOPPED,
+            TaskStatus.FAILED,
+        ):
+            failed[order.id] = f"Cannot start instance in status: {instance.status}"
+            continue
+
+        slot = _benchmark_compute_slot(order)
+        if active_by_slot[slot] >= payload.per_compute_slot_limit:
+            skipped_busy.append(order.id)
+            continue
+
+        try:
+            success, error = await executor.execute_dag_start(instance_id)
+            if success:
+                started.append(instance_id)
+                active_by_slot[slot] += 1
+                active_orders += 1
+            else:
+                failed[order.id] = error or "Unknown error"
+        except Exception as exc:
+            failed[order.id] = str(exc)
+
+    if payload.wait_seconds:
+        await asyncio.sleep(payload.wait_seconds)
+
+    eval_map = await _latest_evaluations_by_instance(
+        db,
+        [order.materialized_instance_id for order in orders if order.materialized_instance_id],
+    )
+    success_count = sum(1 for evaluation in eval_map.values() if evaluation.business_success)
+    evaluated_count = len(eval_map)
+    pending_to_start = 0
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        if not instance_id or instance_id in eval_map:
+            continue
+        instance = instance_map.get(instance_id)
+        if instance is None or instance.status not in (TaskStatus.RUNNING, TaskStatus.STARTING):
+            pending_to_start += 1
+
+    return {
+        "total": len(orders),
+        "evaluated": evaluated_count,
+        "success": success_count,
+        "active": active_orders,
+        "pending_to_start": pending_to_start,
+        "started": len(started),
+        "skipped_busy": skipped_busy,
+        "cleaned": len(cleaned),
+        "failed": failed,
+        "instance_ids": started,
+        "success_rate": success_count / evaluated_count if evaluated_count else None,
+    }
+
+
 async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
     catalog = await _catalog_for_order(db, order)
@@ -914,6 +1225,8 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
             env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
             env["TASK_INSTANCE_ID"] = order.id
+            if bt.get("task_type") in {"high_throughput_matmul", "low_latency_video_pipeline", "llm_text_generation"} and role in ("compute", "worker"):
+                env["USE_GPU"] = "true"
         gpu_id = _default_compute_gpu_for_order(order) if role == "compute" else None
         if gpu_id is not None:
             env["GPU_DEVICE"] = gpu_id

@@ -82,6 +82,12 @@
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="excludedNodeRows.length" class="excluded-node-note">
+        <strong>未纳入基线的节点：</strong>
+        <span v-for="node in excludedNodeRows" :key="node.id">
+          {{ node.hostname }}（{{ excludedNodeReason(node) }}）
+        </span>
+      </div>
     </el-card>
 
     <el-card class="step-card">
@@ -138,7 +144,7 @@
           </div>
           <div class="header-actions">
             <el-button size="small" type="primary" :loading="routeLoading" @click="doAutoRoute">一键路由</el-button>
-            <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">一键启动</el-button>
+            <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">受控启动/继续执行</el-button>
             <el-button size="small" plain @click="loadOrders">刷新</el-button>
           </div>
         </div>
@@ -165,7 +171,8 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：已评估完成表示业务指标已上报并完成判定；实例状态仍可能为运行中，直到任务结束时间到达或人工停止。</p>
+      <p class="status-note">说明：受控启动会按计算节点/GPU 槽位限流，同一槽位默认只运行 1 个验收任务，避免批量压测互相抢占资源导致业务目标误判。</p>
+      <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
     </el-card>
 
     <el-card class="step-card evidence-card">
@@ -227,6 +234,24 @@
         <el-table-column label="实例" min-width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialized_instance_id || '未物化' }}</template>
         </el-table-column>
+        <el-table-column label="业务目标判定" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
+            <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
+            <el-tag v-else type="info" size="small">未评估</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="实际 / 阈值" min-width="180">
+          <template #default="{ row }">
+            <span v-if="row.actual_value != null && row.target_value != null">
+              {{ formatMetric(row.actual_value, row.unit) }} / {{ formatMetric(row.target_value, row.unit) }}
+            </span>
+            <span v-else class="muted">等待指标上报</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="指标含义" min-width="150">
+          <template #default="{ row }">{{ metricMeaningLabel(row.metric_key) }}</template>
+        </el-table-column>
         <el-table-column label="路由放置" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ summarizePlacements(row.runtime_config?.routing_result?.placements) }}</template>
         </el-table-column>
@@ -251,7 +276,16 @@
             <div class="step-title">结果</div>
             <div class="step-desc">业务目标成功率需达到 90%。</div>
           </div>
-          <el-button class="header-action" size="small" plain @click="loadSummary">刷新</el-button>
+          <el-button
+            class="header-action"
+            size="small"
+            type="primary"
+            plain
+            :loading="resultRefreshing"
+            @click="refreshAcceptanceResult"
+          >
+            计算/更新成功率
+          </el-button>
         </div>
       </template>
       <div v-if="!summaryAggregate" class="empty-hint">暂无统计数据，完成压测后查看。</div>
@@ -412,7 +446,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 import {
@@ -428,6 +462,7 @@ import {
 } from '@/constants/businessTaskDisplay'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
+const route = useRoute()
 const router = useRouter()
 const taskConfigs = {
   high_throughput_matmul: {
@@ -456,6 +491,8 @@ const batchCreateLoading = ref(false)
 const routeLoading = ref(false)
 const startLoading = ref(false)
 const fullFlowLoading = ref(false)
+const resultRefreshing = ref(false)
+const controlledStartStatus = ref('')
 const dashboardUpdatedAt = ref('')
 const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
@@ -464,7 +501,10 @@ const deleteLoading = ref(false)
 const selectedOrderId = ref('')
 const selectedOrderIds = ref([])
 const selectedOrderDetail = ref(null)
-const currentBenchmarkRunId = ref(localStorage.getItem(BENCHMARK_RUN_STORAGE_KEY) || '')
+const initialBenchmarkRunId = typeof route.query.benchmark_run_id === 'string'
+  ? route.query.benchmark_run_id
+  : (localStorage.getItem(BENCHMARK_RUN_STORAGE_KEY) || '')
+const currentBenchmarkRunId = ref(initialBenchmarkRunId)
 const formalEvaluationCount = 30
 const benchmarkForm = reactive({
   count: formalEvaluationCount,
@@ -501,6 +541,10 @@ const nodeBaselineRows = computed(() =>
       updated_at: bl?.updated_at ?? bl?.created_at ?? null,
     }
   })
+)
+
+const excludedNodeRows = computed(() =>
+  nodes.value.filter(n => !n.is_schedulable || n.node_kind === 'admin')
 )
 
 const missingBaselineCount = computed(() =>
@@ -725,6 +769,17 @@ function formatMetric(value, unit = '') {
   return `${text} ${unit || ''}`.trim()
 }
 
+function metricMeaningLabel(metricKey) {
+  const labels = {
+    effective_gflops: '计算速率',
+    frame_latency_p90_ms: 'P90 帧推理时延',
+    frame_latency_avg_ms: '平均帧推理时延',
+    tokens_per_second: '生成吞吐',
+    samples_per_second: '训练吞吐',
+  }
+  return labels[metricKey] || metricKey || '尚未上报'
+}
+
 function orderStatusLabel(value) {
   const labels = {
     pending: '待提交',
@@ -823,6 +878,12 @@ function baselineRowClass({ row }) {
   return ''
 }
 
+function excludedNodeReason(node) {
+  if (node.node_kind === 'admin') return '管理节点不参与业务调度'
+  if (node.is_schedulable === false) return '不可调度或 Node Agent 不可达'
+  return '未纳入当前业务调度'
+}
+
 function handleOrderSelectionChange(rows) {
   selectedOrderIds.value = rows.map(row => row.id).filter(Boolean)
 }
@@ -874,6 +935,16 @@ async function loadSummary() {
   dashboardUpdatedAt.value = formatTime(new Date())
 }
 
+async function refreshAcceptanceResult() {
+  resultRefreshing.value = true
+  try {
+    await Promise.all([loadOrders(), loadSummary()])
+    ElMessage.success('已更新工单指标并重新计算业务目标成功率')
+  } finally {
+    resultRefreshing.value = false
+  }
+}
+
 function newBenchmarkRunId() {
   const now = new Date()
   const pad = value => String(value).padStart(2, '0')
@@ -895,6 +966,17 @@ function setCurrentBenchmarkRunId(runId) {
   } else {
     localStorage.removeItem(BENCHMARK_RUN_STORAGE_KEY)
   }
+  const nextQuery = { ...route.query }
+  if (runId) {
+    nextQuery.benchmark_run_id = runId
+  } else {
+    delete nextQuery.benchmark_run_id
+  }
+  router.replace({ query: nextQuery }).catch(() => {})
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 async function loadAll() {
@@ -959,7 +1041,7 @@ function buildBenchmarkDataProfile() {
     }
   }
   return {
-    profile_id: 'cpu_standard',
+    profile_id: 'gpu_standard',
     matrix_size: benchmarkForm.matrix_size,
     batch_count: benchmarkForm.batch_count,
     seed: 42,
@@ -1039,15 +1121,43 @@ async function doAutoRoute() {
 }
 
 async function doStartAll() {
+  if (!currentBenchmarkRunId.value) {
+    ElMessage.warning('请先创建或选择一个验收轮次，再启动执行。')
+    return null
+  }
   startLoading.value = true
+  controlledStartStatus.value = '正在按节点/GPU 槽位受控启动验收任务...'
   try {
-    const { data } = await ordersApi.startAllRouted({
-      benchmark_run_id: currentBenchmarkRunId.value || null,
-      task_type: taskType.value,
-    })
-    ElMessage.success(`已启动 ${data.started ?? data.routed ?? '全部'} 个实例`)
+    let latest = null
+    for (let round = 1; round <= 180; round += 1) {
+      const { data } = await ordersApi.startControlledRouted({
+        benchmark_run_id: currentBenchmarkRunId.value,
+        task_type: taskType.value,
+        max_parallel: 2,
+        per_compute_slot_limit: 1,
+        cleanup_evaluated: true,
+      })
+      latest = data
+      await Promise.all([loadOrders(), loadSummary()])
+      const total = Number(data.total || summaryAggregate.value?.count || 0)
+      const evaluated = Number(data.evaluated || summaryAggregate.value?.evaluated_count || 0)
+      const active = Number(data.active || 0)
+      const started = Number(data.started || 0)
+      const cleaned = Number(data.cleaned || 0)
+      controlledStartStatus.value = `受控执行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
+
+      if (total > 0 && evaluated >= total) {
+        ElMessage.success(`本轮 ${evaluated} 个验收任务已全部完成评估`)
+        break
+      }
+      if (!started && !active && !Number(data.pending_to_start || 0)) {
+        ElMessage.warning('当前没有可继续启动的验收任务，请检查失败原因或重新路由。')
+        break
+      }
+      await sleep(started ? 2500 : 5000)
+    }
     await Promise.all([loadOrders(), loadSummary()])
-    return data
+    return latest
   } finally {
     startLoading.value = false
   }
@@ -1064,7 +1174,7 @@ async function startFullFlow() {
     await createBatch()
     await doAutoRoute()
     await doStartAll()
-    ElMessage.success('完整测试流程已启动，请等待任务完成后查看 Step 4。')
+    ElMessage.success('完整测试流程已执行完成，请查看 Step 4 成功率和工单证据。')
   } finally {
     fullFlowLoading.value = false
   }
@@ -1226,6 +1336,22 @@ onMounted(loadAll)
   color: #c0c4cc;
 }
 
+.excluded-node-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f5f7fa;
+  color: #606266;
+  font-size: 12px;
+}
+
+.excluded-node-note strong {
+  color: #303133;
+}
+
 .pressure-row {
   display: flex;
   justify-content: space-between;
@@ -1268,6 +1394,11 @@ onMounted(loadAll)
   margin: 12px 0 0;
   color: #606266;
   font-size: 12px;
+}
+
+.strong-note {
+  color: #1f6f43;
+  font-weight: 600;
 }
 
 .status-cell {
