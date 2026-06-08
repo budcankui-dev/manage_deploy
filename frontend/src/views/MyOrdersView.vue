@@ -93,10 +93,18 @@
                 <el-table-column prop="role" label="角色" width="120" />
                 <el-table-column label="部署节点" min-width="220">
                   <template #default="{ row }">
-                    <span v-if="row.node_id === '未部署'" style="color: #909399">未部署容器</span>
-                    <span v-else>{{ row.node_id }}</span>
+                    <span v-if="row.worker_host === '未部署'" style="color: #909399">未部署容器</span>
+                    <span v-else>{{ row.worker_host }}</span>
                   </template>
                 </el-table-column>
+                <el-table-column label="GPU" width="120">
+                  <template #default="{ row }">
+                    <span :class="{ 'warning-text': row.requires_gpu && !hasGpuValue(row.gpu_device) }">
+                      {{ row.gpu_display }}
+                    </span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="node_id" label="路由角色" width="110" />
               </el-table>
             </template>
             <el-empty v-else description="无路由结果" />
@@ -164,7 +172,55 @@
                 <p>{{ matmulVerdict.subtitle }}</p>
               </div>
             </template>
+            <template v-else-if="isVideo">
+              <h3 class="section-title">本任务在做什么</h3>
+              <ol class="pipeline-steps">
+                <li v-for="step in VIDEO_PIPELINE_STEPS" :key="step.role">
+                  <strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}
+                </li>
+              </ol>
+
+              <div class="video-result-card">
+                <div class="video-preview">
+                  <img v-if="videoPreview" :src="videoPreview" alt="视频推理分类画框结果" />
+                  <el-empty v-else description="等待带框预览图" :image-size="80" />
+                </div>
+                <div class="video-result-side">
+                  <h3 class="section-title">输入参数</h3>
+                  <el-descriptions v-if="videoInputRows.length" :column="1" border class="detail-desc">
+                    <el-descriptions-item v-for="row in videoInputRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
+                  </el-descriptions>
+
+                  <h3 class="section-title">推理输出</h3>
+                  <el-descriptions v-if="videoOutputRows.length" :column="1" border class="detail-desc">
+                    <el-descriptions-item v-for="row in videoOutputRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
+                  </el-descriptions>
+                </div>
+              </div>
+
+              <h3 v-if="videoDetectionRows.length" class="section-title">分类检测结果</h3>
+              <el-table v-if="videoDetectionRows.length" :data="videoDetectionRows" size="small">
+                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="置信度" width="100">
+                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column label="画框坐标" min-width="180">
+                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+                </el-table-column>
+              </el-table>
+
+              <h3 class="section-title">性能验收</h3>
+              <div class="result-verdict" :class="videoVerdict.statusClass">
+                <strong>{{ videoVerdict.title }}</strong>
+                <p>{{ videoVerdict.subtitle }}</p>
+              </div>
+            </template>
             <el-empty v-else description="任务尚未跑完或未上报业务指标" />
+            <el-collapse v-if="detail?.evaluation?.result_metadata" class="raw-collapse result-json-collapse">
+              <el-collapse-item title="原始结果 JSON" name="result_metadata">
+                <pre class="json-block">{{ prettyJson(detail.evaluation.result_metadata) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -179,16 +235,22 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ordersApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
+  VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
   buildMatmulVerdict,
+  buildVideoInputRows,
+  buildVideoOutputRows,
+  buildVideoVerdict,
   describeDataProfile,
   describeObjectiveMeaning,
   describeRuntimePlan,
   formatObjectiveSentence,
   modalityLabel,
   taskTypeLabel,
+  videoDetections,
+  videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
 
@@ -212,6 +274,7 @@ const orderStepIndex = computed(() => {
 
 const taskType = computed(() => detail.value?.business_task?.task_type || '')
 const isMatmul = computed(() => taskType.value === 'high_throughput_matmul')
+const isVideo = computed(() => taskType.value === 'low_latency_video_pipeline')
 
 const detailObjectiveSentence = computed(() =>
   formatObjectiveSentence(detail.value?.business_task?.business_objective)
@@ -229,19 +292,57 @@ const detailRuntimePlanRows = computed(() =>
 const placementRows = computed(() => {
   const placements = detail.value?.routing_result?.placements
   if (!placements) return []
+  const rowFor = (role, placement) => {
+    const roleName = {
+      source: '数据源',
+      compute: '计算',
+      worker: '计算',
+      sink: '汇总',
+    }[role] || role
+    const requiresGpu = role === 'compute' || role === 'worker'
+    if (!placement) {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: '未部署',
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    if (typeof placement === 'string') {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: placement,
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
+    return {
+      role: roleName,
+      node_id: placement.node_id || role,
+      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      gpu_device: gpu,
+      gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
+      requires_gpu: requiresGpu,
+    }
+  }
   if (Array.isArray(placements)) {
     const map = {}
-    placements.forEach(p => { map[p.node_id] = p.worker_host })
+    placements.forEach(p => { map[p.node_id] = p })
     return [
-      { role: '数据源', node_id: map.source || '未部署' },
-      { role: '计算', node_id: map.compute || map.worker || '未部署' },
-      { role: '汇总', node_id: map.sink || '未部署' },
+      rowFor('source', map.source),
+      rowFor('compute', map.compute || map.worker),
+      rowFor('sink', map.sink),
     ]
   }
   return [
-    { role: '数据源', node_id: placements.source || '未部署' },
-    { role: '计算', node_id: placements.compute || placements.worker || '未部署' },
-    { role: '汇总', node_id: placements.sink || '未部署' },
+    rowFor('source', placements.source),
+    rowFor('compute', placements.compute || placements.worker),
+    rowFor('sink', placements.sink),
   ]
 })
 
@@ -269,6 +370,10 @@ function prettyJson(value) {
   return JSON.stringify(value, null, 2)
 }
 
+function hasGpuValue(value) {
+  return value !== undefined && value !== null && String(value) !== ''
+}
+
 const matmulInputRows = computed(() => buildMatmulInputRows(detail.value?.business_task?.data_profile))
 const matmulOutputRows = computed(() =>
   buildMatmulOutputRows(detail.value?.evaluation?.result_metadata, detail.value?.evaluation)
@@ -277,6 +382,13 @@ const matmulConsistency = computed(() =>
   buildMatmulParamConsistency(detail.value?.business_task?.data_profile, detail.value?.evaluation?.result_metadata)
 )
 const matmulVerdict = computed(() => buildMatmulVerdict(detail.value?.evaluation))
+const videoInputRows = computed(() => buildVideoInputRows(detail.value?.business_task?.data_profile))
+const videoOutputRows = computed(() =>
+  buildVideoOutputRows(detail.value?.evaluation?.result_metadata, detail.value?.evaluation)
+)
+const videoVerdict = computed(() => buildVideoVerdict(detail.value?.evaluation))
+const videoPreview = computed(() => videoPreviewDataUrl(detail.value?.evaluation?.result_metadata))
+const videoDetectionRows = computed(() => videoDetections(detail.value?.evaluation?.result_metadata))
 
 async function loadOrders() {
   listLoading.value = true
@@ -530,6 +642,32 @@ onMounted(loadOrders)
   font-size: 12px;
 }
 
+.video-result-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.video-preview {
+  min-height: 220px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.video-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-result-side .section-title:first-child {
+  margin-top: 0;
+}
+
 .consistency-row {
   display: flex;
   flex-wrap: wrap;
@@ -561,4 +699,25 @@ onMounted(loadOrders)
 .result-verdict.success { border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.08); }
 .result-verdict.danger { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
 .result-verdict.pending { border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.08); }
+
+.warning-text {
+  color: var(--el-color-warning);
+  font-weight: 600;
+}
+
+.result-json-collapse {
+  margin-top: 12px;
+}
+
+.json-block {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 </style>

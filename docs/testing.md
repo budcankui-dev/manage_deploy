@@ -166,7 +166,7 @@ http://10.112.244.94:8182/benchmark
 
 ## 视频推理扩展业务验证
 
-当前视频业务是轻量工业检测抽帧 surrogate，主要用于扩展模态演示和后续联调。它不上载完整视频流，而是让 source 生成固定帧元数据，compute 统计逐帧推理 surrogate 的 `frame_latency_p90_ms`，sink 上报业务指标。
+当前视频业务是轻量工业检测抽帧推理，主要用于扩展模态演示和后续联调。它不上载完整视频流，而是让 source 读取固定测试视频并抽帧，compute 运行 `yolov5n.onnx` 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。
 
 本地单测：
 

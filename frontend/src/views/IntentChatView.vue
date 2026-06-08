@@ -365,10 +365,10 @@
                 {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
               </p>
               <div style="margin-bottom:12px">
-                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="i"
+                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="step.role || i"
                      style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
                   <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
-                  <span>{{ step }}</span>
+                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
                 </div>
               </div>
               <div v-if="detailMatmulInputRows.length" style="margin-bottom:12px">
@@ -394,6 +394,60 @@
                 <div style="font-size:12px;margin-top:4px">{{ detailMatmulVerdict.subtitle }}</div>
               </div>
             </template>
+            <template v-else-if="isVideoDetail && detailEvaluation">
+              <p style="color:var(--el-text-color-secondary);font-size:13px;margin-bottom:12px">
+                {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
+              </p>
+              <div style="margin-bottom:12px">
+                <div v-for="(step, i) in VIDEO_PIPELINE_STEPS" :key="step.role || i"
+                     style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
+                  <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
+                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
+                </div>
+              </div>
+
+              <div class="video-result-card">
+                <div class="video-preview">
+                  <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                  <el-empty v-else description="等待带框预览图" :image-size="80" />
+                </div>
+                <div class="video-result-side">
+                  <div v-if="detailVideoInputRows.length" style="margin-bottom:12px">
+                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">输入参数</div>
+                    <el-descriptions :column="1" border size="small">
+                      <el-descriptions-item v-for="r in detailVideoInputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+                  <div v-if="detailVideoOutputRows.length" style="margin-bottom:12px">
+                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">推理输出</div>
+                    <el-descriptions :column="1" border size="small">
+                      <el-descriptions-item v-for="r in detailVideoOutputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="detailVideoDetections.length" style="font-weight:500;font-size:13px;margin:12px 0 6px">分类检测结果</div>
+              <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small" border style="margin-bottom:12px">
+                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="置信度" width="100">
+                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column label="画框坐标" min-width="180">
+                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+                </el-table-column>
+                <el-table-column label="来源" width="110">
+                  <template #default="{ row }">
+                    <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div v-if="detailVideoVerdict" :class="['verdict-block', detailVideoVerdict.statusClass]" style="padding:12px;border-radius:6px;margin-bottom:12px">
+                <div style="font-weight:600;font-size:14px">{{ detailVideoVerdict.title }}</div>
+                <div style="font-size:12px;margin-top:4px">{{ detailVideoVerdict.subtitle }}</div>
+              </div>
+            </template>
             <template v-else-if="detailEvaluation">
               <div :class="['verdict-block', detailEvaluation.business_success ? 'success' : 'danger']"
                    style="padding:12px;border-radius:6px;margin-bottom:12px">
@@ -406,6 +460,11 @@
               </el-descriptions>
             </template>
             <el-empty v-else description="任务尚未跑完或未上报业务指标" :image-size="60" />
+            <el-collapse v-if="detailEvaluation?.result_metadata" class="raw-collapse" style="margin-top:12px">
+              <el-collapse-item title="原始结果 JSON" name="result_metadata">
+                <pre class="json-block">{{ pretty(detailEvaluation.result_metadata) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
             <template v-if="orderResultObjects.length">
               <div style="font-weight:500;font-size:13px;margin:12px 0 6px">结果文件</div>
               <el-table :data="orderResultObjects" size="small" border>
@@ -524,7 +583,9 @@ import {
   modalityLabel, taskTypeLabel, describeDataProfile, taskTypeSummary,
   buildMatmulInputRows, buildMatmulOutputRows,
   buildMatmulParamConsistency, buildMatmulVerdict,
-  MATMUL_PIPELINE_STEPS
+  buildVideoInputRows, buildVideoOutputRows, buildVideoVerdict,
+  videoDetections, videoPreviewDataUrl,
+  MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
@@ -554,6 +615,9 @@ const orderResultObjects = ref([])
 const isMatmulDetail = computed(() =>
   selectedOrderDetail.value?.business_task?.task_type === 'high_throughput_matmul'
 )
+const isVideoDetail = computed(() =>
+  selectedOrderDetail.value?.business_task?.task_type === 'low_latency_video_pipeline'
+)
 const detailEvaluation = computed(() => selectedOrderDetail.value?.evaluation)
 const detailDataProfile = computed(() => selectedOrderDetail.value?.business_task?.data_profile)
 const detailMatmulInputRows = computed(() => buildMatmulInputRows(detailDataProfile.value))
@@ -564,6 +628,13 @@ const detailMatmulConsistency = computed(() =>
   buildMatmulParamConsistency(detailDataProfile.value, detailEvaluation.value?.result_metadata)
 )
 const detailMatmulVerdict = computed(() => buildMatmulVerdict(detailEvaluation.value))
+const detailVideoInputRows = computed(() => buildVideoInputRows(detailDataProfile.value))
+const detailVideoOutputRows = computed(() =>
+  buildVideoOutputRows(detailEvaluation.value?.result_metadata, detailEvaluation.value)
+)
+const detailVideoVerdict = computed(() => buildVideoVerdict(detailEvaluation.value))
+const detailVideoPreview = computed(() => videoPreviewDataUrl(detailEvaluation.value?.result_metadata))
+const detailVideoDetections = computed(() => videoDetections(detailEvaluation.value?.result_metadata))
 
 let routingTimer = null
 let abortController = null
@@ -576,8 +647,18 @@ const filteredOrders = computed(() => {
 const orderPlacementRows = computed(() => {
   const p = selectedOrderDetail.value?.routing_result?.placements
   if (!p) return []
-  if (Array.isArray(p)) return p
-  return Object.entries(p).map(([role, node_id]) => ({ node_id: role, worker_host: node_id, gpu_device: null }))
+  const normalize = (role, placement) => {
+    if (!placement) return { node_id: role, worker_host: '未部署', gpu_device: null }
+    if (typeof placement === 'string') return { node_id: role, worker_host: placement, gpu_device: null }
+    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
+    return {
+      node_id: placement.node_id || role,
+      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      gpu_device: gpu,
+    }
+  }
+  if (Array.isArray(p)) return p.map(item => normalize(item.node_id || item.role || 'node', item))
+  return Object.entries(p).map(([role, placement]) => normalize(role, placement))
 })
 
 const orderDataProfileRows = computed(() =>
@@ -1739,6 +1820,32 @@ onBeforeUnmount(stopRoutingPolling)
 .verdict-block.success { background: var(--el-color-success-light-9); border: 1px solid var(--el-color-success-light-5); }
 .verdict-block.danger  { background: var(--el-color-danger-light-9);  border: 1px solid var(--el-color-danger-light-5); }
 .verdict-block.warning { background: var(--el-color-warning-light-9); border: 1px solid var(--el-color-warning-light-5); }
+
+.video-result-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.video-preview {
+  min-height: 220px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+  background: var(--el-fill-color-light);
+  overflow: hidden;
+}
+
+.video-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-result-side {
+  min-width: 0;
+}
 
 @media (max-width: 900px) {
   .intent-workspace {

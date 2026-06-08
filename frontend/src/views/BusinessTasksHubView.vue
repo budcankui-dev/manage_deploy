@@ -390,6 +390,59 @@
               <p>{{ detailMatmulVerdict.subtitle }}</p>
             </div>
           </template>
+          <template v-else-if="isVideoDetail">
+            <h3 class="section-title">本任务在做什么</h3>
+            <p class="task-summary">{{ detailTaskSummary }}</p>
+            <ol class="pipeline-steps">
+              <li v-for="step in videoPipelineSteps" :key="step.role">
+                <strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}
+              </li>
+            </ol>
+
+            <div class="video-result-card">
+              <div class="video-preview">
+                <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                <el-empty v-else description="等待带框预览图" :image-size="80" />
+              </div>
+              <div class="video-result-side">
+                <h3 class="section-title">输入参数</h3>
+                <el-descriptions v-if="detailVideoInputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in detailVideoInputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+
+                <h3 class="section-title">推理输出</h3>
+                <el-descriptions v-if="detailVideoOutputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in detailVideoOutputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </div>
+
+            <h3 v-if="detailVideoDetections.length" class="section-title">分类检测结果</h3>
+            <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small">
+              <el-table-column prop="label" label="类别" min-width="120" />
+              <el-table-column label="置信度" width="100">
+                <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column label="画框坐标" min-width="180">
+                <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="来源" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <h3 class="section-title">性能验收</h3>
+            <div class="result-verdict" :class="detailVideoVerdict.statusClass">
+              <strong>{{ detailVideoVerdict.title }}</strong>
+              <p>{{ detailVideoVerdict.subtitle }}</p>
+            </div>
+          </template>
           <template v-else-if="orderDetail?.evaluation">
             <div class="result-verdict" :class="resultVerdictClass">
               <strong>{{ resultVerdictTitle }}</strong>
@@ -411,6 +464,11 @@
             </el-descriptions>
           </template>
           <el-empty v-else description="任务尚未跑完或未上报业务指标" />
+          <el-collapse v-if="orderDetail?.evaluation?.result_metadata" class="raw-collapse">
+            <el-collapse-item title="原始结果 JSON" name="result_metadata">
+              <pre class="json-block">{{ pretty(orderDetail.evaluation.result_metadata) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
           <el-collapse v-if="resultObjects.length" class="raw-collapse">
             <el-collapse-item title="结果文件 URI" name="result_files">
               <el-table :data="resultObjects" size="small">
@@ -470,10 +528,14 @@ import {
 import {
   MATMUL_PIPELINE_STEPS,
   TASK_TYPE_LABELS,
+  VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
   buildMatmulVerdict,
+  buildVideoInputRows,
+  buildVideoOutputRows,
+  buildVideoVerdict,
   describeDataProfile,
   describeObjectiveMeaning,
   describeRuntimePlan,
@@ -481,6 +543,8 @@ import {
   modalityLabel,
   taskTypeLabel,
   taskTypeSummary,
+  videoDetections,
+  videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 
 const route = useRoute()
@@ -619,7 +683,9 @@ const detailRuntimePlanRows = computed(() =>
   describeRuntimePlan(detailTaskType.value, orderDetail.value?.business_task?.runtime_plan)
 )
 const isMatmulDetail = computed(() => detailTaskType.value === 'high_throughput_matmul')
+const isVideoDetail = computed(() => detailTaskType.value === 'low_latency_video_pipeline')
 const matmulPipelineSteps = MATMUL_PIPELINE_STEPS
+const videoPipelineSteps = VIDEO_PIPELINE_STEPS
 const detailMatmulInputRows = computed(() =>
   buildMatmulInputRows(orderDetail.value?.business_task?.data_profile)
 )
@@ -636,6 +702,22 @@ const detailMatmulConsistency = computed(() =>
   )
 )
 const detailMatmulVerdict = computed(() => buildMatmulVerdict(orderDetail.value?.evaluation))
+const detailVideoInputRows = computed(() =>
+  buildVideoInputRows(orderDetail.value?.business_task?.data_profile)
+)
+const detailVideoOutputRows = computed(() =>
+  buildVideoOutputRows(
+    orderDetail.value?.evaluation?.result_metadata,
+    orderDetail.value?.evaluation
+  )
+)
+const detailVideoVerdict = computed(() => buildVideoVerdict(orderDetail.value?.evaluation))
+const detailVideoPreview = computed(() =>
+  videoPreviewDataUrl(orderDetail.value?.evaluation?.result_metadata)
+)
+const detailVideoDetections = computed(() =>
+  videoDetections(orderDetail.value?.evaluation?.result_metadata)
+)
 const resultVerdictClass = computed(() => {
   const evaluation = orderDetail.value?.evaluation
   if (!evaluation) return 'pending'
@@ -1239,6 +1321,32 @@ async function submitSample() {
   color: var(--accent-secondary);
   text-transform: uppercase;
   font-size: 12px;
+}
+
+.video-result-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.video-preview {
+  min-height: 240px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.video-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-result-side .section-title:first-child {
+  margin-top: 0;
 }
 
 .consistency-row {

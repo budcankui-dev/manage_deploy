@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Video pipeline compute: run deterministic frame inference and POST result."""
+"""Video pipeline compute: run fixed-video YOLO inference and POST result."""
 
 from __future__ import annotations
 
@@ -27,12 +27,23 @@ from _common.http_server import (
 
 def _benchmark_job_from_env() -> dict:
     return {
+        "profile_id": os.environ.get("PROFILE_ID", "video_industrial_inspection_720p"),
         "frame_count": int(os.environ.get("FRAME_COUNT", "120")),
+        "resolution": os.environ.get("RESOLUTION", "720p"),
+        "fps": int(os.environ.get("FPS", "30")),
         "frame_stride": int(os.environ.get("FRAME_STRIDE", "30")),
         "warmup_frames": int(os.environ.get("WARMUP_FRAMES", "2")),
         "measured_frames": int(os.environ.get("MEASURED_FRAMES", "30")),
         "work_units": int(os.environ.get("WORK_UNITS", "60000")),
         "seed": int(os.environ.get("SEED", "42")),
+        "video_asset": os.environ.get("VIDEO_ASSET", "bottle-detection.mp4"),
+        "inference_mode": os.environ.get("VIDEO_INFERENCE_MODE", "yolo_onnx"),
+        "model_name": os.environ.get("VIDEO_MODEL_NAME", "yolov5n"),
+        "model_path": os.environ.get("VIDEO_MODEL_PATH", "models/yolov5n.onnx"),
+        "class_names_path": os.environ.get("VIDEO_CLASS_NAMES_PATH", "models/coco.names"),
+        "confidence_threshold": float(os.environ.get("VIDEO_CONFIDENCE_THRESHOLD", "0.25")),
+        "nms_threshold": float(os.environ.get("VIDEO_NMS_THRESHOLD", "0.45")),
+        "max_detections": int(os.environ.get("VIDEO_MAX_DETECTIONS", "8")),
     }
 
 
@@ -44,6 +55,14 @@ def benchmark_mode() -> int:
             "frame_latency_avg_ms": result["frame_latency_avg_ms"],
             "measured_frames": result["measured_frames"],
             "aggregation": result["aggregation"],
+            "detector_backend": result.get("detector_backend"),
+            "model_name": result.get("model_name"),
+            "video_asset": result.get("video_asset"),
+            "detection_count": result.get("detection_count"),
+            "top_label": result.get("top_label"),
+            "top_confidence": result.get("top_confidence"),
+            "gpu_device": result.get("gpu_device"),
+            "gpu_assigned": result.get("gpu_assigned"),
         }
     }
     print(json.dumps(output), flush=True)

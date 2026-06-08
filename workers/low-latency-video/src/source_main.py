@@ -13,7 +13,13 @@ if "/app" not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, "/app")
 
-from _common.http_server import get_listen_port, post_json_to_peer, PostDataHandler, start_server
+from _common.http_server import (
+    get_listen_port,
+    post_json_to_peer,
+    PostDataHandler,
+    start_server,
+    wait_for_data_handler,
+)
 
 
 def _parse_json_env(name: str, default: dict | None = None) -> dict:
@@ -35,6 +41,14 @@ def _build_job() -> dict:
         "measured_frames": int(profile.get("measured_frames", 30)),
         "work_units": int(profile.get("work_units", 60000)),
         "seed": int(profile.get("seed", 42)),
+        "video_asset": profile.get("video_asset", "bottle-detection.mp4"),
+        "inference_mode": profile.get("inference_mode", "yolo_onnx"),
+        "model_name": profile.get("model_name", "yolov5n"),
+        "model_path": profile.get("model_path", "models/yolov5n.onnx"),
+        "class_names_path": profile.get("class_names_path", "models/coco.names"),
+        "confidence_threshold": float(profile.get("confidence_threshold", 0.25)),
+        "nms_threshold": float(profile.get("nms_threshold", 0.45)),
+        "max_detections": int(profile.get("max_detections", 8)),
     }
 
 
@@ -43,8 +57,10 @@ def main() -> int:
     port = get_listen_port("source")
     print(f"VIDEO_SOURCE_STARTING port={port} job={job}", flush=True)
 
-    time.sleep(2)
     start_server(port, PostDataHandler)
+    print("VIDEO_SOURCE_READY waiting for compute signal", flush=True)
+    ready = wait_for_data_handler(port, timeout_sec=300.0)
+    print(f"VIDEO_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)
     post_json_to_peer("source", "/data", job, timeout_sec=120.0)
     print("VIDEO_SOURCE_POSTED_JOB to compute", flush=True)
 

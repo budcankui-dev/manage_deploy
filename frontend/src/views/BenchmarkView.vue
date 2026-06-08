@@ -8,7 +8,7 @@
         <div class="run-strip">
           <span>当前验收轮次</span>
           <strong>{{ currentBenchmarkRunId || '历史全部数据' }}</strong>
-          <small>{{ currentBenchmarkRunId ? '本页列表、执行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史压测工单统计。' }}</small>
+          <small>{{ currentBenchmarkRunId ? '本页列表、自动执行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史压测工单统计。' }}</small>
         </div>
       </div>
       <div class="hero-actions">
@@ -140,15 +140,23 @@
           <span class="step-num">3</span>
           <div>
             <div class="step-title">执行</div>
-            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；当前一键路由为验收 mock 路由，不替代外部路由系统。</div>
+            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；点击自动执行后，系统会按资源槽位分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
             <el-button size="small" type="primary" :loading="routeLoading" @click="doAutoRoute">一键路由</el-button>
-            <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">受控启动/继续执行</el-button>
+            <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">自动执行</el-button>
             <el-button size="small" plain @click="loadOrders">刷新</el-button>
           </div>
         </div>
       </template>
+      <div class="execution-control-row">
+        <span class="control-label">执行槽位设置</span>
+        <span>总并发上限</span>
+        <el-input-number v-model="executionForm.max_parallel" :min="1" :max="10" controls-position="right" />
+        <span>单槽位并发</span>
+        <el-input-number v-model="executionForm.per_compute_slot_limit" :min="1" :max="4" controls-position="right" />
+        <span class="muted">槽位 = 计算节点 + GPU 编号；正式测评建议单槽位并发 = 1。</span>
+      </div>
       <div class="status-grid">
         <div class="status-cell waiting">
           <div class="status-num">{{ executionStats.waitingRoute }}</div>
@@ -171,7 +179,7 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：受控启动会按计算节点/GPU 槽位限流，同一槽位默认只运行 1 个验收任务，避免批量压测互相抢占资源导致业务目标误判。</p>
+      <p class="status-note">说明：点一次“自动执行”即可自动跑完整轮；系统会按计算节点/GPU 槽位限流，避免批量压测互相抢占资源导致业务目标误判。</p>
       <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
     </el-card>
 
@@ -398,6 +406,33 @@
             </div>
           </div>
 
+          <div v-if="detailVideoPreview || detailVideoDetections.length" class="benchmark-video-proof">
+            <div class="benchmark-video-preview">
+              <h4>视频推理分类画框结果</h4>
+              <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+              <el-empty v-else description="等待带框预览图" :image-size="80" />
+            </div>
+            <div v-if="detailVideoDetections.length" class="benchmark-video-detections">
+              <h4>分类检测结果</h4>
+              <el-table :data="detailVideoDetections" size="small" border>
+                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="置信度" width="100">
+                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column label="画框坐标" min-width="180">
+                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+                </el-table-column>
+                <el-table-column label="来源" width="110">
+                  <template #default="{ row }">
+                    <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">
+                      {{ row.fallback ? '兜底框' : '模型输出' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
           <div v-if="detailParamConsistency" class="consistency-row">
             <el-tag :type="detailParamConsistency.ok ? 'success' : 'warning'" size="small">
               {{ detailParamConsistency.label }}
@@ -451,14 +486,20 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
+  VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
   buildMatmulVerdict,
+  buildVideoInputRows,
+  buildVideoOutputRows,
+  buildVideoVerdict,
   describeDataProfile,
   describeObjectiveMeaning,
   formatObjectiveSentence,
   taskTypeSummary,
+  videoDetections,
+  videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
@@ -521,8 +562,12 @@ const benchmarkForm = reactive({
   fps: 30,
   frame_stride: 30,
   warmup_frames: 10,
-  measured_frames: 90,
+  measured_frames: 30,
   work_units: 45000,
+})
+const executionForm = reactive({
+  max_parallel: 2,
+  per_compute_slot_limit: 1,
 })
 
 const currentTaskConfig = computed(() =>
@@ -664,13 +709,7 @@ const detailObjectiveMeaning = computed(() =>
 )
 const detailPipelineSteps = computed(() => {
   if (detailTaskType.value === 'high_throughput_matmul') return MATMUL_PIPELINE_STEPS
-  if (detailTaskType.value === 'low_latency_video_pipeline') {
-    return [
-      { role: 'source', title: '生成抽帧任务', detail: '按固定 profile 生成工业检测视频帧元数据并发送给 compute' },
-      { role: 'compute', title: '执行推理替身负载', detail: '对抽样帧执行确定性推理计算，记录每帧处理时延' },
-      { role: 'sink', title: '汇总 P90 时延', detail: '接收推理结果，向 Manager 上报 frame_latency_p90_ms 和帧级统计' },
-    ]
-  }
+  if (detailTaskType.value === 'low_latency_video_pipeline') return VIDEO_PIPELINE_STEPS
   return [
     { role: 'source', title: '提交输入', detail: '准备业务输入并发送给计算节点' },
     { role: 'compute', title: '执行业务', detail: '按路由结果在指定节点执行计算' },
@@ -680,36 +719,14 @@ const detailPipelineSteps = computed(() => {
 const detailInputRows = computed(() => {
   const profile = selectedOrderDetail.value?.business_task?.data_profile
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulInputRows(profile)
-  if (detailTaskType.value === 'low_latency_video_pipeline') {
-    const data = profile || {}
-    return [
-      { label: '业务画像', value: data.profile_id || 'video_industrial_inspection_720p' },
-      { label: '分辨率', value: data.resolution || '720p' },
-      { label: '总帧数', value: String(data.frame_count ?? '-') },
-      { label: '抽帧间隔', value: `每 ${data.frame_stride ?? '-'} 帧取 1 帧` },
-      { label: '有效统计帧', value: String(data.measured_frames ?? '-') },
-      { label: '计算强度', value: String(data.work_units ?? '-') },
-    ]
-  }
+  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoInputRows(profile)
   return describeDataProfile(detailTaskType.value, profile)
 })
 const detailOutputRows = computed(() => {
   const evaluation = selectedOrderDetail.value?.evaluation
   const meta = detailResultMetadata.value || {}
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulOutputRows(meta, evaluation)
-  if (detailTaskType.value === 'low_latency_video_pipeline') {
-    const rows = []
-    if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
-    if (meta.frame_latency_avg_ms != null) rows.push({ label: '平均帧时延', value: `${Number(meta.frame_latency_avg_ms).toFixed(2)} ms` })
-    if (meta.frame_latency_p90_ms != null) rows.push({ label: 'P90 帧时延', value: `${Number(meta.frame_latency_p90_ms).toFixed(2)} ms` })
-    if (meta.frame_latency_min_ms != null && meta.frame_latency_max_ms != null) {
-      rows.push({ label: '时延范围', value: `${Number(meta.frame_latency_min_ms).toFixed(2)} - ${Number(meta.frame_latency_max_ms).toFixed(2)} ms` })
-    }
-    if (evaluation) {
-      rows.push({ label: '上报指标', value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() })
-    }
-    return rows.length ? rows : [{ label: '状态', value: '尚未收到视频推理输出' }]
-  }
+  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoOutputRows(meta, evaluation)
   if (evaluation) {
     return [{ label: '上报指标', value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() }]
   }
@@ -727,6 +744,7 @@ const detailParamConsistency = computed(() => {
 const detailVerdict = computed(() => {
   const evaluation = selectedOrderDetail.value?.evaluation
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulVerdict(evaluation)
+  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoVerdict(evaluation)
   if (!evaluation) {
     return {
       title: '等待业务结果',
@@ -745,6 +763,8 @@ const detailVerdict = computed(() => {
     statusClass: evaluation.business_success ? 'success' : 'danger',
   }
 })
+const detailVideoPreview = computed(() => videoPreviewDataUrl(detailResultMetadata.value))
+const detailVideoDetections = computed(() => videoDetections(detailResultMetadata.value))
 
 function formatTime(value) {
   return new Date(value).toLocaleString('zh-CN', {
@@ -1037,6 +1057,14 @@ function buildBenchmarkDataProfile() {
       warmup_frames: benchmarkForm.warmup_frames,
       measured_frames: benchmarkForm.measured_frames,
       work_units: benchmarkForm.work_units,
+      video_asset: 'bottle-detection.mp4',
+      inference_mode: 'yolo_onnx',
+      model_name: 'yolov5n',
+      model_path: 'models/yolov5n.onnx',
+      class_names_path: 'models/coco.names',
+      confidence_threshold: 0.25,
+      nms_threshold: 0.45,
+      max_detections: 8,
       seed: 42,
     }
   }
@@ -1126,15 +1154,15 @@ async function doStartAll() {
     return null
   }
   startLoading.value = true
-  controlledStartStatus.value = '正在按节点/GPU 槽位受控启动验收任务...'
+  controlledStartStatus.value = '正在自动按节点/GPU 槽位分批执行验收任务...'
   try {
     let latest = null
     for (let round = 1; round <= 180; round += 1) {
       const { data } = await ordersApi.startControlledRouted({
         benchmark_run_id: currentBenchmarkRunId.value,
         task_type: taskType.value,
-        max_parallel: 2,
-        per_compute_slot_limit: 1,
+        max_parallel: executionForm.max_parallel,
+        per_compute_slot_limit: executionForm.per_compute_slot_limit,
         cleanup_evaluated: true,
       })
       latest = data
@@ -1144,7 +1172,7 @@ async function doStartAll() {
       const active = Number(data.active || 0)
       const started = Number(data.started || 0)
       const cleaned = Number(data.cleaned || 0)
-      controlledStartStatus.value = `受控执行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
+      controlledStartStatus.value = `自动执行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
 
       if (total > 0 && evaluated >= total) {
         ElMessage.success(`本轮 ${evaluated} 个验收任务已全部完成评估`)
@@ -1221,7 +1249,10 @@ onMounted(loadAll)
 .hero-card h1 {
   margin: 0;
   font-size: 26px;
+  font-weight: 800;
   line-height: 1.2;
+  color: #1f2d3d;
+  letter-spacing: 0.01em;
 }
 
 .hero-subtitle {
@@ -1382,6 +1413,32 @@ onMounted(loadAll)
 
 .pending-pill strong {
   color: #303133;
+}
+
+.execution-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #606266;
+  font-size: 13px;
+}
+
+.execution-control-row :deep(.el-input-number) {
+  width: 118px;
+}
+
+.control-label {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #ecf5ff;
+  color: #1d4ed8;
+  font-weight: 700;
 }
 
 .status-grid {
@@ -1626,6 +1683,35 @@ onMounted(loadAll)
   color: #303133;
 }
 
+.benchmark-video-proof {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.15fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.benchmark-video-proof h4 {
+  margin: 0 0 8px;
+  color: #303133;
+}
+
+.benchmark-video-preview {
+  min-width: 0;
+}
+
+.benchmark-video-preview img {
+  display: block;
+  width: 100%;
+  border: 1px solid #dcdfe6;
+  border-radius: 10px;
+  background: #111827;
+}
+
+.benchmark-video-detections {
+  min-width: 0;
+}
+
 .consistency-row {
   display: flex;
   gap: 10px;
@@ -1764,6 +1850,7 @@ onMounted(loadAll)
   .metric-grid,
   .json-grid,
   .proof-grid,
+  .benchmark-video-proof,
   .pipeline-steps {
     grid-template-columns: 1fr;
   }

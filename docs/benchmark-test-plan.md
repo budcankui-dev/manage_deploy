@@ -14,7 +14,7 @@
 
 当前正式主验收业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
-第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；近期目标是跑通真实四节点 30 任务压测并达到业务目标成功率不低于 90%。
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 读取固定测试视频并抽帧，compute 加载 `yolov5n.onnx` 执行检测并统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；近期目标是跑通真实四节点 30 任务压测并达到业务目标成功率不低于 90%。
 
 ## 验收指标
 
@@ -33,7 +33,7 @@
 ## 测试环境
 
 - 管理员前端：`http://10.112.244.94:8182`
-- 验收测试页：`http://10.112.244.94:8182/benchmark`
+- 业务测评页：`http://10.112.244.94:8182/benchmark`
 - 后端 API：`http://10.112.244.94:8181`
 - 管理节点：`admin-server`，`10.112.244.94`
 - 业务节点：`compute-1`、`compute-2`、`compute-3`
@@ -67,7 +67,7 @@
 
 ### Step 1 基线
 
-验收测试页直接列出所有可调度节点：
+业务测评页直接列出所有可调度节点：
 
 - 未测试节点显示红色“未测试”。
 - 已测试节点显示 `baseline_value`、稳定性和上次更新时间。
@@ -80,7 +80,7 @@
 
 创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。压测工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
 
-每次创建批量压测都会生成一个 `benchmark_run_id`，并写入工单 `runtime_config.benchmark.run_id`。页面顶部展示“当前验收轮次”，后续工单列表、一键路由、受控启动和 Step 4 结果默认只统计当前轮次。验收页支持用 `/benchmark?benchmark_run_id=<run_id>` 直接打开指定轮次，便于截图留档和复核。旧版本历史工单没有轮次标记时，页面会退回到“全部历史压测工单”口径，仅用于调试回看，不建议作为正式验收截图。
+每次创建批量压测都会生成一个 `benchmark_run_id`，并写入工单 `runtime_config.benchmark.run_id`。页面顶部展示“当前验收轮次”，后续工单列表、一键路由、自动执行和 Step 4 结果默认只统计当前轮次。验收页支持用 `/benchmark?benchmark_run_id=<run_id>` 直接打开指定轮次，便于截图留档和复核。旧版本历史工单没有轮次标记时，页面会退回到“全部历史压测工单”口径，仅用于调试回看，不建议作为正式验收截图。
 
 ### Step 3 执行
 
@@ -93,12 +93,12 @@
 操作按钮：
 
 - “一键路由”：仅用于当前批量验收流程的 mock 路由，为当前 `benchmark_run_id` 和当前任务类型的 `is_benchmark=true` 待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
-- “受控启动/继续执行”：按计算节点和 GPU 编号形成执行槽位，同一槽位默认同一时刻只运行 1 个验收任务；任务上报指标后，系统停止并删除容器实例，保留工单、路由结果、业务指标和结果证据，再启动下一批。
+- “自动执行”：按计算节点和 GPU 编号形成执行槽位，同一槽位默认同一时刻只运行 1 个验收任务；任务上报指标后，系统停止并删除容器实例，保留工单、路由结果、业务指标和结果证据，再启动下一批。
 - “刷新”：重新拉取状态。
 
 正式演示时，Step 3 的 mock 路由和启动操作只应作用于当前 `benchmark_run_id`。如果需要重新跑一轮验收，应重新点击 Step 2 创建新的压测工单，让新旧结果分离，避免把历史失败或历史成功样本混入本轮统计。
 
-受控启动是矩阵计算验收的默认执行口径。原因是节点 baseline 反映单任务在同 profile 下的历史能力；如果把 30 个矩阵任务一次性并发启动，测到的是资源争抢后的吞吐，不再能和单任务基线直接比较，容易把平台执行方式的过载误判成业务目标不达标。受控启动不会调宽达标阈值，只是让验收执行方式与 baseline 定义保持一致。
+自动执行是矩阵计算验收的默认执行口径。原因是节点 baseline 反映单任务在同 profile 下的历史能力；如果把 30 个矩阵任务一次性并发启动，测到的是资源争抢后的吞吐，不再能和单任务基线直接比较，容易把平台执行方式的过载误判成业务目标不达标。自动执行不会调宽达标阈值，只是让验收执行方式与 baseline 定义保持一致。
 
 ### 工单证据链
 
@@ -233,7 +233,7 @@ E2E_REMOTE=1 \
 WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
 WORKER_TAG=dev \
 E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
-E2E_NODE_AGENT_HOSTS="10.112.249.191 10.112.150.166 10.112.116.165" \
+E2E_NODE_AGENT_HOSTS="10.112.249.191 10.112.150.166 10.112.59.209" \
 MATMUL_MATRIX_SIZE=1024 \
 MATMUL_BATCH_COUNT=50 \
 ./scripts/e2e_matmul_live.sh
@@ -251,9 +251,9 @@ MATMUL_BATCH_COUNT=50 \
 - 当前 `/api/baselines/run` 已改为通过目标节点 Node Agent 运行 benchmark 容器；只有显式传入 `allow_local_fallback=true` 才允许本地 fallback。
 - 当前业务目标统计接口支持按 `is_benchmark=true` 过滤，验收页面只统计压测工单，避免普通业务污染成功率。
 - 当前业务目标统计接口和订单列表支持按 `benchmark_run_id` 过滤，验收页面默认按当前轮次统计，避免新旧压测结果互相污染。
-- 当前验收页面支持 `POST /api/orders/start-controlled-routed` 受控启动，按计算节点/GPU 槽位限流执行，并在评估后释放容器实例、保留工单证据；正式矩阵验收不再使用一次性启动全部实例作为默认口径。
+- 当前验收页面支持 `POST /api/orders/start-controlled-routed` 自动执行，按计算节点/GPU 槽位限流执行，并在评估后释放容器实例、保留工单证据；正式矩阵验收不再使用一次性启动全部实例作为默认口径。
 - 当前业务工单中心支持按 `benchmark_run_id` 筛选验收压测工单，并提供“清理实例保留工单”和“删除工单”两类批量操作；前者用于释放容器资源并保留证据，后者用于删除废弃轮次。
-- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
+- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；它使用固定测试视频 + YOLOv5n ONNX 产出带框结果，CPU 仅作为开发兜底。如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
 - 当前正式判定不依赖实时 CPU/GPU 监控。资源监控可作为演示增强项，但验收主证据是工单详情中的实例状态、实际节点/GPU 分配、业务指标评估和指标采集 JSON，避免为了演示引入额外监控系统导致链路变复杂。
 - 当前验收证据链依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部压测工单并打开详情。
 - 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务压测，并保存浏览器截图和 JSON 报告。

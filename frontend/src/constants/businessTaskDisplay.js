@@ -28,7 +28,7 @@ export const TASK_TYPE_SUMMARIES = {
   high_throughput_matmul:
     '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
-    '在 source → compute → sink 链路上按固定帧间隔抽样视频帧，模拟工业检测推理，以帧推理时延 P90 作为验收指标。',
+    '在 source → compute → sink 链路上读取固定测试视频并按帧间隔抽样，使用 YOLOv5n 进行工业检测推理，以帧推理时延 P90 作为验收指标。',
   llm_text_generation:
     '在 source → inference → sink 链路上完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
@@ -51,6 +51,12 @@ export const MATMUL_PIPELINE_STEPS = [
   { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
   { role: 'compute', title: '执行计算', detail: '按路由分配的 CPU/GPU 后端执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
   { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 effective_gflops 和采样元数据' },
+]
+
+export const VIDEO_PIPELINE_STEPS = [
+  { role: 'source', title: '读取固定视频', detail: '使用验收镜像内置 bottle-detection.mp4，按 frame_stride 抽帧发送给 compute' },
+  { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n.onnx，对抽样帧执行检测并生成分类画框预览图' },
+  { role: 'sink', title: '汇总时延与结果', detail: '上报 frame_latency_p90_ms、检测框、模型信息和带框图片，用于业务目标判定与演示' },
 ]
 
 export function taskTypeLabel(taskType) {
@@ -107,6 +113,7 @@ export function describeDataProfile(taskType, profile) {
       { label: '分辨率', value: profile.resolution || '-' },
       { label: '总帧数', value: String(profile.frame_count ?? '-') },
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
+      { label: '预热帧数', value: String(profile.warmup_frames ?? '-') },
       { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
       { label: '计算强度', value: String(profile.work_units ?? '-') },
     ]
@@ -230,6 +237,78 @@ export function buildMatmulVerdict(evaluation) {
     subtitle: evaluation.failure_reason || `实际 ${actual} ${unit}，未达到目标 ${target} ${unit}。`,
     statusClass: 'danger',
   }
+}
+
+export function buildVideoInputRows(dataProfile) {
+  const rows = describeDataProfile('low_latency_video_pipeline', dataProfile || {})
+  const profile = dataProfile || {}
+  if (profile.video_asset) rows.push({ label: '固定测试视频', value: profile.video_asset })
+  if (profile.model_name) rows.push({ label: '检测模型', value: profile.model_name })
+  if (profile.inference_mode) rows.push({ label: '推理模式', value: profile.inference_mode })
+  return rows
+}
+
+export function buildVideoOutputRows(resultMetadata, evaluation) {
+  const rows = []
+  const meta = resultMetadata || {}
+  if (meta.model_name) rows.push({ label: '检测模型', value: String(meta.model_name) })
+  if (meta.video_asset) rows.push({ label: '测试视频', value: String(meta.video_asset) })
+  if (meta.detector_backend) rows.push({ label: '推理后端', value: String(meta.detector_backend) })
+  if (meta.gpu_device !== undefined && meta.gpu_device !== null && String(meta.gpu_device) !== '') {
+    rows.push({ label: 'GPU 设备', value: String(meta.gpu_device) })
+  }
+  if (meta.gpu_assigned !== undefined) {
+    rows.push({ label: 'GPU 分配', value: meta.gpu_assigned ? '已分配' : '未检测到 GPU 分配' })
+  }
+  if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
+  if (meta.frame_latency_avg_ms != null) rows.push({ label: '平均帧时延', value: `${Number(meta.frame_latency_avg_ms).toFixed(2)} ms` })
+  if (meta.frame_latency_p90_ms != null) rows.push({ label: 'P90 帧时延', value: `${Number(meta.frame_latency_p90_ms).toFixed(2)} ms` })
+  if (meta.detection_count != null) rows.push({ label: '预览图检测数量', value: String(meta.detection_count) })
+  if (meta.top_label) {
+    const confidence = meta.top_confidence != null ? ` (${Number(meta.top_confidence).toFixed(2)})` : ''
+    rows.push({ label: '最高置信类别', value: `${meta.top_label}${confidence}` })
+  }
+  if (evaluation) {
+    rows.push({
+      label: '上报指标',
+      value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim(),
+    })
+  }
+  if (!rows.length) rows.push({ label: '状态', value: '尚未收到视频推理输出' })
+  return rows
+}
+
+export function buildVideoVerdict(evaluation) {
+  if (!evaluation) {
+    return {
+      title: '等待视频推理完成',
+      subtitle: '任务运行后将展示 P90 帧推理时延、检测框和带框预览图。',
+      statusClass: 'pending',
+    }
+  }
+  const actual = Number(evaluation.actual_value).toFixed(2)
+  const unit = evaluation.unit || 'ms'
+  if (evaluation.business_success) {
+    return {
+      title: '视频推理已完成，时延达标',
+      subtitle: `实际 P90 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: evaluation.target_value, unit })}。`,
+      statusClass: 'success',
+    }
+  }
+  return {
+    title: '视频推理已完成，时延未达标',
+    subtitle: evaluation.failure_reason || `实际 P90 ${actual} ${unit}，未达到目标 ${evaluation.target_value} ${unit}。`,
+    statusClass: 'danger',
+  }
+}
+
+export function videoPreviewDataUrl(resultMetadata) {
+  const value = resultMetadata?.annotated_frame_data_url
+  return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
+}
+
+export function videoDetections(resultMetadata) {
+  return Array.isArray(resultMetadata?.detections) ? resultMetadata.detections : []
 }
 
 /** @deprecated 使用 buildMatmul* 分块展示；保留供非 matmul 或简易列表 */

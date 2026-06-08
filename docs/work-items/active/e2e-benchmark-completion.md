@@ -42,7 +42,7 @@ Last Updated: 2026-06-08
 
 ### 视频AI推理真实验收轮次（2026-06-08）
 - 远端视频 worker 镜像已重建并推送：`10.112.244.94:5000/low-latency-video:dev`。
-- `compute-3` 当前 Node Agent 不可达，已临时设置 `is_schedulable=false`，避免 mock route 和 baseline 选中不可达节点。
+- `compute-3` 当前 Node Agent 已恢复可达，静态 IP 为 `10.112.59.209`；路由与部署可继续使用该节点。
 - 视频 baseline 已在可调度节点重跑并稳定：
   - compute-1：`frame_latency_p90_ms=9.38037 ms`，`stable=true`
   - compute-2：`frame_latency_p90_ms=9.32026 ms`，`stable=true`
@@ -52,14 +52,14 @@ Last Updated: 2026-06-08
 - 抽查工单详情可见：
   - `routing_input_dag.edges[]` 包含 `data_mb` 和 `bandwidth_mbps`
   - compute placement 包含 `gpu_device: "0"`
-  - evaluation.result_metadata 包含 `profile_id=video_industrial_inspection_720p`、`resolution=720p`、`fps=30`、`measured_frames=90`、`frame_latency_p90_ms` 和帧级样本摘要
+  - evaluation.result_metadata 包含 `profile_id=video_industrial_inspection_720p`、`resolution=720p`、`fps=30`、`measured_frames=30`、`frame_latency_p90_ms`、`detections` 和带框预览图
 
 ## 待完成
 
-- [x] 视频AI推理 worker（source/compute/sink + Dockerfile，先使用轻量可复现固定帧序列，跑通后再考虑 YOLO）
-- [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=90，每个可调度节点重复 3 次取中位数
+- [x] 视频AI推理 worker（source/compute/sink + Dockerfile，固定视频 + YOLOv5n ONNX + 带框预览）
+- [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=30，每个可调度节点重复 3 次取中位数
 - [x] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足节点历史基准 × 1.5，成功率达到 90%
-- [ ] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情和结果摘要
+- [x] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情、结果摘要和带框预览图
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
 - [ ] 前端：LLM prompt 输入 + 生成文本展示
@@ -71,13 +71,13 @@ Last Updated: 2026-06-08
 
 ### 验收
 - matmul 批量压测 30 任务成功率 ≥ 90%（端口并发已支持）
-- 视频AI推理基本链路跑通：源节点按固定帧序列发送数据，推理节点统计有效帧时延，目的节点或结果回调能够展示输出摘要
+- 视频AI推理基本链路跑通：源节点按固定视频抽帧发送数据，推理节点统计有效帧时延并生成带框结果，目的节点或结果回调能够展示输出摘要
 - 视频AI推理批量压测 30 任务成功率 ≥ 90%
 - 意图解析准确率 ≥ 90%（需构建数据集）
 
 ## 近期执行顺序
 
-1. 先跑通视频AI推理单任务端到端链路，确认容器启动、数据流、指标上报和结果展示都真实可见。
+1. 先跑通视频AI推理单任务端到端链路，确认容器启动、数据流、指标上报、GPU 分配和带框结果展示都真实可见。
 2. 再补视频AI推理基线采集与批量工单成功率统计。
 3. 最后优化验收测试页面展示，使矩阵计算和视频AI推理两个演示业务都能给专家展示完整证据链。
 
@@ -127,5 +127,5 @@ curl -H "Authorization: Bearer $TOKEN" \
 风险记录：
 
 - `batch-auto-route` 是验收闭环 mock，不保证选中有 GPU 的 compute 节点；真实验收和外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"` 或 `gpu_indices`。
-- 视频 worker 当前是轻量确定性推理替身，业务目标用 `frame_latency_p90_ms <= baseline * 1.5` 判定，重点展示随路计算、GPU 分配、指标上报和成功率统计闭环。该系数用于覆盖共享算力节点和并发压测下的视频 P90 时延波动。
+- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline * 1.5` 判定，重点展示随路计算、GPU 分配、带框结果、指标上报和成功率统计闭环。该系数用于覆盖共享算力节点和并发压测下的视频 P90 时延波动。
 - 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。
