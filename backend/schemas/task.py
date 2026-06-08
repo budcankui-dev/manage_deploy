@@ -565,6 +565,7 @@ class BusinessObjectiveEvaluationResponse(BaseModel):
     estimated_value: Optional[float] = None
     estimation_error_ratio: Optional[float] = None
     object_uris: Optional[dict] = None
+    result_metadata: Optional[dict[str, Any]] = None
     created_at: datetime
 
 

@@ -79,7 +79,7 @@ async def build_instance_create_from_business_task(
         "ROUTING_RESULT": payload.routing_result.model_dump_json(),
         "RESULT_STORAGE": _json_env(payload.result_storage),
     }
-    if payload.task_type == "high_throughput_matmul":
+    if payload.task_type in {"high_throughput_matmul", "low_latency_video_pipeline"}:
         shared_env["USE_GPU"] = "true"
     overrides: list[TaskInstanceNodeOverride] = []
     gpu_roles = set()
@@ -282,7 +282,11 @@ async def get_business_task_evaluation(instance_id: str, db: AsyncSession = Depe
     row = result.scalars().first()
     if not row:
         raise HTTPException(status_code=404, detail="Business evaluation not found")
-    return row
+    data = BusinessObjectiveEvaluationResponse.model_validate(row).model_dump()
+    object_uris = row.object_uris if isinstance(row.object_uris, dict) else {}
+    result_metadata = object_uris.get("result_metadata")
+    data["result_metadata"] = result_metadata if isinstance(result_metadata, dict) else None
+    return data
 
 
 @router.get("/business-tasks/{instance_id}/results", response_model=list[TaskResultObjectResponse])
@@ -545,6 +549,20 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
                 "warmup_frames",
                 "measured_frames",
                 "work_units",
+                "detector_backend",
+                "detector_fallback_reason",
+                "model_name",
+                "video_asset",
+                "confidence_threshold",
+                "nms_threshold",
+                "gpu_assigned",
+                "annotated_frame_index",
+                "annotated_frame_content_type",
+                "annotated_frame_data_url",
+                "detection_count",
+                "top_label",
+                "top_confidence",
+                "detections",
                 "samples",
             )
             if raw.get(key) is not None

@@ -54,6 +54,21 @@ def main() -> int:
         "work_units",
         "seed",
         "aggregation",
+        "detector_backend",
+        "detector_fallback_reason",
+        "model_name",
+        "video_asset",
+        "confidence_threshold",
+        "nms_threshold",
+        "gpu_device",
+        "gpu_assigned",
+        "annotated_frame_index",
+        "annotated_frame_content_type",
+        "annotated_frame_data_url",
+        "detection_count",
+        "top_label",
+        "top_confidence",
+        "detections",
         "samples",
     )
     result_meta = {key: result[key] for key in metadata_keys if key in result}
@@ -70,6 +85,11 @@ def main() -> int:
                     "name": "video-result.json",
                     "uri": result_uri,
                     "content_type": "application/json",
+                },
+                {
+                    "name": "annotated-frame-preview",
+                    "uri": "inline://result_metadata/annotated_frame_data_url",
+                    "content_type": result_meta.get("annotated_frame_content_type", "image/jpeg"),
                 }
             ],
             "result": result_meta,

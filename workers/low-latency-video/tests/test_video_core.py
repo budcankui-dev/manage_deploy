@@ -23,3 +23,7 @@ def test_video_profile_reports_p90_latency():
     assert result["resolution"] == "720p"
     assert result["fps"] == 30
     assert result["aggregation"] == "p90_after_warmup"
+    assert result["annotated_frame_data_url"].startswith("data:image/")
+    assert result["detection_count"] >= 1
+    assert result["detections"]
+    assert result["detections"][0]["bbox_xyxy"]

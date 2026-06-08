@@ -565,7 +565,7 @@ const sampleRows = computed(() => {
     }
     const modality = parsedResult?.modality || expectedResult?.modality || samplePayload?.expected?.modality
     const failed = Object.entries(details)
-      .filter(([, detail]) => !isDetailOk(detail))
+      .filter(([field, detail]) => !isDetailOk(detail, field))
       .map(([field]) => fieldLabel(field, true))
     return {
       sample_id: item.sample_id,
@@ -702,8 +702,9 @@ function resultTagType(match) {
   return match ? 'success' : 'danger'
 }
 
-function isDetailOk(detail) {
+function isDetailOk(detail, field = '') {
   if (detail?.expected === 'present') return detail.got != null
+  if (field === 'modality') return modalityLabel(detail?.expected) === modalityLabel(detail?.got)
   return JSON.stringify(detail?.expected) === JSON.stringify(detail?.got)
 }
 
@@ -712,7 +713,7 @@ function detailRows(details) {
     field,
     expected: detail.expected,
     got: detail.got,
-    ok: isDetailOk(detail),
+    ok: isDetailOk(detail, field),
   }))
 }
 

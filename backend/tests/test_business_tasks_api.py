@@ -889,6 +889,83 @@ async def test_cleanup_order_instance_preserves_business_evidence(client, db_ses
 
 
 @pytest.mark.asyncio
+async def test_order_detail_exposes_video_preview_metadata(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(client, db_session, username="video-preview-admin", role=UserRole.ADMIN)
+
+    payload = {
+        "external_task_id": "intent-video-preview-evidence",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "视频预览证据测试",
+        "data_profile": {"profile_id": "video_industrial_inspection_720p", "measured_frames": 30},
+        "business_objective": {
+            "metric_key": "frame_latency_p90_ms",
+            "operator": "<=",
+            "target_value": 500,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": {
+                "source": node_ids[0],
+                "compute": node_ids[1],
+                "sink": node_ids[2],
+            },
+        },
+        "auto_start": False,
+    }
+    create_response = await client.post("/api/business-tasks", json=payload)
+    assert create_response.status_code == 200
+    body = create_response.json()
+    order_id = body["order_id"]
+    instance_id = body["instance_id"]
+
+    metric_response = await client.post(
+        f"/api/instances/{instance_id}/metrics",
+        json={
+            "metric_key": "frame_latency_p90_ms",
+            "metric_value": 120.5,
+            "unit": "ms",
+            "tags": {
+                "objects": [
+                    {
+                        "name": "annotated-frame-preview",
+                        "uri": "inline://result_metadata/annotated_frame_data_url",
+                        "content_type": "image/jpeg",
+                    }
+                ],
+                "result": {
+                    "frame_latency_p90_ms": 120.5,
+                    "measured_frames": 30,
+                    "model_name": "yolov5n",
+                    "video_asset": "bottle-detection.mp4",
+                    "gpu_assigned": True,
+                    "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+                    "detection_count": 1,
+                    "top_label": "bottle",
+                    "detections": [
+                        {"label": "bottle", "confidence": 0.93, "bbox_xyxy": [10, 20, 100, 160]}
+                    ],
+                },
+            },
+        },
+    )
+    assert metric_response.status_code == 200
+
+    evaluation_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
+    assert evaluation_response.status_code == 200
+    assert evaluation_response.json()["result_metadata"]["annotated_frame_data_url"].startswith("data:image/")
+
+    detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+    assert detail_response.status_code == 200
+    metadata = detail_response.json()["evaluation"]["result_metadata"]
+    assert metadata["model_name"] == "yolov5n"
+    assert metadata["gpu_assigned"] is True
+    assert metadata["detections"][0]["label"] == "bottle"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_order_instances_can_scope_by_benchmark_run_and_task_type(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     headers, _admin = await _auth_headers(
@@ -1093,6 +1170,36 @@ async def test_business_task_list_api(client, db_session):
     (
         {"result": {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3}, "compute_latency_ms": 0.99},
         {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3},
+    ),
+    # Video preview metadata used by management/user detail pages
+    (
+        {
+            "result": {
+                "frame_latency_p90_ms": 120.5,
+                "measured_frames": 30,
+                "detector_backend": "opencv_dnn_cpu",
+                "model_name": "yolov5n",
+                "video_asset": "bottle-detection.mp4",
+                "gpu_assigned": True,
+                "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+                "detection_count": 1,
+                "top_label": "bottle",
+                "detections": [{"label": "bottle", "confidence": 0.93}],
+                "raw_frame_bytes": "prune_me",
+            }
+        },
+        {
+            "frame_latency_p90_ms": 120.5,
+            "measured_frames": 30,
+            "detector_backend": "opencv_dnn_cpu",
+            "model_name": "yolov5n",
+            "video_asset": "bottle-detection.mp4",
+            "gpu_assigned": True,
+            "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+            "detection_count": 1,
+            "top_label": "bottle",
+            "detections": [{"label": "bottle", "confidence": 0.93}],
+        },
     ),
 ])
 def test_extract_result_metadata(tags, expected_keys):

@@ -22,6 +22,7 @@ import httpx
 from config import settings
 from services.intent_parser import ParseResult, parse_intent
 from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _validate_and_clean
+from services.modality_catalog import normalize_modality
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,10 +145,12 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
     match = True
 
     for key in ("task_type", "modality", "source_name", "destination_name", "parse_status"):
+        if key not in expected:
+            continue
         exp_val = expected.get(key)
         got_val = getattr(parsed, key, None)
         details[key] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
+        if not _detail_matches(key, exp_val, got_val):
             match = False
 
     expected_profile = expected.get("data_profile") or {}
@@ -155,7 +158,7 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
         exp_val = expected_profile.get(key)
         got_val = _field_value(parsed, key)
         details[key] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
+        if not _detail_matches(key, exp_val, got_val):
             match = False
 
     expected_runtime = expected.get("runtime_plan") or {}
@@ -163,7 +166,7 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
         exp_val = expected_runtime.get(key)
         got_val = _field_value(parsed, key)
         details[key] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
+        if not _detail_matches(key, exp_val, got_val):
             match = False
 
     expected_time = expected.get("expected_time") or {}
@@ -194,6 +197,14 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
     return {"match": match, "details": details}
 
 
+def _detail_matches(field: str, expected: Any, got: Any) -> bool:
+    if expected == "present":
+        return got is not None
+    if field == "modality":
+        return normalize_modality(expected) == normalize_modality(got)
+    return expected == got
+
+
 def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     by_case: dict[str, dict[str, Any]] = {}
     by_field: dict[str, dict[str, int]] = {}
@@ -207,10 +218,7 @@ def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
         run = (item.get("runs") or [{}])[0]
         for field, detail in (run.get("details") or {}).items():
-            if detail.get("expected") == "present":
-                ok = detail.get("got") is not None
-            else:
-                ok = detail.get("expected") == detail.get("got")
+            ok = _detail_matches(field, detail.get("expected"), detail.get("got"))
             field_row = by_field.setdefault(field, {"total": 0, "correct": 0})
             field_row["total"] += 1
             field_row["correct"] += 1 if ok else 0

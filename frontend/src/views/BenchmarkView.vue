@@ -542,6 +542,7 @@ const deleteLoading = ref(false)
 const selectedOrderId = ref('')
 const selectedOrderIds = ref([])
 const selectedOrderDetail = ref(null)
+const dataLoadGeneration = ref(0)
 const initialBenchmarkRunId = typeof route.query.benchmark_run_id === 'string'
   ? route.query.benchmark_run_id
   : (localStorage.getItem(BENCHMARK_RUN_STORAGE_KEY) || '')
@@ -908,6 +909,24 @@ function handleOrderSelectionChange(rows) {
   selectedOrderIds.value = rows.map(row => row.id).filter(Boolean)
 }
 
+function buildDataLoadSnapshot() {
+  return {
+    generation: dataLoadGeneration.value,
+    taskType: taskType.value,
+    benchmarkRunId: currentBenchmarkRunId.value,
+  }
+}
+
+function isCurrentDataLoad(snapshot) {
+  return snapshot.generation === dataLoadGeneration.value &&
+    snapshot.taskType === taskType.value &&
+    snapshot.benchmarkRunId === currentBenchmarkRunId.value
+}
+
+function isGeneratedBenchmarkRunId(runId) {
+  return Object.keys(taskConfigs).some(task => runId.startsWith(`${task}-`))
+}
+
 async function loadNodes() {
   nodesLoading.value = true
   try {
@@ -919,9 +938,11 @@ async function loadNodes() {
 }
 
 async function loadBaselines() {
+  const snapshot = buildDataLoadSnapshot()
   baselinesLoading.value = true
   try {
     const { data } = await baselinesApi.list({ task_type: taskType.value })
+    if (!isCurrentDataLoad(snapshot)) return
     baselines.value = data
   } finally {
     baselinesLoading.value = false
@@ -929,11 +950,13 @@ async function loadBaselines() {
 }
 
 async function loadOrders() {
+  const snapshot = buildDataLoadSnapshot()
   const params = { is_benchmark: true, task_type: taskType.value, limit: 100 }
   if (currentBenchmarkRunId.value) {
     params.benchmark_run_id = currentBenchmarkRunId.value
   }
   const { data } = await ordersApi.list(params)
+  if (!isCurrentDataLoad(snapshot)) return
   orders.value = Array.isArray(data) ? data : (data.items || [])
   if (!currentBenchmarkRunId.value) {
     const latestRunId = orders.value.find(order => order.runtime_config?.benchmark?.run_id)
@@ -946,11 +969,13 @@ async function loadOrders() {
 }
 
 async function loadSummary() {
+  const snapshot = buildDataLoadSnapshot()
   const params = { is_benchmark: true, task_type: taskType.value }
   if (currentBenchmarkRunId.value) {
     params.benchmark_run_id = currentBenchmarkRunId.value
   }
   const { data } = await businessApi.summary(params)
+  if (!isCurrentDataLoad(snapshot)) return
   summary.value = data
   dashboardUpdatedAt.value = formatTime(new Date())
 }
@@ -980,6 +1005,7 @@ function newBenchmarkRunId() {
 }
 
 function setCurrentBenchmarkRunId(runId) {
+  dataLoadGeneration.value += 1
   currentBenchmarkRunId.value = runId || ''
   if (runId) {
     localStorage.setItem(BENCHMARK_RUN_STORAGE_KEY, runId)
@@ -1209,9 +1235,14 @@ async function startFullFlow() {
 }
 
 watch(taskType, async () => {
+  dataLoadGeneration.value += 1
   selectedOrderDetail.value = null
   detailDrawerVisible.value = false
-  if (currentBenchmarkRunId.value && !currentBenchmarkRunId.value.startsWith(taskType.value)) {
+  if (
+    currentBenchmarkRunId.value &&
+    isGeneratedBenchmarkRunId(currentBenchmarkRunId.value) &&
+    !currentBenchmarkRunId.value.startsWith(`${taskType.value}-`)
+  ) {
     setCurrentBenchmarkRunId('')
   }
   await Promise.all([loadBaselines(), loadOrders(), loadSummary()])
