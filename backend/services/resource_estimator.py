@@ -7,6 +7,7 @@ eliminating inconsistencies between dag_builder and routing_payload_builder.
 from __future__ import annotations
 
 import re
+import math
 from typing import Any
 
 
@@ -104,6 +105,49 @@ def estimate_data_mb(task_type: str, data_profile: dict[str, Any] | None = None)
 
     if task_type == "high_throughput_matmul":
         ms = profile.get("matrix_size", 1024)
-        return max(1, int(ms * ms * 8 / (1024 * 1024)))
+        # Two FP32 input matrices plus a compact result/metadata envelope.
+        return max(1, int(ms * ms * 4 * 2 / (1024 * 1024)))
+
+    if task_type == "low_latency_video_pipeline":
+        height = _parse_resolution_height(profile.get("resolution", 720))
+        width = int(height * 16 / 9)
+        frame_count = int(profile.get("frame_count", profile.get("measured_frames", 90)) or 90)
+        stride = max(1, int(profile.get("frame_stride", 30) or 30))
+        sampled_frames = max(1, math.ceil(frame_count / stride))
+        # Acceptance demo sends compressed/sampled frame payloads, not raw video.
+        compressed_ratio = 0.08
+        frame_mb = width * height * 3 * compressed_ratio / (1024 * 1024)
+        return max(1, int(math.ceil(frame_mb * sampled_frames)))
+
+    if task_type == "llm_text_generation":
+        prompt = int(profile.get("prompt_tokens", 512) or 512)
+        output = int(profile.get("max_new_tokens", 256) or 256)
+        return max(1, int(math.ceil((prompt + output) * 4 / (1024 * 1024))))
 
     return 20
+
+
+def estimate_bandwidth_mbps(task_type: str, data_profile: dict[str, Any] | None = None) -> int:
+    """Estimate required link bandwidth between adjacent DAG nodes.
+
+    The value is intentionally conservative and explainable for acceptance:
+    it gives the external routing system a usable network constraint before
+    we have enough production measurements to replace it with empirical data.
+    """
+    profile = data_profile or {}
+    data_mb = estimate_data_mb(task_type, profile)
+
+    if task_type == "high_throughput_matmul":
+        return _clamp(max(10, data_mb * 2), 10, 1000)
+
+    if task_type == "low_latency_video_pipeline":
+        fps = int(profile.get("fps", 30) or 30)
+        stride = max(1, int(profile.get("frame_stride", 30) or 30))
+        effective_fps = max(1, math.ceil(fps / stride))
+        # Keep a floor so the route visibly prefers a healthy data path.
+        return _clamp(max(20, data_mb * 8 * effective_fps), 20, 1000)
+
+    if task_type == "llm_text_generation":
+        return 10
+
+    return _clamp(max(10, data_mb * 2), 10, 500)

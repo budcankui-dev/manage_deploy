@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from services.resource_estimator import estimate_resources, estimate_data_mb
+from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
 
 
 def build_routing_payload(
@@ -140,6 +140,7 @@ def _build_dag_edges(
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的边列表，表达业务数据流向。"""
     data_mb = estimate_data_mb(task_type, data_profile)
+    bandwidth_mbps = estimate_bandwidth_mbps(task_type, data_profile)
 
     if len(nodes) < 2:
         return []
@@ -150,5 +151,6 @@ def _build_dag_edges(
             "from": nodes[i]["node_id"],
             "to": nodes[i + 1]["node_id"],
             "data_mb": data_mb,
+            "bandwidth_mbps": bandwidth_mbps,
         })
     return edges

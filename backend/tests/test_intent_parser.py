@@ -27,7 +27,7 @@ def test_parse_unknown_task_is_incomplete():
     result = parse_intent("帮我订外卖")
     assert result.task_type is None
     assert result.parse_status == "incomplete"
-    assert "当前支持矩阵乘法" in result.assistant_message
+    assert "八类模态" in result.assistant_message
 
 
 def test_parse_matmul_extracts_required_fields():

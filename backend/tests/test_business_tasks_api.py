@@ -553,8 +553,8 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["job_name"] == "视频AI推理"
     assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert dag["edges"] == [
-        {"from": "source", "to": "compute", "data_mb": 20},
-        {"from": "compute", "to": "sink", "data_mb": 20},
+        {"from": "source", "to": "compute", "data_mb": 2, "bandwidth_mbps": 20},
+        {"from": "compute", "to": "sink", "data_mb": 2, "bandwidth_mbps": 20},
     ]
 
 

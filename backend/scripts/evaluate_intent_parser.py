@@ -8,63 +8,42 @@
 
 import argparse
 from collections import Counter
+from datetime import datetime
 import json
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.intent_parser import parse_intent
+from services.intent_batch_eval import score_parsed_result
 
 VALID_NODES = ["compute-1", "compute-2", "compute-3"]
 
 
-def _field_value(parsed, key: str):
-    if key in ("matrix_size", "batch_count"):
-        return (parsed.data_profile or {}).get(key)
-    if key == "routing_strategy":
-        return (parsed.runtime_plan or {}).get(key)
-    return getattr(parsed, key, None)
+def _parsed_payload(parsed) -> dict:
+    return {
+        "task_type": parsed.task_type,
+        "modality": parsed.modality,
+        "source_name": parsed.source_name,
+        "destination_name": parsed.destination_name,
+        "business_start_time": str(parsed.business_start_time) if parsed.business_start_time else None,
+        "business_end_time": str(parsed.business_end_time) if parsed.business_end_time else None,
+        "data_profile": parsed.data_profile,
+        "runtime_plan": parsed.runtime_plan,
+        "business_objective": parsed.business_objective,
+        "parse_status": parsed.parse_status,
+        "validation_errors": parsed.validation_errors,
+    }
 
 
 def _evaluate_once(utterance: str, expected: dict) -> dict:
     parsed = parse_intent(utterance, valid_nodes=VALID_NODES)
-    details = {}
-    match = True
-
-    for key in ("task_type", "source_name", "destination_name", "parse_status"):
-        exp_val = expected.get(key)
-        got_val = getattr(parsed, key, None)
-        details[key] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
-            match = False
-
-    expected_profile = expected.get("data_profile") or {}
-    for key in ("matrix_size", "batch_count"):
-        exp_val = expected_profile.get(key)
-        got_val = _field_value(parsed, key)
-        details[key] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
-            match = False
-
-    expected_runtime = expected.get("runtime_plan") or {}
-    if "routing_strategy" in expected_runtime:
-        exp_val = expected_runtime.get("routing_strategy")
-        got_val = _field_value(parsed, "routing_strategy")
-        details["routing_strategy"] = {"expected": exp_val, "got": got_val}
-        if exp_val != got_val:
-            match = False
-
-    if expected.get("parse_status") == "valid":
-        for key in ("business_start_time", "business_end_time"):
-            got_val = getattr(parsed, key, None)
-            details[key] = {"expected": "present", "got": str(got_val) if got_val else None}
-            if got_val is None:
-                match = False
-
+    scored = score_parsed_result(parsed, expected)
     return {
-        "match": match,
-        "details": details,
+        **scored,
+        "parsed_result": _parsed_payload(parsed),
         "parser_name": parsed.parser_name,
         "parser_version": parsed.parser_version,
     }
@@ -96,12 +75,18 @@ def evaluate(dataset_path: str, output_path: str | None = None, repeats: int = 3
                 correct += 1
 
             results.append({
+                "sample_id": sample.get("sample_id", f"sample-{total - 1:04d}"),
+                "case_type": sample.get("case_type", "valid"),
                 "utterance": utterance,
+                "expected": expected,
+                "sample_payload": sample,
                 "match": match,
                 "runs": run_results,
             })
 
     report = {
+        "evaluation_id": f"cli-eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}",
+        "engine": "rule_parser_cli",
         "total": total,
         "correct": correct,
         "accuracy": correct / total if total > 0 else 0,

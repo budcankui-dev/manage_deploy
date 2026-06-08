@@ -18,6 +18,7 @@ import httpx
 
 from config import settings
 from services.intent_parser import ParseResult, validate_draft_fields
+from services.modality_catalog import default_objective_for_task_type, modality_for_task_type
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +28,18 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 
 ## 支持的业务类型
 
-当前系统支持三类业务：
+当前意图解析评测覆盖以下业务/模态：
 - 矩阵乘法计算任务（task_type: "high_throughput_matmul"）
 - 低时延视频链路/视频AI推理任务（task_type: "low_latency_video_pipeline"）
 - 大模型文本生成/LLM 推理任务（task_type: "llm_text_generation"）
+- 文本模型训练任务（task_type: "ai_model_training"）
+- 分布式存算任务（task_type: "distributed_storage_compute"）
+- 大规模连接采集任务（task_type: "massive_connection_collect"）
+- 确定性转发任务（task_type: "deterministic_forwarding"）
+- 高能效边缘推理任务（task_type: "energy_efficient_edge_inference"）
+- 高安全传输任务（task_type: "secure_transmission"）
 
-如果用户描述的不是上述三类任务，task_type 设为 null 并在 assistant_message 中告知用户当前支持这三类任务。
+如果用户描述的不是上述任务，task_type 设为 null 并在 assistant_message 中告知用户当前支持矩阵计算、视频推理和八类模态测试样本。
 
 ## 必填参数
 
@@ -62,7 +69,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 ## 输出 JSON 格式（严格遵守，不得添加额外字段）
 
 {
-  "task_type": "high_throughput_matmul|low_latency_video_pipeline|llm_text_generation" 或 null,
+  "task_type": "high_throughput_matmul|low_latency_video_pipeline|llm_text_generation|ai_model_training|distributed_storage_compute|massive_connection_collect|deterministic_forwarding|energy_efficient_edge_inference|secure_transmission" 或 null,
   "source_name": "string 或 null",
   "destination_name": "string 或 null",
   "start_time": "ISO格式时间字符串 或 'now' 或 null",
@@ -111,9 +118,15 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 
 
 MODALITY_MAP = {
-    "high_throughput_matmul": "high_throughput_compute",
-    "low_latency_video_pipeline": "low_latency_forwarding",
-    "llm_text_generation": "llm_text",
+    "high_throughput_matmul": modality_for_task_type("high_throughput_matmul"),
+    "low_latency_video_pipeline": modality_for_task_type("low_latency_video_pipeline"),
+    "llm_text_generation": modality_for_task_type("llm_text_generation"),
+    "ai_model_training": modality_for_task_type("ai_model_training"),
+    "distributed_storage_compute": modality_for_task_type("distributed_storage_compute"),
+    "massive_connection_collect": modality_for_task_type("massive_connection_collect"),
+    "deterministic_forwarding": modality_for_task_type("deterministic_forwarding"),
+    "energy_efficient_edge_inference": modality_for_task_type("energy_efficient_edge_inference"),
+    "secure_transmission": modality_for_task_type("secure_transmission"),
 }
 
 
@@ -300,7 +313,18 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
     """Validate LLM output fields. Invalid fields are set to None (won't overwrite existing draft)."""
     cleaned = dict(raw)
 
-    allowed_task_types = {None, "high_throughput_matmul", "low_latency_video_pipeline", "llm_text_generation"}
+    allowed_task_types = {
+        None,
+        "high_throughput_matmul",
+        "low_latency_video_pipeline",
+        "llm_text_generation",
+        "ai_model_training",
+        "distributed_storage_compute",
+        "massive_connection_collect",
+        "deterministic_forwarding",
+        "energy_efficient_edge_inference",
+        "secure_transmission",
+    }
     if cleaned.get("task_type") not in allowed_task_types:
         cleaned["task_type"] = None
 
@@ -338,6 +362,12 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
         "prompt_tokens",
         "max_new_tokens",
         "batch_size",
+        "sample_count",
+        "data_size_gb",
+        "connection_count",
+        "max_jitter_ms",
+        "power_budget_w",
+        "security_level",
     ):
         value = cleaned.get(key)
         if value is None:
@@ -473,12 +503,8 @@ def _raw_to_parse_result(
             "operator": "<=",
             "unit": "ms",
         }
-    elif task_type == "llm_text_generation":
-        business_objective = {
-            "metric_key": "tokens_per_second",
-            "operator": ">=",
-            "unit": "tokens/s",
-        }
+    else:
+        business_objective = default_objective_for_task_type(task_type)
 
     result = ParseResult(
         task_type=task_type,

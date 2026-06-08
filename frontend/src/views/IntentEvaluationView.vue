@@ -5,8 +5,8 @@
         <p class="eyebrow">意图解析评测</p>
         <h1>数据集意图解析参数提取准确率</h1>
         <p class="subtitle">
-          数据集由模板和槽位替换构造，覆盖口语化、中英文混写、缺字段、错误节点和噪声文本。
-          正式 LLM 评测通过阿里云百炼 DashScope Batch API 异步完成。
+          数据集由模板和槽位替换构造，覆盖八类模态、四种路由策略倾向、口语化表达、缺字段、错误节点和噪声文本。
+          正式评测通过真实大模型/智能体异步完成，规则解析仅作为兜底回归。
         </p>
       </div>
       <div class="hero-actions">
@@ -107,6 +107,16 @@
             </template>
           </el-table-column>
         </el-table>
+        <h3 class="subsection-title">模态覆盖</h3>
+        <el-table :data="modalityCountRows" size="small" border>
+          <el-table-column prop="modality_label" label="所属模态" min-width="180" />
+          <el-table-column prop="count" label="数量" width="100" />
+          <el-table-column label="占比" width="180">
+            <template #default="{ row }">
+              <el-progress :percentage="percentage(row.count, dataset.total)" :show-text="false" />
+            </template>
+          </el-table-column>
+        </el-table>
       </el-card>
 
       <el-card class="panel-card">
@@ -137,7 +147,7 @@
           type="warning"
           show-icon
           :closable="false"
-          title="当前大模型报告与最新 Batch 任务编号不一致，请同步进度或重新运行评测后再作为验收截图。"
+          title="当前大模型报告与最新 Batch 任务或当前数据集不一致，请同步进度或重新运行评测后再作为验收截图。"
         />
         <div class="download-row">
           <el-button size="small" type="warning" plain @click="refreshBatch" :loading="batchRefreshing" :disabled="!batchJob">
@@ -216,6 +226,21 @@
         </div>
       </template>
       <div class="parser-check">
+        <el-select
+          v-model="selectedSampleId"
+          filterable
+          clearable
+          placeholder="可选：从评测样本中选择一条用例"
+          class="sample-select"
+          @change="applySelectedSample"
+        >
+          <el-option
+            v-for="sample in sampleRows"
+            :key="sample.sample_id"
+            :label="`${sample.sample_id} · ${sample.modality_label} · ${sample.utterance.slice(0, 42)}`"
+            :value="sample.sample_id"
+          />
+        </el-select>
         <el-input
           v-model="parserInput"
           type="textarea"
@@ -231,6 +256,10 @@
           <el-descriptions-item :label="fieldLabel('task_type')">
             {{ taskTypeLabel(parserResult.task_type) }}
             <small class="raw-value">{{ parserResult.task_type || '-' }}</small>
+          </el-descriptions-item>
+          <el-descriptions-item :label="fieldLabel('modality')">
+            <el-tag size="small" type="success">{{ modalityLabel(parserResult.modality) }}</el-tag>
+            <small class="raw-value">{{ parserResult.modality || '-' }}</small>
           </el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('parse_status')">
             <el-tag :type="parseStatusType(parserResult.parse_status)" size="small">
@@ -258,6 +287,28 @@
           />
         </div>
         <div class="json-grid">
+          <section v-if="parserResult.scoring">
+            <h3>单样本字段判定</h3>
+            <el-table :data="parserScoringRows" size="small" border>
+              <el-table-column label="字段" width="150">
+                <template #default="{ row }">
+                  {{ fieldLabel(row.field) }}
+                  <small class="raw-value">{{ row.field }}</small>
+                </template>
+              </el-table-column>
+              <el-table-column label="期望值" min-width="160">
+                <template #default="{ row }">{{ stringifyValue(row.expected) }}</template>
+              </el-table-column>
+              <el-table-column label="解析值" min-width="160">
+                <template #default="{ row }">{{ stringifyValue(row.got) }}</template>
+              </el-table-column>
+              <el-table-column label="是否正确" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '正确' : '错误' }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
           <section>
             <h3>{{ fieldLabel('data_profile') }}</h3>
             <el-table :data="parserProfileRows" size="small" border>
@@ -296,6 +347,10 @@
               <el-table-column prop="value" label="值" show-overflow-tooltip />
             </el-table>
             <pre class="details-json">{{ JSON.stringify(parserResult.business_objective || {}, null, 2) }}</pre>
+          </section>
+          <section v-if="parserResult.routing_dag">
+            <h3>路由 DAG JSON</h3>
+            <pre class="details-json">{{ JSON.stringify(parserResult.routing_dag || {}, null, 2) }}</pre>
           </section>
         </div>
       </div>
@@ -355,6 +410,7 @@
                   <el-descriptions-item label="业务目的节点">{{ row.parsed_result?.destination_name || '-' }}</el-descriptions-item>
                   <el-descriptions-item label="解析状态">{{ parseStatusLabel(row.parsed_result?.parse_status) }}</el-descriptions-item>
                   <el-descriptions-item label="任务类型">{{ taskTypeLabel(row.parsed_result?.task_type) }}</el-descriptions-item>
+                  <el-descriptions-item label="所属模态">{{ row.modality_label }}</el-descriptions-item>
                 </el-descriptions>
               </section>
               <section class="expand-json-grid">
@@ -390,6 +446,11 @@
             <small class="raw-value">{{ row.case_type }}</small>
           </template>
         </el-table-column>
+        <el-table-column label="所属模态" width="170">
+          <template #default="{ row }">
+            <el-tag size="small" type="success" effect="plain">{{ row.modality_label }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="utterance" label="输入" min-width="320" show-overflow-tooltip />
         <el-table-column prop="parsed_summary" label="解析结果" min-width="300" show-overflow-tooltip />
         <el-table-column label="失败字段" min-width="200">
@@ -413,7 +474,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adminApi } from '@/api'
-import { taskTypeLabel } from '@/constants/businessTaskDisplay'
+import { modalityLabel, taskTypeLabel } from '@/constants/businessTaskDisplay'
 
 const latest = ref(null)
 const loading = ref(false)
@@ -429,6 +490,7 @@ const parserInput = ref('')
 const parserResult = ref(null)
 const parserLoading = ref(false)
 const selectedModel = ref('')
+const selectedSampleId = ref('')
 const autoRefreshTimer = ref(null)
 
 const dataset = computed(() => latest.value?.dataset || {})
@@ -449,7 +511,7 @@ const batchRequestCountsText = computed(() => {
 const isLlmReportCurrent = computed(() => {
   if (!llmReport.value || !batchJob.value) return true
   const reportId = llmReport.value.evaluation_id || llmReport.value.batch_job_id
-  return reportId === batchJob.value.job_id
+  return reportId === batchJob.value.job_id && isReportDatasetCurrent(llmReport.value, dataset.value)
 })
 const activeReportMeta = computed(() => {
   const report = activeReport.value
@@ -468,6 +530,14 @@ const caseCountRows = computed(() =>
   Object.entries(dataset.value.case_counts || {}).map(([case_type, count]) => ({
     case_type,
     case_label: caseTypeLabel(case_type),
+    count,
+  }))
+)
+
+const modalityCountRows = computed(() =>
+  Object.entries(dataset.value.modality_counts || {}).map(([modality, count]) => ({
+    modality,
+    modality_label: modalityLabel(modality),
     count,
   }))
 )
@@ -493,6 +563,7 @@ const sampleRows = computed(() => {
       utterance: item.utterance,
       expected: expectedResult,
     }
+    const modality = parsedResult?.modality || expectedResult?.modality || samplePayload?.expected?.modality
     const failed = Object.entries(details)
       .filter(([, detail]) => !isDetailOk(detail))
       .map(([field]) => fieldLabel(field, true))
@@ -509,6 +580,8 @@ const sampleRows = computed(() => {
       raw_llm_response: rawLlmResponse,
       sample_payload: samplePayload,
       parsed_summary: buildParsedSummary(parsedResult),
+      modality,
+      modality_label: modalityLabel(modality),
       failed_fields: failed,
     }
   })
@@ -534,6 +607,8 @@ const sampleResultCounts = computed(() => {
 const parserProfileRows = computed(() => describeObject(parserResult.value?.data_profile))
 const parserPlanRows = computed(() => describeObject(parserResult.value?.runtime_plan))
 const parserObjectiveRows = computed(() => describeObject(parserResult.value?.business_objective))
+const parserScoringRows = computed(() => detailRows(parserResult.value?.scoring?.details || {}))
+const selectedSample = computed(() => sampleRows.value.find(item => item.sample_id === selectedSampleId.value) || null)
 
 const CASE_TYPE_LABELS = {
   valid: '有效样本',
@@ -564,6 +639,7 @@ const PARSE_STATUS_LABELS = {
 
 const FIELD_LABELS = {
   task_type: '任务类型',
+  modality: '所属模态',
   parse_status: '解析状态',
   source_name: '业务源节点',
   destination_name: '业务目的节点',
@@ -592,6 +668,7 @@ const FIELD_LABELS = {
   target_value: '目标值',
   unit: '单位',
   missing_params: '缺失字段键',
+  routing_dag: '路由 DAG',
 }
 
 function caseTypeLabel(value) {
@@ -652,6 +729,7 @@ function buildParsedSummary(result) {
   const plan = result.runtime_plan || {}
   const parts = [
     taskTypeLabel(result.task_type),
+    modalityLabel(result.modality),
     result.parse_status ? parseStatusLabel(result.parse_status) : '',
     result.source_name && result.destination_name ? `${result.source_name} → ${result.destination_name}` : '',
   ].filter(Boolean)
@@ -684,11 +762,19 @@ function formatAccuracy(report) {
 function reportSummary(report) {
   if (!report) return { ratio: '尚未生成', date: '-', id: '评测编号 -' }
   const id = report.evaluation_id || report.batch_job_id || report.batch_id || '-'
+  const staleText = isReportDatasetCurrent(report, dataset.value) ? '' : ' · 数据集已更新'
   return {
     ratio: `${report.correct}/${report.total}`,
     date: formatDateText(report.generated_at) || '-',
-    id: `评测编号 ${id}`,
+    id: `评测编号 ${id}${staleText}`,
   }
+}
+
+function isReportDatasetCurrent(report, currentDataset) {
+  const currentHash = currentDataset?.sha256
+  const reportHash = report?.dataset?.sha256
+  if (!currentHash || !reportHash) return !currentHash && !reportHash
+  return currentHash === reportHash
 }
 
 function formatDateText(value) {
@@ -765,7 +851,9 @@ async function loadLatest() {
         ? data.batch_job.model
         : evalModelOptions.value[0] || ''
     }
-    if (!data.llm_report && data.rule_report) activeReportType.value = 'rule'
+    if ((!data.llm_report || !isReportDatasetCurrent(data.llm_report, data.dataset)) && data.rule_report) {
+      activeReportType.value = 'rule'
+    }
   } finally {
     loading.value = false
   }
@@ -866,11 +954,19 @@ async function testParse() {
   }
   parserLoading.value = true
   try {
-    const { data } = await adminApi.parseOne({ utterance })
+    const payload = { utterance }
+    if (selectedSample.value?.expected_result) payload.expected = selectedSample.value.expected_result
+    const { data } = await adminApi.parseOne(payload)
     parserResult.value = data
   } finally {
     parserLoading.value = false
   }
+}
+
+function applySelectedSample() {
+  if (!selectedSample.value) return
+  parserInput.value = selectedSample.value.utterance
+  parserResult.value = null
 }
 
 watch([activeReportType, resultFilter, samplePageSize], () => {

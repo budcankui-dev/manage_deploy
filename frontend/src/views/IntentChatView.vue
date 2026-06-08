@@ -224,6 +224,7 @@
               <strong>参数已完整</strong>
               <div class="confirm-params">
                 <p v-if="draft?.task_type"><span class="param-label">任务类型：</span>{{ taskTypeLabel(draft.task_type) }}</p>
+                <p v-if="draft?.modality"><span class="param-label">所属模态：</span>{{ modalityLabel(draft.modality) }}</p>
                 <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ draft.source_name || '-' }} → {{ draft.destination_name || '-' }}</p>
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-if="draft?.data_profile?.matrix_size"><span class="param-label">规模：</span>{{ draft.data_profile.matrix_size }}×{{ draft.data_profile.matrix_size }} 矩阵 × {{ draft.data_profile.batch_count || 1 }} 批</p>
@@ -415,6 +416,7 @@
         </template>
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
           <el-descriptions-item label="源节点">{{ draft.source_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
@@ -427,6 +429,11 @@
         <div v-if="draft?.validation_errors?.length" class="errors">
           <el-alert v-for="(item, index) in draft.validation_errors" :key="index" :title="item" type="warning" show-icon :closable="false" />
         </div>
+        <el-collapse v-if="draft?.routing_dag_preview" class="raw-collapse">
+          <el-collapse-item title="路由 DAG JSON 预览" name="draft-dag">
+            <pre class="json-block">{{ pretty(draft.routing_dag_preview) }}</pre>
+          </el-collapse-item>
+        </el-collapse>
       </el-card>
 
       <el-card class="panel-card">
@@ -465,6 +472,11 @@
             <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
             <el-descriptions-item label="节点分配">{{ routing.placements ? `${routing.placements.source} → ${routing.placements.compute} → ${routing.placements.sink}` : '-' }}</el-descriptions-item>
           </el-descriptions>
+          <el-collapse v-if="routing.input_payload" class="raw-collapse">
+            <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input">
+              <pre class="json-block">{{ pretty(routing.input_payload) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
         </div>
         <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
           <el-icon class="is-loading"><Loading /></el-icon>
@@ -498,7 +510,7 @@ import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refre
 import { conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import {
-  taskTypeLabel, describeDataProfile, taskTypeSummary,
+  modalityLabel, taskTypeLabel, describeDataProfile, taskTypeSummary,
   buildMatmulInputRows, buildMatmulOutputRows,
   buildMatmulParamConsistency, buildMatmulVerdict,
   MATMUL_PIPELINE_STEPS
@@ -606,6 +618,11 @@ function formatBubbleTime(value) {
   if (!value) return ''
   const d = new Date(value)
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function pretty(value) {
+  if (!value) return '{}'
+  return JSON.stringify(value, null, 2)
 }
 
 function parseStatusType(status) {
@@ -1683,6 +1700,21 @@ onBeforeUnmount(stopRoutingPolling)
 }
 
 .routing-summary { margin-bottom: 12px; }
+
+.raw-collapse {
+  margin-top: 12px;
+}
+
+.json-block {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.55;
+}
 
 .routing-waiting {
   display: flex;

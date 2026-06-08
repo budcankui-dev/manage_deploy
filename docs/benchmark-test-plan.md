@@ -14,7 +14,7 @@
 
 当前正式主验收业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
-第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式四节点 30 任务验收主链路仍优先使用矩阵乘法，避免一次验收同时引入过多变量。
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 生成固定帧元数据，compute 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；近期目标是跑通真实四节点 30 任务压测并达到业务目标成功率不低于 90%。
 
 ## 验收指标
 
@@ -146,6 +146,7 @@
 外部路由系统接入时：
 
 - 工单创建时生成 `task_orders.routing_input_dag`。
+- `routing_input_dag.edges[]` 除 `data_mb` 外还包含 `bandwidth_mbps`，表达源节点、业务计算节点、目的节点之间的链路约束。当前值由任务类型和数据画像估算，后续可替换为实测基准。
 - 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。对话/工单主链路使用 `POST /api/routing-results/{routing_request_id}`，验收工单可直接使用 `POST /api/orders/{order_id}/routing-result`。两者都要表达 `source`、`compute/worker`、`sink` placements，compute 节点可携带 `gpu_device` 或 `gpu_indices`。
 - 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。当前 `/benchmark` 一键路由写回 list 形式 placements，例如 `[{node_id:"compute", worker_host:"compute-3", gpu_device:"0"}]`；正式路由系统可使用更丰富的 dict 形式，平台按角色解析。
 - 如果多个业务类型复用同一个 source/compute/sink 模板，平台会优先根据工单 `runtime_config.business_task.task_type` 定位 `business_template_catalog`，避免只按 `template_id` 查找时出现多条 catalog 歧义。

@@ -53,6 +53,7 @@ class IntentDraftResponse(BaseModel):
     business_objective: Optional[dict[str, Any]] = None
     runtime_plan: Optional[dict[str, Any]] = None
     resource_requirement: Optional[dict[str, Any]] = None
+    routing_dag_preview: Optional[dict[str, Any]] = None
     validation_errors: Optional[list[str]] = None
     parse_status: ParseStatus
     parser_name: Optional[str] = None

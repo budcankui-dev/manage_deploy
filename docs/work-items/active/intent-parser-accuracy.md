@@ -1,7 +1,7 @@
 # Work Item: 意图解析准确率验收闭环
 
-Status: ready_for_review
-Last Updated: 2026-06-03
+Status: in_progress
+Last Updated: 2026-06-08
 
 ## 当前目标
 
@@ -19,25 +19,28 @@ Last Updated: 2026-06-03
 
 ## 当前业务边界
 
-当前意图解析验收固定覆盖三类业务：
+系统端到端真实部署演示优先支持两类业务：
 
 ```text
 task_type = high_throughput_matmul
 task_type = low_latency_video_pipeline
-task_type = llm_text_generation
 ```
+
+意图解析准确率数据集可以覆盖更多业务和模态，但这些扩展样本仅用于验证自然语言参数提取能力，不要求每一种模态都具备完整部署镜像。
+
+模态命名与数据集扩展方案见 `docs/modality-taxonomy-and-intent-expansion.md`。后续数据集应覆盖图中记录的模态名称，建议直接覆盖 8 种；若验收口径最终只要求 7 种，则保证至少 7 种模态有有效样本。
 
 ## 已完成
 
 - 新增模板生成脚本：`backend/scripts/generate_intent_dataset.py`
 - 扩展评测脚本：`backend/scripts/evaluate_intent_parser.py`
-- 生成 360 条三业务 JSONL 数据集：`datasets/intent_eval/multi_business.jsonl`
+- 生成 360 条多业务 JSONL 数据集：`datasets/intent_eval/multi_business.jsonl`
 - 本地规则解析评测：`360/360 = 100.00%`
 - 评测报告：`reports/intent_eval.json`
 - 后端规则解析补齐：`matrix_size`、`batch_count`、`routing_strategy`、必填参数完整性校验。
 - 后端规则解析增强：合法节点列表校验，错误节点不会被计为成功提取。
 - 后端规则解析增强：支持口语化、中英文混写、箭头表达、字段顺序打乱和无关噪声文本。
-- 前端示例问题收敛为矩阵乘法任务，不再展示视频/LLM 示例。
+- 前端示例问题优先展示可部署的矩阵乘法和视频 AI 推理任务；其他模态仅用于意图解析评测覆盖。
 - 对话流式接口改为先结构化解析，再输出确定性回复，避免 LLM 自由回复在参数完整时继续追问。
 - 对话 API E2E 测试改为矩阵任务：创建对话 → 发送消息 → draft valid → confirm-intent → routing-result → submit。
 - 前端可视化 E2E 已补充：打开 `/intent-chat` → 输入完整矩阵任务 → 查看右侧参数面板 → 点击确认提交任务 → 验证工单进入待路由状态。
@@ -63,7 +66,12 @@ task_type = llm_text_generation
   - 评测编号、生成时间、Batch 请求计数，以及运行中自动同步状态
   - 按 case_type 的准确率进度条
   - 成功/失败样本明细表
-  - 单条解析检测卡片
+- 单条解析检测卡片
+- 扩展到 8 个模态标签和 9 类意图任务，正式可部署业务仍为矩阵计算、视频 AI 推理。
+- 数据集路由策略表达从固定枚举改为自然倾向表达：无特殊偏好、性能/完成时间优先、空闲/负载均衡、成本/资源节省。
+- 单条解析检测支持选择评测样本作为输入，并展示字段判定、中文模态标签和路由 DAG JSON 预览。
+- 用户端意图解析结果、管理端意图评测样本和业务任务中心已展示“所属模态”。
+- 路由 DAG 预览的 `edges[]` 已补充 `bandwidth_mbps`，与 `data_mb` 一起提供给外部路由系统。
 
 ## 数据集覆盖
 
@@ -74,7 +82,7 @@ task_type = llm_text_generation
 - wrong_source_node：22 条
 - wrong_destination_node：21 条
 
-样本字段覆盖矩阵规模/批次数、视频帧数/分辨率/fps、LLM prompt tokens/max_new_tokens/batch_size、路由策略、节点名称写错和缺失时间等场景。相对时间表达额外标注 `expected_time.duration_minutes`，仅用于评测时校验 `business_end_time - business_start_time`，不是业务工单字段。
+样本字段覆盖矩阵规模/批次数、视频帧数/分辨率/fps、LLM prompt tokens/max_new_tokens/batch_size、训练样本数、存算数据量、连接数、抖动上限、边缘推理功耗预算、安全等级、路由策略、节点名称写错和缺失时间等场景。相对时间表达额外标注 `expected_time.duration_minutes`，仅用于评测时校验 `business_end_time - business_start_time`，不是业务工单字段。
 
 ## 本轮验证
 
@@ -84,8 +92,8 @@ cd backend
 ./venv/bin/python -c "from services.intent_batch_eval import run_rule_evaluation; r=run_rule_evaluation(); print(r['correct'], r['total'])"
 # 360 360
 
-./venv/bin/python -m pytest tests/test_conversations_api.py tests/test_intent_parser.py tests/test_business_tasks.py tests/test_order_sync.py
-# 17 passed
+./venv/bin/python -m pytest tests/test_intent_parser.py tests/test_conversations_api.py tests/test_business_tasks.py tests/test_business_tasks_api.py tests/test_order_sync.py
+# 41 passed
 
 cd ../frontend
 npm run build
@@ -109,7 +117,7 @@ npm run build
 
 浏览器已验证 `/intent-evaluation` 可以显示固定数据集、规则评测、case_type 分布、成功/失败样本和单条解析检测入口。
 
-真实大模型 Batch 已提交：
+历史真实大模型 Batch 记录：
 
 ```text
 job_id: intent-eval-20260603-222617-90569be4
@@ -125,6 +133,8 @@ output: reports/intent_eval_batches/intent-eval-20260603-222617-90569be4/output.
 time_scoring: 338/338 duration_minutes matched
 ```
 
+注意：上述 `intent-eval-20260603-222617-90569be4` 是 2026-06-03 旧数据集结果。2026-06-08 数据集扩展到 8 个模态、9 类任务和更丰富的路由倾向表达后，页面会将该 LLM 报告标记为“数据集已更新”，不应作为当前扩展数据集的正式验收截图。正式提交前需要重新运行一次大模型/智能体 Batch 评测并更新 `reports/intent_eval_llm.json`。
+
 排查记录：`batch-test-model` 官方 smoke Batch 可在约 25 秒完成；`qwen3.7-plus` 1 条 smoke Batch 可完成。2026-06-03 21:24 使用 1 条 JSON 示例请求继续测试 `qwen3.7-max`、`qwen3.6-plus`、`qwen3.6-flash`、`qwen3.5-plus`、`qwen3.5-flash`、`qwen3-max`、`qwen-plus`，600 秒内均停留在 `in_progress 0/1` 并超时取消。随后去掉 `response_format` 进行基础 Batch 推理补充测试，`qwen3.7-max`、`qwen3.6-plus` 仍在 300 秒内 `in_progress 0/1` 超时。2026-06-03 21:44 按百炼支持列表补测 `qwen3.7-plus`、`qwen-plus-latest`、`qwen-flash`、`qwen-long`、`qwen3-max`，其中 `qwen3.7-plus` 与 `qwen-long` 在 420 秒内完成 1/1；`qwen-plus-latest`、`qwen-flash`、`qwen3-max` 仍为 `0/1` 超时。因此当前正式 Batch 评测下拉框仅保留 `qwen3.7-plus`、`qwen-long`，避免把不能稳定完成的模型纳入验收流程。
 
 前端 E2E 截图：
@@ -136,3 +146,5 @@ time_scoring: 338/338 duration_minutes matched
 
 - 生成评审材料：数据集构造说明、样本覆盖表、准确率 JSON 报告、失败样本分析和前端截图。
 - 可选增强：将 `reports/intent_eval.json` / `reports/intent_eval_llm.json` 转成更适合放入测试方案的 Markdown/图表摘要。
+- 用扩展后的 8 模态数据集重新跑一次正式大模型/智能体 Batch 评测，并更新 `reports/intent_eval_llm.json`。
+- 用浏览器补齐 `/intent-evaluation`、`/intent-chat`、`/business-tasks` 的演示截图。

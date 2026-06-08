@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -99,11 +100,16 @@ def dataset_summary() -> dict[str, Any]:
     rows = load_dataset()
     case_counts = Counter(row.get("case_type", "valid") for row in rows)
     task_counts = Counter((row.get("expected") or {}).get("task_type", "unknown") for row in rows)
+    modality_counts = Counter((row.get("expected") or {}).get("modality", "unknown") for row in rows)
+    dataset_bytes = DATASET_PATH.read_bytes() if DATASET_PATH.exists() else b""
     return {
         "path": str(DATASET_PATH.relative_to(REPO_ROOT)),
         "total": len(rows),
+        "sha256": hashlib.sha256(dataset_bytes).hexdigest() if dataset_bytes else None,
+        "updated_at": _format_datetime(datetime.fromtimestamp(DATASET_PATH.stat().st_mtime)) if DATASET_PATH.exists() else None,
         "case_counts": dict(case_counts),
         "task_counts": dict(task_counts),
+        "modality_counts": dict(modality_counts),
         "valid_nodes": VALID_NODES,
     }
 
@@ -137,7 +143,7 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
     details: dict[str, Any] = {}
     match = True
 
-    for key in ("task_type", "source_name", "destination_name", "parse_status"):
+    for key in ("task_type", "modality", "source_name", "destination_name", "parse_status"):
         exp_val = expected.get(key)
         got_val = getattr(parsed, key, None)
         details[key] = {"expected": exp_val, "got": got_val}

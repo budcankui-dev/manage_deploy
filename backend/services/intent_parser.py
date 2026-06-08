@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
+from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
+
 
 @dataclass
 class ParseResult:
@@ -56,6 +58,7 @@ def _extract_source_destination(text: str) -> tuple[str | None, str | None]:
     destination = None
     patterns = [
         rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*到\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*发起到\s*[\"']?({NODE_TOKEN})[\"']?\s*汇总",
         rf"({NODE_TOKEN})\s*(?:->|→)\s*({NODE_TOKEN})",
         rf"(?:业务)?源(?:节点|终端)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?.*?(?:业务)?目的(?:节点|终端|地)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:src|source)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?.*?(?:dst|dest|destination)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?",
@@ -200,11 +203,11 @@ def _extract_llm_batch_size(text: str) -> int | None:
 
 def _extract_routing_strategy(text: str) -> str:
     lower = text.lower()
-    if any(k in lower for k in ("最快", "尽快", "完成时间", "高性能", "fast")):
+    if any(k in lower for k in ("最快", "更快", "尽快", "完成时间", "高性能", "性能更高", "性能优先", "处理速度", "吞吐性能", "少排队", "尽早跑完", "低时延", "fast")):
         return "fastest_completion"
-    if any(k in lower for k in ("负载", "空闲", "均衡", "load")):
+    if any(k in lower for k in ("负载", "空闲", "均衡", "竞争少", "低负载", "避开高负载", "抢资源", "均摊", "更平衡", "load")):
         return "load_balance"
-    if any(k in lower for k in ("成本", "省钱", "便宜", "cost")):
+    if any(k in lower for k in ("成本", "省钱", "便宜", "少占资源", "低成本", "费用", "省资源", "经济型", "cost")):
         return "cost_priority"
     return "resource_guarantee"
 
@@ -259,9 +262,9 @@ def parse_intent(
     if end_t:
         result.business_end_time = end_t
 
-    if any(k in lower for k in ("矩阵", "matmul", "matrix_size", "matrix", "乘法", "吞吐")):
+    if any(k in lower for k in ("矩阵", "matmul", "matrix_size", "matrix", "乘法")):
         result.task_type = result.task_type or "high_throughput_matmul"
-        result.modality = result.modality or "high_throughput_compute"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "matmul_synthetic")
         result.data_profile.setdefault("source", "synthetic")
         matrix_size = _extract_matrix_size(text)
@@ -300,9 +303,14 @@ def parse_intent(
                 "operator": ">=",
                 "unit": "GFLOPS",
             }
-    elif any(k in lower for k in ("视频", "video", "帧", "fps", "低时延", "低延时")):
+    elif any(k in lower for k in ("视频", "video", "帧", "fps", "低时延视频", "低延时视频")) and not any(
+        k in lower for k in (
+            "高能效", "边缘计算", "边缘推理", "低功耗", "输电线路巡检", "就近处理",
+            "功耗", "能耗", "轻量识别", "巡检图片", "高安全", "安全传输", "加密", "敏感", "安全等级",
+        )
+    ):
         result.task_type = result.task_type or "low_latency_video_pipeline"
-        result.modality = result.modality or "low_latency_forwarding"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "video_synthetic")
         result.data_profile.setdefault("source", "synthetic")
         frame_count = _extract_frame_count(text)
@@ -326,9 +334,9 @@ def parse_intent(
         }
         if latency is not None:
             result.business_objective["target_value"] = latency
-    elif any(k in lower for k in ("llm", "大模型", "文本生成", "token", "prompt", "模型训练", "文本模型")):
+    elif any(k in lower for k in ("llm", "大模型", "文本生成", "token", "prompt")):
         result.task_type = result.task_type or "llm_text_generation"
-        result.modality = result.modality or "llm_text"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "llm_synthetic")
         result.data_profile.setdefault("source", "synthetic")
         prompt_tokens = _extract_prompt_tokens(text)
@@ -353,11 +361,71 @@ def parse_intent(
         }
         if throughput is not None:
             result.business_objective["target_value"] = throughput
-
+    elif any(k in lower for k in ("智算中心", "智算", "模型训练", "训练任务", "训练类", "样本数", "训练样本", "神经网络训练", "训练吞吐")):
+        result.task_type = result.task_type or "ai_model_training"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "ai_training_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("sample_count", int(_extract_number(text, [
+            r"(\d{2,7})\s*(?:条)?样本",
+            r"样本数\s*[:：]?\s*(\d{2,7})",
+            r"训练样本\s*[:：]?\s*(\d{2,7})",
+            r"samples?\s*[:=]?\s*(\d{2,7})",
+        ]) or 10000))
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("分布式存算", "存算", "视联网", "就近计算", "多节点存储", "数据拉取")):
+        result.task_type = result.task_type or "distributed_storage_compute"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "distributed_storage_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("data_size_gb", int(_extract_number(text, [r"(\d{1,5})\s*(?:gb|GB|g|G|吉)"]) or 100))
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("大规模连接", "大规模接入", "海量连接", "海量接入", "虚拟电厂", "终端接入", "连接数", "并发连接", "终端上报", "设备连接")):
+        result.task_type = result.task_type or "massive_connection_collect"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "massive_connection_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("connection_count", int(_extract_number(text, [
+            r"(\d{2,7})\s*(?:个)?(?:终端|连接|用户|设备)",
+            r"连接数\s*[:：]?\s*(\d{2,7})",
+            r"并发连接\s*[:：]?\s*(\d{2,7})",
+        ]) or 10000))
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("确定性转发", "确定性", "抖动", "配电线路", "稳定转发")):
+        result.task_type = result.task_type or "deterministic_forwarding"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "deterministic_forwarding_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("max_jitter_ms", int(_extract_number(text, [
+            r"抖动.*?(\d{1,4})\s*ms",
+            r"jitter\s*(?:[:=]?|控制在)\s*(\d{1,4})\s*ms",
+        ]) or 5))
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("高能效", "边缘计算", "边缘推理", "低功耗", "输电线路巡检", "就近处理", "轻量识别", "巡检图片", "能耗")):
+        result.task_type = result.task_type or "energy_efficient_edge_inference"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "edge_inference_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("frame_count", int(_extract_frame_count(text) or 90))
+        result.data_profile.setdefault("power_budget_w", int(_extract_number(text, [r"(\d{1,4})\s*w", r"功耗.*?(\d{1,4})", r"能耗.*?(\d{1,4})"]) or 50))
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("高安全", "安全传输", "加密", "低空远程", "敏感数据", "安全回传")):
+        result.task_type = result.task_type or "secure_transmission"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "secure_transmission_default")
+        result.data_profile.setdefault("source", "synthetic")
+        result.data_profile.setdefault("security_level", "high")
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
     if not result.task_type:
         result.validation_errors.append("无法识别为已支持的业务任务")
         result.parse_status = "incomplete"
-        result.assistant_message = "当前支持矩阵乘法计算、低时延视频链路、LLM 文本生成三类任务。请说明任务类型、源节点、目的节点和开始/结束时间。"
+        result.assistant_message = "当前可解析矩阵计算、视频推理和八类模态测试样本。请说明任务类型、源节点、目的节点和开始/结束时间。"
         return result
 
     # 业务目标合理性校验
@@ -428,7 +496,8 @@ def parse_intent(
         target = obj.get("target_value")
         target_text = f" {op} {target}{obj.get('unit', '')}" if target is not None else "按节点历史基线判定"
         result.assistant_message = (
-            f"已解析：任务类型 {result.task_type}，"
+            f"已解析：任务类型 {task_name_for_task_type(result.task_type)}，"
+            f"所属模态 {result.modality or '-'}，"
             f"从 {result.source_name} 到 {result.destination_name}，"
             f"业务目标 {obj.get('metric_key')}{target_text}。"
             "请确认或补充参数后请求路由。"

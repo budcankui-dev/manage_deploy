@@ -142,6 +142,11 @@
             <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain" style="margin-left:6px">压测</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="所属模态" min-width="150">
+          <template #default="{ row }">
+            <el-tag size="small" type="success" effect="plain">{{ modalityLabel(row.modality) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="路由策略" min-width="130">
           <template #default="{ row }">{{ routingPolicyLabel(row.routing_policy) }}</template>
         </el-table-column>
@@ -498,6 +503,7 @@ import {
   describeObjectiveMeaning,
   describeRuntimePlan,
   formatObjectiveSentence,
+  modalityLabel,
   taskTypeLabel,
   taskTypeSummary,
 } from '@/constants/businessTaskDisplay'

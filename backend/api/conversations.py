@@ -22,13 +22,13 @@ from schemas import (
     ConversationResponse,
     ConversationSubmitResponse,
     ConversationSummary,
+    IntentDraftResponse,
     IntentDraftUpdate,
     RoutingResult,
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
-from services.dag_builder import build_matmul_dag
 
 from .business_tasks import create_business_task
 
@@ -385,22 +385,7 @@ async def confirm_intent(
             raise HTTPException(status_code=409, detail="工单已创建，请勿重复提交")
         raise
 
-    # 生成路由 DAG 并写入工单
-    dp = draft.data_profile or {}
-    rp = draft.runtime_plan or {}
-    dag = build_matmul_dag(
-        order_id=order.id,
-        source_name=draft.source_name,
-        destination_name=draft.destination_name,
-        business_start_time=draft.business_start_time,
-        business_end_time=draft.business_end_time,
-        matrix_size=dp.get("matrix_size"),
-        batch_count=dp.get("batch_count"),
-        routing_strategy=rp.get("routing_strategy"),
-    )
-    order.routing_input_dag = dag
-
-    # 生成外部路由 DAG payload
+    # 生成外部路由 DAG payload，并同步作为工单路由输入，避免页面与路由请求出现两套 DAG。
     input_payload = build_routing_payload(
         order_id=order.id,
         order_name=order.name,
@@ -413,6 +398,7 @@ async def confirm_intent(
         data_profile=draft.data_profile,
         resource_requirement=draft.resource_requirement,
     )
+    order.routing_input_dag = input_payload
 
     # 创建 RoutingRequest
     routing = RoutingRequest(
@@ -596,6 +582,22 @@ async def _get_conversation_detail(
 
     draft = await _get_latest_draft(db, conversation.id)
     routing = await _get_latest_routing(db, conversation.id)
+    draft_response = None
+    if draft:
+        draft_response = IntentDraftResponse.model_validate(draft)
+        if draft.parse_status == ParseStatus.VALID:
+            draft_response.routing_dag_preview = build_routing_payload(
+                order_id=conversation.id,
+                order_name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
+                task_type=draft.task_type,
+                modality=draft.modality,
+                source_name=draft.source_name,
+                destination_name=draft.destination_name,
+                business_start_time=draft.business_start_time,
+                business_end_time=draft.business_end_time,
+                data_profile=draft.data_profile,
+                resource_requirement=draft.resource_requirement,
+            )
     return ConversationResponse(
         id=conversation.id,
         task_id=conversation.id,
@@ -607,7 +609,7 @@ async def _get_conversation_detail(
         updated_at=conversation.updated_at,
         workflow_trace=conversation.workflow_trace,
         messages=sorted(conversation.messages, key=lambda item: item.created_at),
-        latest_draft=draft,
+        latest_draft=draft_response,
         latest_routing_request=routing,
     )
 

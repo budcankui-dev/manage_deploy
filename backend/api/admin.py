@@ -36,8 +36,10 @@ from services.intent_batch_eval import (
     refresh_latest_llm_batch,
     run_rule_evaluation,
     submit_llm_batch_evaluation,
+    score_parsed_result,
 )
 from services.intent_parser import parse_intent
+from services.routing_payload_builder import build_routing_payload
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -46,6 +48,49 @@ def _format_dt(value: datetime | None) -> str | None:
     if not value:
         return None
     return value.replace(microsecond=0).isoformat(sep=" ")
+
+
+def _parse_result_payload(result) -> dict[str, Any]:
+    return {
+        "task_type": result.task_type,
+        "modality": result.modality,
+        "source_name": result.source_name,
+        "destination_name": result.destination_name,
+        "business_start_time": _format_dt(result.business_start_time),
+        "business_end_time": _format_dt(result.business_end_time),
+        "data_profile": result.data_profile,
+        "business_objective": result.business_objective,
+        "runtime_plan": result.runtime_plan,
+        "resource_requirement": result.resource_requirement,
+        "parse_status": result.parse_status,
+        "validation_errors": result.validation_errors,
+        "assistant_message": result.assistant_message,
+        "parser_name": result.parser_name,
+        "parser_version": result.parser_version,
+    }
+
+
+def _routing_dag_preview(result, order_id: str = "preview") -> dict[str, Any] | None:
+    if not (
+        result.task_type
+        and result.source_name
+        and result.destination_name
+        and result.business_start_time
+        and result.business_end_time
+    ):
+        return None
+    return build_routing_payload(
+        order_id=order_id,
+        order_name=f"{result.task_type}-{order_id}",
+        task_type=result.task_type,
+        modality=result.modality,
+        source_name=result.source_name,
+        destination_name=result.destination_name,
+        business_start_time=result.business_start_time,
+        business_end_time=result.business_end_time,
+        data_profile=result.data_profile,
+        resource_requirement=result.resource_requirement,
+    )
 
 
 # ─── 用户管理 ───────────────────────────────────────────────
@@ -273,24 +318,14 @@ async def parse_one(
     """管理员测试单条意图解析。"""
     utterance = payload.get("utterance", "")
     context = payload.get("context")
+    expected = payload.get("expected")
     result = parse_intent(utterance, context, valid_nodes=VALID_NODES)
-    return {
-        "task_type": result.task_type,
-        "modality": result.modality,
-        "source_name": result.source_name,
-        "destination_name": result.destination_name,
-        "business_start_time": _format_dt(result.business_start_time),
-        "business_end_time": _format_dt(result.business_end_time),
-        "data_profile": result.data_profile,
-        "business_objective": result.business_objective,
-        "runtime_plan": result.runtime_plan,
-        "resource_requirement": result.resource_requirement,
-        "parse_status": result.parse_status,
-        "validation_errors": result.validation_errors,
-        "assistant_message": result.assistant_message,
-        "parser_name": result.parser_name,
-        "parser_version": result.parser_version,
-    }
+    response = _parse_result_payload(result)
+    response["routing_dag"] = _routing_dag_preview(result)
+    if isinstance(expected, dict):
+        response["expected_result"] = expected
+        response["scoring"] = score_parsed_result(result, expected)
+    return response
 
 
 @router.get("/intent-parser/evaluations/latest")

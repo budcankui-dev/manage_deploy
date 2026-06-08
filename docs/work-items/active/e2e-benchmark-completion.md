@@ -1,7 +1,7 @@
 # Work Item: 端到端验收测试完善
 
 Status: in_progress  
-Last Updated: 2026-06-02
+Last Updated: 2026-06-08
 
 ## 已完成
 
@@ -42,8 +42,10 @@ Last Updated: 2026-06-02
 
 ## 待完成
 
-### 高优先级
-- [ ] 视频推理 worker（source/compute/sink + Dockerfile，YOLO）
+- [x] 视频AI推理 worker（source/compute/sink + Dockerfile，先使用轻量可复现固定帧序列，跑通后再考虑 YOLO）
+- [ ] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=90，每个可调度节点重复 3 次取中位数
+- [ ] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足节点历史基准 × 1.2，成功率达到 90%
+- [ ] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情和结果摘要
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
 - [ ] 前端：LLM prompt 输入 + 生成文本展示
@@ -51,8 +53,65 @@ Last Updated: 2026-06-02
 ### 中优先级
 - [ ] 真实路由系统对接（替换 mock 随机路由）
 - [ ] 实例删除时同步清理 Node Agent 容器注册（当前只删 DB 记录）
-- [ ] 意图解析数据集扩展到 200 条
+- [ ] 意图解析固定数据集继续保持 360 条口径，扩展样本覆盖多模态命名并加入模态标签
 
 ### 验收
 - matmul 批量压测 30 任务成功率 ≥ 90%（端口并发已支持）
+- 视频AI推理基本链路跑通：源节点按固定帧序列发送数据，推理节点统计有效帧时延，目的节点或结果回调能够展示输出摘要
+- 视频AI推理批量压测 30 任务成功率 ≥ 90%
 - 意图解析准确率 ≥ 90%（需构建数据集）
+
+## 近期执行顺序
+
+1. 先跑通视频AI推理单任务端到端链路，确认容器启动、数据流、指标上报和结果展示都真实可见。
+2. 再补视频AI推理基线采集与批量工单成功率统计。
+3. 最后优化验收测试页面展示，使矩阵计算和视频AI推理两个演示业务都能给专家展示完整证据链。
+
+## 视频业务真实四节点最小执行序列
+
+```bash
+# 构建并推送 AMD64 视频 worker 镜像
+WORKER_KIND=video \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+WORKER_PUSH=1 \
+WORKER_PLATFORM=linux/amd64 \
+./scripts/build_workers.sh
+
+# 重建视频模板和 catalog
+DEMO_BASE_URL=http://127.0.0.1:8000 \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+PYTHONPATH=backend \
+backend/venv/bin/python backend/scripts/rebuild_video_template.py
+
+# 登录后执行视频 baseline
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/baselines/batch-run \
+  -H 'Content-Type: application/json' \
+  -d '{"task_type":"low_latency_video_pipeline","runs":3}'
+
+# 创建 30 个视频验收工单
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/batch-benchmark \
+  -H 'Content-Type: application/json' \
+  -d '{"task_type":"low_latency_video_pipeline","count":30,"benchmark_run_id":"video-acceptance-001"}'
+
+# 临时 mock 路由；正式对接时由外部路由系统写回 placements
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/batch-auto-route \
+  -H 'Content-Type: application/json' \
+  -d '{"benchmark_run_id":"video-acceptance-001","task_type":"low_latency_video_pipeline"}'
+
+# 启动本轮已路由实例
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/start-all-routed \
+  -H 'Content-Type: application/json' \
+  -d '{"benchmark_run_id":"video-acceptance-001","task_type":"low_latency_video_pipeline"}'
+```
+
+风险记录：
+
+- `batch-auto-route` 是验收闭环 mock，不保证选中有 GPU 的 compute 节点；真实验收和外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"` 或 `gpu_indices`。
+- 视频 worker 当前是轻量确定性推理替身，业务目标用 `frame_latency_p90_ms <= baseline * 1.2` 判定，重点展示随路计算、GPU 分配、指标上报和成功率统计闭环。
+- 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。

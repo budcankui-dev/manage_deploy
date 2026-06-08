@@ -2,6 +2,26 @@ export const TASK_TYPE_LABELS = {
   high_throughput_matmul: '矩阵乘法计算任务',
   low_latency_video_pipeline: '视频AI推理任务',
   llm_text_generation: '大模型文本生成任务',
+  ai_model_training: '文本模型训练任务',
+  distributed_storage_compute: '分布式存算任务',
+  massive_connection_collect: '大规模连接采集任务',
+  deterministic_forwarding: '确定性转发任务',
+  energy_efficient_edge_inference: '高能效边缘推理任务',
+  secure_transmission: '高安全传输任务',
+}
+
+export const MODALITY_LABELS = {
+  high_throughput_compute: '高通量计算模态',
+  low_latency_forwarding: '低时延转发模态',
+  llm_text: '智算中心模态',
+  高通量计算模态: '高通量计算模态',
+  低时延转发模态: '低时延转发模态',
+  智算中心模态: '智算中心模态',
+  分布式存算模态: '分布式存算模态',
+  大规模连接模态: '大规模连接模态',
+  确定性转发模态: '确定性转发模态',
+  高能效边缘计算模态: '高能效边缘计算模态',
+  高安全传输模态: '高安全传输模态',
 }
 
 export const TASK_TYPE_SUMMARIES = {
@@ -36,6 +56,11 @@ export const MATMUL_PIPELINE_STEPS = [
 export function taskTypeLabel(taskType) {
   if (!taskType) return '-'
   return TASK_TYPE_LABELS[taskType] || taskType
+}
+
+export function modalityLabel(modality) {
+  if (!modality) return '-'
+  return MODALITY_LABELS[modality] || modality
 }
 
 export function taskTypeSummary(taskType) {
