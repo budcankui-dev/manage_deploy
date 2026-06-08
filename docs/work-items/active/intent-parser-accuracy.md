@@ -117,6 +117,21 @@ npm run build
 
 浏览器已验证 `/intent-evaluation` 可以显示固定数据集、规则评测、case_type 分布、成功/失败样本和单条解析检测入口。
 
+当前扩展数据集真实大模型 Batch 已通过：
+
+```text
+job_id: intent-eval-20260608-174844-8ca41b57
+model: qwen3.7-plus
+status: completed
+sample_count: 360
+correct: 348
+accuracy: 96.7%
+passed: true
+report: reports/intent_eval_llm.json
+dataset_sha256: adaf5c30ffa7fd63d23cf84fed338dcb1ad2a9c7882f4d4c96b42ab794d20caa
+failure_summary: 12 个失败样本均为 routing_strategy 字段，主要是“尽量少占资源”被模型判为 load_balance，而数据集标注为 cost_priority。
+```
+
 历史真实大模型 Batch 记录：
 
 ```text
@@ -133,7 +148,7 @@ output: reports/intent_eval_batches/intent-eval-20260603-222617-90569be4/output.
 time_scoring: 338/338 duration_minutes matched
 ```
 
-注意：上述 `intent-eval-20260603-222617-90569be4` 是 2026-06-03 旧数据集结果。2026-06-08 数据集扩展到 8 个模态、9 类任务和更丰富的路由倾向表达后，页面会将该 LLM 报告标记为“数据集已更新”，不应作为当前扩展数据集的正式验收截图。正式提交前需要重新运行一次大模型/智能体 Batch 评测并更新 `reports/intent_eval_llm.json`。
+注意：上述 `intent-eval-20260603-222617-90569be4` 是 2026-06-03 旧数据集结果。2026-06-08 数据集扩展到 8 个模态、9 类任务和更丰富的路由倾向表达后，页面会将该 LLM 报告标记为“数据集已更新”，不应作为当前扩展数据集的正式验收截图；当前有效记录以上方 `intent-eval-20260608-174844-8ca41b57` 为准。
 
 排查记录：`batch-test-model` 官方 smoke Batch 可在约 25 秒完成；`qwen3.7-plus` 1 条 smoke Batch 可完成。2026-06-03 21:24 使用 1 条 JSON 示例请求继续测试 `qwen3.7-max`、`qwen3.6-plus`、`qwen3.6-flash`、`qwen3.5-plus`、`qwen3.5-flash`、`qwen3-max`、`qwen-plus`，600 秒内均停留在 `in_progress 0/1` 并超时取消。随后去掉 `response_format` 进行基础 Batch 推理补充测试，`qwen3.7-max`、`qwen3.6-plus` 仍在 300 秒内 `in_progress 0/1` 超时。2026-06-03 21:44 按百炼支持列表补测 `qwen3.7-plus`、`qwen-plus-latest`、`qwen-flash`、`qwen-long`、`qwen3-max`，其中 `qwen3.7-plus` 与 `qwen-long` 在 420 秒内完成 1/1；`qwen-plus-latest`、`qwen-flash`、`qwen3-max` 仍为 `0/1` 超时。因此当前正式 Batch 评测下拉框仅保留 `qwen3.7-plus`、`qwen-long`，避免把不能稳定完成的模型纳入验收流程。
 
@@ -146,5 +161,4 @@ time_scoring: 338/338 duration_minutes matched
 
 - 生成评审材料：数据集构造说明、样本覆盖表、准确率 JSON 报告、失败样本分析和前端截图。
 - 可选增强：将 `reports/intent_eval.json` / `reports/intent_eval_llm.json` 转成更适合放入测试方案的 Markdown/图表摘要。
-- 用扩展后的 8 模态数据集重新跑一次正式大模型/智能体 Batch 评测，并更新 `reports/intent_eval_llm.json`。
 - 用浏览器补齐 `/intent-evaluation`、`/intent-chat`、`/business-tasks` 的演示截图。
