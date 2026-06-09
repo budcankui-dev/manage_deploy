@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import settings
 from database import get_db
 from enums import DeploymentMode, NodeStatus, TaskStatus
 from models import (
@@ -632,7 +633,11 @@ async def get_instance(
             select(NodeModel).where(NodeModel.id == inst_node.node_id)
         )).scalar_one_or_none()
         if machine:
-            object.__setattr__(inst_node, "business_address", get_business_address(machine))
+            object.__setattr__(
+                inst_node,
+                "business_address",
+                get_business_address(machine, settings.prefer_business_ipv6),
+            )
         else:
             object.__setattr__(inst_node, "business_address", None)
 

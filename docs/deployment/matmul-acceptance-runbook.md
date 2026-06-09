@@ -79,6 +79,27 @@ curl -sS http://10.112.244.94:8181/docs >/dev/null
 curl -sS http://10.112.244.94:8181/api/nodes | python3 -m json.tool
 ```
 
+启用业务面 IPv6 时，管理节点 `backend/.env` 至少确认：
+
+```bash
+PREFER_BUSINESS_IPV6=true
+BACKEND_PORT=8181
+```
+
+`BACKEND_PORT` 必须等于实际后端端口。该值会参与生成 worker 容器内的 `MANAGER_API_BASE`；如果仍是默认 `8000`，source/compute/sink 的 IPv6 数据面可能跑通，但 sink 指标回写会失败。
+
+后端重启后检查日志：
+
+```bash
+ssh manage-admin "grep 'Resolved MANAGER_PUBLIC_URL' /home/bupt/manage_deploy/backend/backend.log | tail -1"
+```
+
+期望包含：
+
+```text
+Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181
+```
+
 ## 3. AMD64 Worker 镜像
 
 在 `admin-server` 构建并推送，不要使用本地 macOS ARM64 镜像：
@@ -115,6 +136,30 @@ EOF
 ```
 
 该备用路径只适用于已确认旧镜像基础依赖正确的验收环境。若改动涉及系统包、Python 依赖或 CUDA 版本，仍需恢复网络后完整重建。
+
+如果只是刷新公共业务通信代码（例如 `_common/http_server.py` 的 IPv6 双栈监听修复），且现场网络无法访问 Docker Hub / apt / NVIDIA 源，可使用更小的补丁镜像路径：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  printf 'FROM localhost:5000/scientific-matmul:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
+    >/tmp/Dockerfile.scientific-matmul-ipv6 && \
+  docker build -f /tmp/Dockerfile.scientific-matmul-ipv6 \
+    -t 10.112.244.94:5000/scientific-matmul:dev workers && \
+  docker push 10.112.244.94:5000/scientific-matmul:dev"
+```
+
+视频 worker 同理：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  printf 'FROM 10.112.244.94:5000/low-latency-video:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
+    >/tmp/Dockerfile.low-latency-video-ipv6 && \
+  docker build -f /tmp/Dockerfile.low-latency-video-ipv6 \
+    -t 10.112.244.94:5000/low-latency-video:dev workers && \
+  docker push 10.112.244.94:5000/low-latency-video:dev"
+```
+
+推送后，三台业务节点必须重新 `docker pull` 对应 tag。Node Agent 不会自动拉取已存在的同名旧 tag。
 
 重建矩阵乘法模板，确保模板镜像指向私有仓库：
 
@@ -191,6 +236,21 @@ MATMUL_BATCH_COUNT=50 \
 ```
 
 E2E 通过后再进入页面完整验收，避免专家演示时暴露镜像架构或 Node Agent 问题。
+
+IPv6 数据面验证必须额外抽查真实容器，而不是只看 `OK`：
+
+```bash
+docker inspect <container_name> --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E 'PEER_.*_URL|TASK_PEERS_JSON|MANAGER_API_BASE'
+docker logs --tail 50 <sink_container_name>
+```
+
+期望：
+
+- `PEER_*_URL` 使用 `http://[2001:...]:port` 方括号 IPv6 URL。
+- `TASK_PEERS_JSON` 中 `business_address` 为 IPv6。
+- `MANAGER_API_BASE=http://10.112.244.94:8181`。
+- sink 日志出现 `SINK_DONE`，业务评估返回 `business_success=true`。
 
 ## 6. 页面验收流程
 

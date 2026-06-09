@@ -159,6 +159,38 @@ sudo systemctl restart docker
 - compute-3 已固定为静态 IP `10.112.59.209/16`，默认路由 `10.112.0.1`，Node Agent 地址 `http://10.112.59.209:8001`。
 - admin-server 上已有私有 registry 容器 `registry:2`，地址为 `10.112.244.94:5000`。
 
+## 业务面 IPv6 配置
+
+当前验收拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。
+
+| 节点 | 10.112 网卡 | 业务 IPv6 | 调度 |
+|------|-------------|-----------|------|
+| admin-server | `eno1` | `2001:da8:215:6a01:d6ae:52ff:fec9:1188` | 否 |
+| compute-1 | `enp4s0` | `2001:da8:215:6a01:ad10:31fd:fe24:5f61` | 是 |
+| compute-2 | `enp7s0` | `2001:da8:215:6a01:26b4:87d6:14d6:154f` | 是 |
+| compute-3 | `enp129s0f0` | `2001:da8:215:6a01:ec4:7aff:fe85:7814` | 是 |
+
+切换要求：
+
+- 后端 `.env` 设置 `PREFER_BUSINESS_IPV6=true`。
+- 后端 `.env` 设置 `BACKEND_PORT=8181`，确保 worker 指标回写到 `http://10.112.244.94:8181`。
+- `nodes.business_ipv6` 写入上表地址；admin 节点保持 `is_schedulable=false`。
+- 重启后端后，日志应出现 `Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181`。
+
+连通性核验：
+
+```bash
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ad10:31fd:fe24:5f61"
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:26b4:87d6:14d6:154f"
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ec4:7aff:fe85:7814"
+```
+
+业务核验不只看实例 `running`。需要抽查真实容器环境变量和日志，确认：
+
+- `PEER_COMPUTE_URL` / `PEER_SINK_URL` 形如 `http://[2001:...]:18000`。
+- `TASK_PEERS_JSON[*].business_address` 为 IPv6。
+- sink 日志出现 `SINK_DONE` 或 `VIDEO_SINK_DONE`，且业务评估接口返回 `business_success=true`。
+
 ## 给 E2E Deploy Test Agent 的提示
 
 - 测试部署固定围绕以上四台机器，不要回退到本地 mock 环境，除非 work item 明确要求。
@@ -166,5 +198,5 @@ sudo systemctl restart docker
 - 需要 sudo 时读取 `ops/secrets/test-lab-credentials.local.md`，不要把密码打印到日志。
 - 需要私有镜像仓库时，优先使用 `10.112.244.94:5000`，并按需配置业务节点 Docker daemon。
 - 部署验证应记录每台机器的 `hostname`、`docker --version`、`nvidia-smi` 或无 GPU 可用的原因。
-- 注册平台 Node 时，管理地址和业务地址初期可都使用上述 IP；后续如启用业务 IPv6，再更新 `business_ipv6`。
+- 注册平台 Node 时，管理地址和业务 IPv4 可使用 10.112 地址；正式验收前必须按“业务面 IPv6 配置”更新 `business_ipv6`。
 - 当前业务测评页面是 `http://10.112.244.94:8182/benchmark`，管理面后端是 `http://10.112.244.94:8181`。

@@ -138,6 +138,7 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 - 脚本末尾输出 `OK matmul live e2e passed`
 - 实例状态进入 `running`
+- 验收环境启用业务 IPv6 时，还必须抽查容器环境变量，确认 `PEER_*_URL` 为 `http://[IPv6]:port`，`TASK_PEERS_JSON.business_address` 为 IPv6，且 sink 日志出现指标回写完成标记。
 - evaluation 返回 `metric_key=effective_gflops`
 - `business_success=true`
 - source / compute / sink 均有非空 `ports` 和 `port_values`
@@ -248,6 +249,7 @@ docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}'
 
 - backend 是否重启并执行过 `init_db()`
 - 当前数据库是否缺少新增列，如 `nodes.business_ipv6`
+- 验收环境 `.env` 是否设置 `PREFER_BUSINESS_IPV6=true` 与正确的 `BACKEND_PORT`，避免 worker 数据面走 IPv6 但指标回写到错误端口
 - backend 控制台完整 traceback
 - 当前服务连接的是 MySQL 还是 SQLite
 

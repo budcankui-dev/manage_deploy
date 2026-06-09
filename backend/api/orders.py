@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from api.auth import get_current_user
+from config import settings
 from database import get_db
 from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
 from models import (
@@ -495,7 +496,7 @@ async def get_order(
                 continue
             if not machine:
                 continue
-            biz_addr = get_business_address(machine)
+            biz_addr = get_business_address(machine, settings.prefer_business_ipv6)
             for port_name, port_val in inst_node.port_values.items():
                 try:
                     port_int = int(port_val)
