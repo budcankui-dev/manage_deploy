@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
+from config import settings
 from enums import OrderStatus, RoutingStatus, UserRole
 from models import BusinessObjectiveEvaluation, TaskInstance, TaskInstanceNode, TaskOrder, User
 
@@ -550,12 +551,139 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert business_task["data_profile"]["profile_id"] == "video_industrial_inspection_720p"
 
     dag = order.routing_input_dag
+    assert dag["job_id"] == order.id
+    assert dag["order_id"] == order.id
     assert dag["job_name"] == "视频AI推理"
+    assert "constraints" not in dag
     assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
+    assert [node["role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
+    assert [node["node_type"] for node in dag["nodes"]] == ["endpoint", "compute", "endpoint"]
+    assert dag["nodes"][0]["fixed_node_name"] == "benchmark-video-source"
+    assert dag["nodes"][0]["fixed_node_role"] == "source"
+    assert dag["nodes"][2]["fixed_node_name"] == "benchmark-video-sink"
+    assert dag["nodes"][2]["fixed_node_role"] == "destination"
+    assert all("exec" not in node for node in dag["nodes"])
     assert dag["edges"] == [
         {"from": "source", "to": "compute", "data_mb": 2, "bandwidth_mbps": 20},
         {"from": "compute", "to": "sink", "data_mb": 2, "bandwidth_mbps": 20},
     ]
+
+
+@pytest.mark.asyncio
+async def test_order_routing_result_persists_router_metadata_and_is_idempotent(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="route-metadata-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "route-metadata-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    payload = {
+        "strategy": "cost_first",
+        "selected_strategy": "GPU_EXCLUSIVE_LOW_RENT",
+        "external_routing_id": "route-meta-001",
+        "placements": [
+            {"node_id": "source", "worker_host": "worker-a"},
+            {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+            {"node_id": "sink", "worker_host": "worker-c"},
+        ],
+        "estimated_metric": {
+            "estimated_cost": 1.6,
+            "cost_unit": "yuan",
+            "confidence": 0.9,
+        },
+        "metadata": {
+            "path": ["worker-a", "worker-b", "worker-c"],
+            "rent": {"amount": 1.6, "currency": "CNY", "billing_unit": "task"},
+            "selected_reason": "worker-b GPU 0 is exclusive and has the lowest estimated rent",
+            "algorithm_version": "router-test",
+            "decision_trace_id": "trace-meta-001",
+        },
+    }
+    response = await client.post(f"/api/orders/{order_id}/routing-result", json=payload)
+    assert response.status_code == 200, response.text
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    assert order.routing_status == RoutingStatus.COMPLETED.value
+    routing_result = order.runtime_config["routing_result"]
+    assert routing_result["selected_strategy"] == "GPU_EXCLUSIVE_LOW_RENT"
+    assert routing_result["external_routing_id"] == "route-meta-001"
+    assert routing_result["estimated_metric"]["estimated_cost"] == 1.6
+    assert routing_result["metadata"]["rent"]["amount"] == 1.6
+    assert routing_result["metadata"]["decision_trace_id"] == "trace-meta-001"
+
+    duplicate = await client.post(f"/api/orders/{order_id}/routing-result", json=payload)
+    assert duplicate.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_service_token_routing_order_http_flow(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-order-http-user")
+    service_headers = {"X-Service-Token": settings.service_api_token}
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-http-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    list_response = await client.get(
+        "/api/routing-orders",
+        headers=service_headers,
+        params={
+            "status": "pending",
+            "benchmark_run_id": "routing-http-run",
+            "task_type": "low_latency_video_pipeline",
+        },
+    )
+    assert list_response.status_code == 200
+    pending_orders = list_response.json()
+    assert [item["order_id"] for item in pending_orders] == [order_id]
+    assert pending_orders[0]["routing_input_dag"]["job_id"] == order_id
+
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    assert claim_response.status_code == 200
+    assert claim_response.json()["routing_status"] == "computing"
+
+    result_response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        headers=service_headers,
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"node_id": "source", "worker_host": "worker-a"},
+                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+                {"node_id": "sink", "worker_host": "worker-c"},
+            ],
+            "metadata": {
+                "path": ["worker-a", "worker-b", "worker-c"],
+                "algorithm_version": "router-http-test",
+            },
+        },
+    )
+    assert result_response.status_code == 200, result_response.text
+    assert result_response.json()["routing_status"] == "completed"
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    assert order.materialized_instance_id
+    assert order.runtime_config["routing_result"]["metadata"]["algorithm_version"] == "router-http-test"
 
 
 @pytest.mark.asyncio
@@ -1181,10 +1309,14 @@ async def test_business_task_list_api(client, db_session):
                 "model_name": "yolov5n",
                 "video_asset": "bottle-detection.mp4",
                 "gpu_assigned": True,
+                "preview_frame_width": 1280,
+                "preview_frame_height": 720,
                 "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+                "annotated_frame_overlay": "zh_yolo_v1",
                 "detection_count": 1,
                 "top_label": "bottle",
-                "detections": [{"label": "bottle", "confidence": 0.93}],
+                "top_label_zh": "瓶子",
+                "detections": [{"label": "bottle", "label_zh": "瓶子", "confidence": 0.93}],
                 "raw_frame_bytes": "prune_me",
             }
         },
@@ -1195,10 +1327,14 @@ async def test_business_task_list_api(client, db_session):
             "model_name": "yolov5n",
             "video_asset": "bottle-detection.mp4",
             "gpu_assigned": True,
+            "preview_frame_width": 1280,
+            "preview_frame_height": 720,
             "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+            "annotated_frame_overlay": "zh_yolo_v1",
             "detection_count": 1,
             "top_label": "bottle",
-            "detections": [{"label": "bottle", "confidence": 0.93}],
+            "top_label_zh": "瓶子",
+            "detections": [{"label": "bottle", "label_zh": "瓶子", "confidence": 0.93}],
         },
     ),
 ])

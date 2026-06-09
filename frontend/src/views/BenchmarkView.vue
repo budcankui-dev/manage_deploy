@@ -143,12 +143,24 @@
             <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；点击自动执行后，系统会按资源槽位分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
-            <el-button size="small" type="primary" :loading="routeLoading" @click="doAutoRoute">一键路由</el-button>
+            <el-button size="small" type="primary" :loading="routeLoading" @click="handleRouteAction">
+              {{ routeActionLabel }}
+            </el-button>
             <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">自动执行</el-button>
             <el-button size="small" plain @click="loadOrders">刷新</el-button>
           </div>
         </div>
       </template>
+      <div class="route-mode-panel" :class="`mode-${routeMode}`">
+        <div class="route-mode-title">
+          <span>路由方式</span>
+          <el-radio-group v-model="routeMode" size="small">
+            <el-radio-button label="mock">mock演示路由</el-radio-button>
+            <el-radio-button label="external">外部路由系统</el-radio-button>
+          </el-radio-group>
+        </div>
+        <p>{{ routeModeDescription }}</p>
+      </div>
       <div class="execution-control-row">
         <span class="control-label">执行槽位设置</span>
         <span>总并发上限</span>
@@ -409,13 +421,30 @@
           <div v-if="detailVideoPreview || detailVideoDetections.length" class="benchmark-video-proof">
             <div class="benchmark-video-preview">
               <h4>视频推理分类画框结果</h4>
-              <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+              <div v-if="detailVideoPreview" class="benchmark-video-proof-frame">
+                <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                <div v-if="detailVideoNeedsOverlay" class="benchmark-video-proof-overlay">
+                  <div v-if="detailVideoEvidenceRows.length" class="benchmark-video-proof-badge">
+                    <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
+                  </div>
+                  <div
+                    v-for="row in detailVideoDetections"
+                    :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                    class="benchmark-video-proof-box"
+                    :style="detailVideoBoxStyle(row)"
+                  >
+                    <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                  </div>
+                </div>
+              </div>
               <el-empty v-else description="等待带框预览图" :image-size="80" />
             </div>
             <div v-if="detailVideoDetections.length" class="benchmark-video-detections">
               <h4>分类检测结果</h4>
               <el-table :data="detailVideoDetections" size="small" border>
-                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="类别" min-width="140">
+                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+                </el-table-column>
                 <el-table-column label="置信度" width="100">
                   <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
                 </el-table-column>
@@ -498,7 +527,10 @@ import {
   describeObjectiveMeaning,
   formatObjectiveSentence,
   taskTypeSummary,
+  videoDetectionBoxStyle,
   videoDetections,
+  videoPreviewEvidenceRows,
+  videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 
@@ -530,6 +562,7 @@ const testingNodes = ref(new Map())
 const batchBaselineLoading = ref(false)
 const batchCreateLoading = ref(false)
 const routeLoading = ref(false)
+const routeMode = ref('mock')
 const startLoading = ref(false)
 const fullFlowLoading = ref(false)
 const resultRefreshing = ref(false)
@@ -569,6 +602,17 @@ const benchmarkForm = reactive({
 const executionForm = reactive({
   max_parallel: 2,
   per_compute_slot_limit: 1,
+})
+
+const routeActionLabel = computed(() =>
+  routeMode.value === 'mock' ? '生成 mock 路由' : '刷新外部路由状态'
+)
+
+const routeModeDescription = computed(() => {
+  if (routeMode.value === 'external') {
+    return '外部路由模式不会生成 mock 结果；平台保留 pending 工单和 DAG，等待路由系统扫描并回写 placements/GPU 后再执行。'
+  }
+  return 'mock 演示模式由平台随机选择可调度节点并写入 placements，用于未接入真实路由系统时跑通验收闭环。'
 })
 
 const currentTaskConfig = computed(() =>
@@ -766,6 +810,12 @@ const detailVerdict = computed(() => {
 })
 const detailVideoPreview = computed(() => videoPreviewDataUrl(detailResultMetadata.value))
 const detailVideoDetections = computed(() => videoDetections(detailResultMetadata.value))
+const detailVideoEvidenceRows = computed(() => videoPreviewEvidenceRows(detailResultMetadata.value))
+const detailVideoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(detailResultMetadata.value))
+
+function detailVideoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, detailResultMetadata.value)
+}
 
 function formatTime(value) {
   return new Date(value).toLocaleString('zh-CN', {
@@ -1174,6 +1224,31 @@ async function doAutoRoute() {
   }
 }
 
+async function refreshExternalRoutingStatus() {
+  routeLoading.value = true
+  try {
+    await Promise.all([loadOrders(), loadSummary()])
+    const waiting = orderStats.value.waitingRoute
+    const routed = orderStats.value.routed + orderStats.value.running + orderStats.value.completed
+    if (waiting > 0) {
+      ElMessage.info(`仍有 ${waiting} 条工单待外部路由系统回写；已路由/执行中/完成 ${routed} 条。`)
+    } else if (orders.value.length) {
+      ElMessage.success('当前轮次工单已全部完成路由，可继续自动执行。')
+    } else {
+      ElMessage.warning('当前没有压测工单，请先创建压测工单。')
+    }
+  } finally {
+    routeLoading.value = false
+  }
+}
+
+async function handleRouteAction() {
+  if (routeMode.value === 'external') {
+    return refreshExternalRoutingStatus()
+  }
+  return doAutoRoute()
+}
+
 async function doStartAll() {
   if (!currentBenchmarkRunId.value) {
     ElMessage.warning('请先创建或选择一个验收轮次，再启动执行。')
@@ -1226,6 +1301,11 @@ async function startFullFlow() {
   fullFlowLoading.value = true
   try {
     await createBatch()
+    if (routeMode.value === 'external') {
+      await refreshExternalRoutingStatus()
+      ElMessage.info('外部路由模式已创建工单；请等待路由系统回写完成后再点击自动执行。')
+      return
+    }
     await doAutoRoute()
     await doStartAll()
     ElMessage.success('完整测试流程已执行完成，请查看 Step 4 成功率和工单证据。')
@@ -1444,6 +1524,35 @@ onMounted(loadAll)
 
 .pending-pill strong {
   color: #303133;
+}
+
+.route-mode-panel {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #e4e7ed;
+  background: #fbfcff;
+}
+
+.route-mode-panel.mode-external {
+  border-color: #d1fae5;
+  background: #f4fdf8;
+}
+
+.route-mode-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #303133;
+  font-weight: 700;
+}
+
+.route-mode-panel p {
+  margin: 8px 0 0;
+  color: #606266;
+  font-size: 12px;
 }
 
 .execution-control-row {
@@ -1731,12 +1840,58 @@ onMounted(loadAll)
   min-width: 0;
 }
 
-.benchmark-video-preview img {
+.benchmark-video-proof-frame {
+  position: relative;
+}
+
+.benchmark-video-preview img,
+.benchmark-video-proof-frame img {
   display: block;
   width: 100%;
   border: 1px solid #dcdfe6;
   border-radius: 10px;
   background: #111827;
+}
+
+.benchmark-video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.benchmark-video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.benchmark-video-proof-badge span,
+.benchmark-video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.benchmark-video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.benchmark-video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
 }
 
 .benchmark-video-detections {

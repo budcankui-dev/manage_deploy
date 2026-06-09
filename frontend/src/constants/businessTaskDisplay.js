@@ -10,6 +10,22 @@ export const TASK_TYPE_LABELS = {
   secure_transmission: '高安全传输任务',
 }
 
+const VIDEO_LABEL_ZH = {
+  person: '人员',
+  bicycle: '自行车',
+  car: '车辆',
+  motorcycle: '摩托车',
+  bus: '公交车',
+  truck: '卡车',
+  bottle: '瓶子',
+  cup: '杯子',
+  chair: '椅子',
+  laptop: '笔记本电脑',
+  'cell phone': '手机',
+  inspection_target: '检测目标',
+  none: '无目标',
+}
+
 export const MODALITY_LABELS = {
   high_throughput_compute: '高通量计算模态',
   low_latency_forwarding: '低时延转发模态',
@@ -261,12 +277,18 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
     rows.push({ label: 'GPU 分配', value: meta.gpu_assigned ? '已分配' : '未检测到 GPU 分配' })
   }
   if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
+  if (meta.annotated_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.annotated_frame_index) })
+  if (meta.annotated_frame_latency_ms != null) {
+    rows.push({ label: '预览帧时延', value: `${Number(meta.annotated_frame_latency_ms).toFixed(2)} ms` })
+  }
   if (meta.frame_latency_avg_ms != null) rows.push({ label: '平均帧时延', value: `${Number(meta.frame_latency_avg_ms).toFixed(2)} ms` })
   if (meta.frame_latency_p90_ms != null) rows.push({ label: 'P90 帧时延', value: `${Number(meta.frame_latency_p90_ms).toFixed(2)} ms` })
   if (meta.detection_count != null) rows.push({ label: '预览图检测数量', value: String(meta.detection_count) })
   if (meta.top_label) {
     const confidence = meta.top_confidence != null ? ` (${Number(meta.top_confidence).toFixed(2)})` : ''
-    rows.push({ label: '最高置信类别', value: `${meta.top_label}${confidence}` })
+    const label = meta.top_label_zh || VIDEO_LABEL_ZH[meta.top_label] || meta.top_label
+    const raw = label !== meta.top_label ? ` / ${meta.top_label}` : ''
+    rows.push({ label: '最高置信类别', value: `${label}${raw}${confidence}` })
   }
   if (evaluation) {
     rows.push({
@@ -307,8 +329,66 @@ export function videoPreviewDataUrl(resultMetadata) {
   return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
 }
 
+function previewFrameLatency(resultMetadata) {
+  const meta = resultMetadata || {}
+  if (meta.annotated_frame_latency_ms != null) return Number(meta.annotated_frame_latency_ms)
+  if (Array.isArray(meta.samples) && meta.annotated_frame_index != null) {
+    const sample = meta.samples.find(item => Number(item.frame_index) === Number(meta.annotated_frame_index))
+    if (sample?.latency_ms != null) return Number(sample.latency_ms)
+  }
+  if (Array.isArray(meta.samples) && meta.samples[0]?.latency_ms != null) {
+    return Number(meta.samples[0].latency_ms)
+  }
+  return null
+}
+
+export function videoPreviewEvidenceRows(resultMetadata) {
+  const meta = resultMetadata || {}
+  const rows = []
+  if (meta.annotated_frame_index != null) rows.push(`帧序号 ${meta.annotated_frame_index}`)
+  const latency = previewFrameLatency(meta)
+  if (latency != null && Number.isFinite(latency)) rows.push(`单帧推理 ${latency.toFixed(2)} ms`)
+  if (meta.frame_latency_p90_ms != null) rows.push(`P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
+  if (meta.measured_frames != null) rows.push(`有效帧 ${meta.measured_frames}`)
+  if (meta.gpu_assigned !== undefined) rows.push(`GPU ${meta.gpu_assigned ? '已分配' : '未分配'}`)
+  return rows
+}
+
+export function videoPreviewNeedsOverlay(resultMetadata) {
+  const overlay = resultMetadata?.annotated_frame_overlay
+  return !['zh_yolo_v1', 'yolo_boxes_v1', 'embedded_boxes_v1'].includes(overlay)
+}
+
+export function videoDetectionBoxStyle(row, resultMetadata) {
+  const bbox = row?.bbox_xyxy
+  if (!Array.isArray(bbox) || bbox.length < 4) return { display: 'none' }
+  const meta = resultMetadata || {}
+  const frameWidth = Number(meta.preview_frame_width || meta.frame_width || meta.image_width || 640)
+  const frameHeight = Number(meta.preview_frame_height || meta.frame_height || meta.image_height || 360)
+  const [x1, y1, x2, y2] = bbox.map(Number)
+  if (![x1, y1, x2, y2, frameWidth, frameHeight].every(Number.isFinite) || frameWidth <= 0 || frameHeight <= 0) {
+    return { display: 'none' }
+  }
+  const pct = (value, total) => `${Math.min(100, Math.max(0, (value / total) * 100))}%`
+  return {
+    left: pct(x1, frameWidth),
+    top: pct(y1, frameHeight),
+    width: pct(x2 - x1, frameWidth),
+    height: pct(y2 - y1, frameHeight),
+  }
+}
+
 export function videoDetections(resultMetadata) {
-  return Array.isArray(resultMetadata?.detections) ? resultMetadata.detections : []
+  if (!Array.isArray(resultMetadata?.detections)) return []
+  return resultMetadata.detections.map((item) => {
+    const label = item?.label || ''
+    const labelZh = item?.label_zh || VIDEO_LABEL_ZH[label] || label
+    return {
+      ...item,
+      label_zh: labelZh,
+      display_label: label && labelZh !== label ? `${labelZh} / ${label}` : labelZh,
+    }
+  })
 }
 
 /** @deprecated 使用 buildMatmul* 分块展示；保留供非 matmul 或简易列表 */

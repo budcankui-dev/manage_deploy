@@ -401,7 +401,24 @@
 
             <div class="video-result-card">
               <div class="video-preview">
-                <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                <template v-if="detailVideoPreview">
+                  <div class="video-proof-frame">
+                    <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                    <div v-if="detailVideoNeedsOverlay" class="video-proof-overlay">
+                      <div v-if="detailVideoEvidenceRows.length" class="video-proof-badge">
+                        <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
+                      </div>
+                      <div
+                        v-for="row in detailVideoDetections"
+                        :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                        class="video-proof-box"
+                        :style="detailVideoBoxStyle(row)"
+                      >
+                        <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
                 <el-empty v-else description="等待带框预览图" :image-size="80" />
               </div>
               <div class="video-result-side">
@@ -423,7 +440,9 @@
 
             <h3 v-if="detailVideoDetections.length" class="section-title">分类检测结果</h3>
             <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small">
-              <el-table-column prop="label" label="类别" min-width="120" />
+              <el-table-column label="类别" min-width="140">
+                <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+              </el-table-column>
               <el-table-column label="置信度" width="100">
                 <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
               </el-table-column>
@@ -543,7 +562,10 @@ import {
   modalityLabel,
   taskTypeLabel,
   taskTypeSummary,
+  videoDetectionBoxStyle,
   videoDetections,
+  videoPreviewEvidenceRows,
+  videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 
@@ -718,6 +740,17 @@ const detailVideoPreview = computed(() =>
 const detailVideoDetections = computed(() =>
   videoDetections(orderDetail.value?.evaluation?.result_metadata)
 )
+const detailVideoEvidenceRows = computed(() =>
+  videoPreviewEvidenceRows(orderDetail.value?.evaluation?.result_metadata)
+)
+const detailVideoNeedsOverlay = computed(() =>
+  videoPreviewNeedsOverlay(orderDetail.value?.evaluation?.result_metadata)
+)
+
+function detailVideoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, orderDetail.value?.evaluation?.result_metadata)
+}
+
 const resultVerdictClass = computed(() => {
   const evaluation = orderDetail.value?.evaluation
   if (!evaluation) return 'pending'
@@ -879,18 +912,30 @@ async function openDetail(orderId, tab = 'business') {
   resultObjects.value = []
   try {
     const { data } = await ordersApi.get(orderId)
-    orderDetail.value = data
     const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
+    let evaluationData = data.evaluation || null
     if (data.instance?.id) {
-      const [instResp, objectsResp] = await Promise.all([
+      const [instResp, objectsResp, evalResp] = await Promise.all([
         instancesApi.get(data.instance.id),
         evidenceInstanceId ? businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })) : { data: [] },
+        evidenceInstanceId && !evaluationData
+          ? businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null }))
+          : { data: evaluationData },
       ])
       instanceDetail.value = instResp.data
       resultObjects.value = objectsResp.data
+      evaluationData = evalResp.data || evaluationData
     } else if (evidenceInstanceId) {
-      const objectsResp = await businessApi.results(evidenceInstanceId).catch(() => ({ data: [] }))
+      const [objectsResp, evalResp] = await Promise.all([
+        businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })),
+        evaluationData ? Promise.resolve({ data: evaluationData }) : businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null })),
+      ])
       resultObjects.value = objectsResp.data
+      evaluationData = evalResp.data || evaluationData
+    }
+    orderDetail.value = {
+      ...data,
+      evaluation: evaluationData || data.evaluation || null,
     }
   } finally {
     detailLoading.value = false
@@ -1339,10 +1384,56 @@ async function submitSample() {
   overflow: hidden;
 }
 
-.video-preview img {
+.video-proof-frame {
+  position: relative;
+}
+
+.video-preview img,
+.video-proof-frame img {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.video-proof-badge span,
+.video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
 }
 
 .video-result-side .section-title:first-child {

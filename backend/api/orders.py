@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Any, Optional
 
 from api.auth import get_current_user
 from config import settings
@@ -683,6 +683,13 @@ class RoutingPlacement(BaseModel):
 
 class RoutingResultPayload(BaseModel):
     placements: list[RoutingPlacement]
+    strategy: Optional[str] = None
+    selected_strategy: Optional[str] = None
+    external_routing_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    estimated_metric: dict[str, Any] = Field(default_factory=dict)
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/{order_id}/routing-result")
@@ -692,18 +699,45 @@ async def receive_routing_result(
     db: AsyncSession = Depends(get_db),
 ):
     """接收外部路由系统的计算结果（节点放置 + GPU 分配），并自动物化实例。"""
-    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    row = await db.execute(
+        select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
+    )
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
     if order.materialized_instance_id:
         raise HTTPException(status_code=409, detail="Routing result already processed")
+    if order.routing_status not in {
+        RoutingStatus.PENDING.value,
+        RoutingStatus.COMPUTING.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot accept routing result when routing_status is '{order.routing_status}'",
+        )
 
     # Persist routing result
-    order.routing_status = RoutingStatus.COMPLETED.value
+    order.routing_status = RoutingStatus.COMPUTING.value
     rc = order.runtime_config or {}
-    rc["routing_result"] = {"placements": [p.model_dump() for p in payload.placements]}
+    routing_result = {
+        "placements": [p.model_dump() for p in payload.placements],
+    }
+    if payload.strategy:
+        routing_result["strategy"] = payload.strategy
+    if payload.selected_strategy:
+        routing_result["selected_strategy"] = payload.selected_strategy
+    if payload.external_routing_id:
+        routing_result["external_routing_id"] = payload.external_routing_id
+    if payload.metadata:
+        routing_result["metadata"] = payload.metadata
+    if payload.estimated_metric:
+        routing_result["estimated_metric"] = payload.estimated_metric
+    if payload.result_payload:
+        routing_result["result_payload"] = payload.result_payload
+    if payload.extra:
+        routing_result["extra"] = payload.extra
+    rc["routing_result"] = routing_result
     order.runtime_config = rc
     flag_modified(order, "runtime_config")
 
@@ -791,6 +825,7 @@ async def receive_routing_result(
 
     order.materialized_instance_id = instance.id
     order.status = OrderStatus.MATERIALIZED
+    order.routing_status = RoutingStatus.COMPLETED.value
 
     await db.commit()
     return {"status": "ok", "order_id": order_id, "routing_status": "completed", "instance_id": instance.id}
@@ -825,18 +860,7 @@ async def create_batch_benchmark(
     business_end_time = business_start_time + timedelta(hours=1)
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     for i in range(payload.count):
-        order_id_placeholder = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
-        routing_dag = build_routing_payload(
-            order_id=order_id_placeholder,
-            order_name=order_id_placeholder,
-            task_type=payload.task_type,
-            modality=benchmark_config["modality"],
-            source_name=benchmark_config["source_name"],
-            destination_name=benchmark_config["destination_name"],
-            business_start_time=business_start_time,
-            business_end_time=business_end_time,
-            data_profile=data_profile,
-        )
+        order_name = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
         runtime_config = {
             "benchmark": {
                 "run_id": run_id,
@@ -857,10 +881,9 @@ async def create_batch_benchmark(
         order = TaskOrder(
             user_id=current_user.id,
             template_id=catalog.template_id,
-            name=order_id_placeholder,
+            name=order_name,
             status=OrderStatus.PENDING,
             routing_status=RoutingStatus.PENDING.value,
-            routing_input_dag=routing_dag,
             runtime_config=runtime_config,
             is_benchmark=True,
             source_name=benchmark_config["source_name"],
@@ -872,6 +895,17 @@ async def create_batch_benchmark(
         )
         db.add(order)
         await db.flush()
+        order.routing_input_dag = build_routing_payload(
+            order_id=order.id,
+            order_name=order.name,
+            task_type=payload.task_type,
+            modality=benchmark_config["modality"],
+            source_name=benchmark_config["source_name"],
+            destination_name=benchmark_config["destination_name"],
+            business_start_time=business_start_time,
+            business_end_time=business_end_time,
+            data_profile=data_profile,
+        )
         order_ids.append(order.id)
 
     await db.commit()

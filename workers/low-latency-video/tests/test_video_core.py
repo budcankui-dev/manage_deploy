@@ -24,6 +24,11 @@ def test_video_profile_reports_p90_latency():
     assert result["fps"] == 30
     assert result["aggregation"] == "p90_after_warmup"
     assert result["annotated_frame_data_url"].startswith("data:image/")
+    assert "annotated_frame_latency_ms" in result
+    assert result["preview_frame_width"] > 0
+    assert result["preview_frame_height"] > 0
+    assert result["annotated_frame_overlay"] in {"zh_yolo_v1", "yolo_boxes_v1", "embedded_boxes_v1"}
     assert result["detection_count"] >= 1
     assert result["detections"]
+    assert result["detections"][0]["label_zh"]
     assert result["detections"][0]["bbox_xyxy"]

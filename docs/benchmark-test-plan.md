@@ -1,7 +1,7 @@
 # 业务目标验收测试方案
 
 > 最后更新：2026-06-09
-> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；矩阵乘法为正式主验收链路，视频 AI 推理已接入页面作为扩展业务演示，正式留档前需使用最新带框预览镜像复核 30 任务轮次
+> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；矩阵乘法与视频 AI 推理均已按固定参数完成 30 个可评价工单验收轮次，当前均为 30/30 达标。视频 AI 推理另有带中文 YOLO 画框预览的单工单证据，用于演示业务真实执行结果。
 
 ## 目标
 
@@ -14,7 +14,7 @@
 
 当前正式主验收业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
-第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 读取固定测试视频并抽帧，compute 加载 `yolov5n.onnx` 执行检测并统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式留档口径同样要求当前轮次已评估任务不少于 30 且业务目标成功率不低于 90%。
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 读取固定测试视频并抽帧，compute 加载 `yolov5n.onnx` 执行检测并统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式留档口径同样要求当前轮次已评估任务不少于 30 且业务目标成功率不低于 90%。当前可复现留档轮次为 `video-acceptance-20260608102409`，30/30 达标；带框预览演示工单为 `video-cn-preview-final-20260609042107`。
 
 ## 验收指标
 
@@ -182,6 +182,8 @@
 - 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 
 当前 `/benchmark` 页面的一键路由仅作为验收 mock 路由，页面和文档均需明确其边界：它用于跑通部署与评价闭环，不替代外部路由算法，不证明路由最优。
+
+外部路由系统联调的具体接口、字段格式和最短接入路径见 [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)。
 
 ## 真实四节点执行要求
 

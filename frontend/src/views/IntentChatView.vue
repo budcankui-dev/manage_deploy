@@ -408,7 +408,24 @@
 
               <div class="video-result-card">
                 <div class="video-preview">
-                  <img v-if="detailVideoPreview" :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                  <template v-if="detailVideoPreview">
+                    <div class="video-proof-frame">
+                      <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                      <div v-if="detailVideoNeedsOverlay" class="video-proof-overlay">
+                        <div v-if="detailVideoEvidenceRows.length" class="video-proof-badge">
+                          <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
+                        </div>
+                        <div
+                          v-for="row in detailVideoDetections"
+                          :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                          class="video-proof-box"
+                          :style="detailVideoBoxStyle(row)"
+                        >
+                          <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                   <el-empty v-else description="等待带框预览图" :image-size="80" />
                 </div>
                 <div class="video-result-side">
@@ -429,7 +446,9 @@
 
               <div v-if="detailVideoDetections.length" style="font-weight:500;font-size:13px;margin:12px 0 6px">分类检测结果</div>
               <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small" border style="margin-bottom:12px">
-                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="类别" min-width="140">
+                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+                </el-table-column>
                 <el-table-column label="置信度" width="100">
                   <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
                 </el-table-column>
@@ -584,7 +603,7 @@ import {
   buildMatmulInputRows, buildMatmulOutputRows,
   buildMatmulParamConsistency, buildMatmulVerdict,
   buildVideoInputRows, buildVideoOutputRows, buildVideoVerdict,
-  videoDetections, videoPreviewDataUrl,
+  videoDetectionBoxStyle, videoDetections, videoPreviewEvidenceRows, videoPreviewNeedsOverlay, videoPreviewDataUrl,
   MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
@@ -635,6 +654,12 @@ const detailVideoOutputRows = computed(() =>
 const detailVideoVerdict = computed(() => buildVideoVerdict(detailEvaluation.value))
 const detailVideoPreview = computed(() => videoPreviewDataUrl(detailEvaluation.value?.result_metadata))
 const detailVideoDetections = computed(() => videoDetections(detailEvaluation.value?.result_metadata))
+const detailVideoEvidenceRows = computed(() => videoPreviewEvidenceRows(detailEvaluation.value?.result_metadata))
+const detailVideoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(detailEvaluation.value?.result_metadata))
+
+function detailVideoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, detailEvaluation.value?.result_metadata)
+}
 
 let routingTimer = null
 let abortController = null
@@ -1837,10 +1862,56 @@ onBeforeUnmount(stopRoutingPolling)
   overflow: hidden;
 }
 
-.video-preview img {
+.video-proof-frame {
+  position: relative;
+}
+
+.video-preview img,
+.video-proof-frame img {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.video-proof-badge span,
+.video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
 }
 
 .video-result-side {

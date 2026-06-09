@@ -208,46 +208,67 @@ API 预留模式：
 
 ```json
 {
-  "job_id": "视频AI推理_低延时转发模态_3f4a9205-c4b3-4517-b520-4e0ed9e6b71d",
+  "job_id": "order-uuid-001",
+  "order_id": "order-uuid-001",
   "job_name": "视频AI推理",
+  "order_name": "用户提交的视频推理工单",
+  "source_name": "node-a",
+  "destination_name": "node-c",
   "modal": "低延时转发模态",
   "_comment": "低延时转发模态",
   "policy_type": "COST_CONSTRAINED",
   "submit_ts_ms": 1777341600000,
-  "constraints": {
-    "budget": null,
-    "deadline_ms": 1777342200000
-  },
+  "business_start_ts_ms": 1777341600000,
+  "business_end_ts_ms": 1777345200000,
   "nodes": [
     {
-      "node_id": "video",
+      "node_id": "source",
+      "role": "source",
+      "node_type": "endpoint",
+      "fixed_node_name": "node-a",
+      "fixed_node_role": "source",
       "resources": {
-        "cpu_units": 20,
-        "mem_mb": 1024,
-        "disk_mb": 1024,
+        "cpu_units": 2,
+        "mem_mb": 512,
+        "disk_mb": 512,
         "gpu_units": 0
-      },
-      "exec": {
-        "est_runtime_ms": 600000
       }
     },
     {
-      "node_id": "infer",
+      "node_id": "compute",
+      "role": "compute",
+      "node_type": "compute",
       "resources": {
         "cpu_units": 10,
-        "mem_mb": 1024,
+        "mem_mb": 2048,
         "disk_mb": 1024,
+        "gpu_units": 1
+      }
+    },
+    {
+      "node_id": "sink",
+      "role": "sink",
+      "node_type": "endpoint",
+      "fixed_node_name": "node-c",
+      "fixed_node_role": "destination",
+      "resources": {
+        "cpu_units": 2,
+        "mem_mb": 512,
+        "disk_mb": 512,
         "gpu_units": 0
       },
-      "exec": {
-        "est_runtime_ms": 600000
-      }
     }
   ],
   "edges": [
     {
-      "from": "video",
-      "to": "infer",
+      "from": "source",
+      "to": "compute",
+      "data_mb": 20,
+      "bandwidth_mbps": 20
+    },
+    {
+      "from": "compute",
+      "to": "sink",
       "data_mb": 20,
       "bandwidth_mbps": 20
     }
@@ -257,19 +278,23 @@ API 预留模式：
 
 字段映射建议：
 
-- `job_id`：由 `job_name`、`modal` 和工单 UUID 生成，保证外部路由系统幂等识别。
+- `job_id` / `order_id`：使用平台工单 ID，短且稳定，方便外部路由系统回查和幂等识别。
 - `job_name`：来自业务类型的人类可读名称，例如“视频AI推理”或“科学计算矩阵乘法演示”。
+- `source_name` / `destination_name`：用户输入的真实源节点和目的节点名称。
 - `modal` / `_comment`：来自用户选择或意图解析出的业务模态；`_comment` 仅用于外部系统展示和调试。
 - `submit_ts_ms`：第一阶段按用户填写的 `business_start_time` 转为 epoch milliseconds；如果外部路由系统后续要求真实提交时间，则新增 `order_created_ts_ms` 或调整映射。
-- `constraints.deadline_ms`：用户填写的 `business_end_time` 转为 epoch milliseconds。
-- `constraints.budget`：用户未填写预算时为 `null`。
+- `business_start_ts_ms` / `business_end_ts_ms`：用户填写的业务开始和结束时间。
 - `policy_type`：由业务目标或用户偏好映射；第一阶段可用固定默认值，例如 `COST_CONSTRAINED`。
 - `nodes[].node_id`：路由 DAG 内部逻辑节点名，不等于平台 `nodes.id`。例如 `video`、`infer`、`source`、`compute`、`sink`。
+- `nodes[].role`：业务角色，例如 `source`、`compute`、`sink`。
+- `nodes[].node_type`：DAG 节点类型，当前至少区分 `endpoint` 和 `compute`。
+- `nodes[].fixed_node_name`：用户指定的真实拓扑节点名。source/sink 通常固定，compute 通常由路由系统选择。
 - `nodes[].resources`：外部路由系统需要的资源约束，单位使用 `cpu_units`、`mem_mb`、`disk_mb`、`gpu_units`。
-- `nodes[].exec.est_runtime_ms`：估计运行时间，可由业务模板默认值、用户输入或规则估算得到。
 - `edges[].from/to`：引用 `nodes[].node_id`，表达业务数据流向。
 - `edges[].data_mb`：边上的估计数据量，可由用户上传文件大小、业务画像或默认规则估算。
 - `edges[].bandwidth_mbps`：边上的估计带宽需求，可由业务画像、抽帧策略、文件大小或历史基准估算。该字段用于外部路由系统判断链路是否满足业务数据流转要求。
+
+当前对接契约不要求 `constraints.budget`、`constraints.deadline_ms` 和 `nodes[].exec.est_runtime_ms`。预算、租金、候选节点评分、解释文本、算法版本等算法侧信息统一放在路由结果的 `metadata` 字典中；`result_payload` 是表结构里的历史兼容字段名，新对接不建议再拆多个扩展字段。
 
 该 payload 是给外部路由系统计算路径和节点选择的输入，不直接等同于 Task Manager 的 `TaskTemplate` 或 `TaskInstance`。外部路由系统回写 placements 后，平台再把逻辑节点映射到实际部署节点，并物化为可启动的 DAG 实例。
 
@@ -280,7 +305,7 @@ API 预留模式：
 - `selected_strategy`
 - `path`
 - `estimated_metric`
-- `explanation` 或 `decision_trace`
+- `metadata`，可包含 `path`、`explanation`、`decision_trace`、费用/租金等自定义信息
 - `external_routing_id`
 
 ## 后端工作流

@@ -182,7 +182,24 @@
 
               <div class="video-result-card">
                 <div class="video-preview">
-                  <img v-if="videoPreview" :src="videoPreview" alt="视频推理分类画框结果" />
+                  <template v-if="videoPreview">
+                    <div class="video-proof-frame">
+                      <img :src="videoPreview" alt="视频推理分类画框结果" />
+                      <div v-if="videoNeedsOverlay" class="video-proof-overlay">
+                        <div v-if="videoEvidenceRows.length" class="video-proof-badge">
+                          <span v-for="row in videoEvidenceRows" :key="row">{{ row }}</span>
+                        </div>
+                        <div
+                          v-for="row in videoDetectionRows"
+                          :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                          class="video-proof-box"
+                          :style="videoBoxStyle(row)"
+                        >
+                          <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                   <el-empty v-else description="等待带框预览图" :image-size="80" />
                 </div>
                 <div class="video-result-side">
@@ -200,7 +217,9 @@
 
               <h3 v-if="videoDetectionRows.length" class="section-title">分类检测结果</h3>
               <el-table v-if="videoDetectionRows.length" :data="videoDetectionRows" size="small">
-                <el-table-column prop="label" label="类别" min-width="120" />
+                <el-table-column label="类别" min-width="140">
+                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+                </el-table-column>
                 <el-table-column label="置信度" width="100">
                   <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
                 </el-table-column>
@@ -249,7 +268,10 @@ import {
   formatObjectiveSentence,
   modalityLabel,
   taskTypeLabel,
+  videoDetectionBoxStyle,
   videoDetections,
+  videoPreviewEvidenceRows,
+  videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
@@ -389,6 +411,12 @@ const videoOutputRows = computed(() =>
 const videoVerdict = computed(() => buildVideoVerdict(detail.value?.evaluation))
 const videoPreview = computed(() => videoPreviewDataUrl(detail.value?.evaluation?.result_metadata))
 const videoDetectionRows = computed(() => videoDetections(detail.value?.evaluation?.result_metadata))
+const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(detail.value?.evaluation?.result_metadata))
+const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(detail.value?.evaluation?.result_metadata))
+
+function videoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, detail.value?.evaluation?.result_metadata)
+}
 
 async function loadOrders() {
   listLoading.value = true
@@ -658,10 +686,56 @@ onMounted(loadOrders)
   overflow: hidden;
 }
 
-.video-preview img {
+.video-proof-frame {
+  position: relative;
+}
+
+.video-preview img,
+.video-proof-frame img {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.video-proof-badge span,
+.video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
 }
 
 .video-result-side .section-title:first-child {

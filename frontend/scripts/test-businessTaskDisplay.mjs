@@ -7,6 +7,8 @@ import {
   describeObjectiveMeaning,
   formatObjectiveSentence,
   taskTypeLabel,
+  videoDetectionBoxStyle,
+  videoPreviewNeedsOverlay,
 } from '../src/constants/businessTaskDisplay.js'
 
 assert.equal(taskTypeLabel('high_throughput_matmul'), '矩阵乘法计算任务')
@@ -55,5 +57,19 @@ const verdictFail = buildMatmulVerdict({
   failure_reason: '60.0 < 80.0',
 })
 assert.equal(verdictFail.statusClass, 'danger')
+
+assert.equal(videoPreviewNeedsOverlay({ annotated_frame_overlay: 'zh_yolo_v1' }), false)
+assert.equal(videoPreviewNeedsOverlay({ annotated_frame_overlay: 'yolo_boxes_v1' }), false)
+assert.equal(videoPreviewNeedsOverlay({ annotated_frame_overlay: '' }), true)
+
+assert.deepEqual(
+  videoDetectionBoxStyle({ bbox_xyxy: [320, 180, 640, 360] }, { preview_frame_width: 1280, preview_frame_height: 720 }),
+  {
+    left: '25%',
+    top: '25%',
+    width: '25%',
+    height: '25%',
+  }
+)
 
 console.log('businessTaskDisplay: ok')

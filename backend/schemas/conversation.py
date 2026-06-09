@@ -123,6 +123,7 @@ class RoutingResultCallback(BaseModel):
     status: RoutingRequestStatus
     strategy: Optional[str] = None
     placements: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     estimated_metric: Optional[dict[str, Any]] = None
     external_routing_id: Optional[str] = None
     error_message: Optional[str] = None
