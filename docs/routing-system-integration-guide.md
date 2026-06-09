@@ -3,6 +3,19 @@
 > 给路由算法同学看的最小对接说明。
 > 当前推荐：路由系统直接扫平台数据库读取待路由工单；路由完成后调用平台 HTTP 接口回写结果。
 
+## 接口冻结说明
+
+本文档定义外部路由对接 v1 版本。v1 稳定字段从现在起不再改名、不改变含义：
+
+- `task_orders.id` 等于 `routing_input_dag.job_id` 和 `routing_input_dag.order_id`。
+- 路由系统读取 `task_orders.routing_input_dag`，其中逻辑节点固定为 `source`、`compute`、`sink`。
+- 路由系统回写 `POST /api/routing-orders/{order_id}/result`。
+- 回写 `placements` 必须包含 `source`、`compute`、`sink` 三项。
+- GPU 业务的 `compute` placement 必须包含 `gpu_device`。
+- `metadata` 是通用扩展字典，可新增字段，但平台不会依赖其中某个字段完成部署。
+
+后续如果要扩展，只允许增加可选字段或新增 v2 接口；不得破坏以上 v1 字段，避免路由系统反复改适配代码。
+
 ---
 
 ## 1. 最小联调流程
