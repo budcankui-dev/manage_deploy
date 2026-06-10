@@ -132,7 +132,7 @@ while True:
 
 ## 6. 需要读取的 MySQL 表
 
-第一阶段只需要这些表。平台只使用 MySQL，不需要考虑 SQLite。
+第一阶段只需要这些表。平台对接只使用 MySQL。
 
 ### 6.1 `task_orders`
 
