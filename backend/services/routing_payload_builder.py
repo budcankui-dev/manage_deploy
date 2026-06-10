@@ -26,7 +26,7 @@ def build_routing_payload(
 ) -> dict[str, Any]:
     """生成外部路由系统可消费的 DAG JSON。
 
-    字段映射规则见 docs/conversation-order-routing-design.md。
+    字段映射规则见 docs/routing-system-integration-guide.md。
     """
     job_name = _task_type_to_job_name(task_type)
     modal = modality or task_type
