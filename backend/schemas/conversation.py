@@ -53,6 +53,7 @@ class IntentDraftResponse(BaseModel):
     business_objective: Optional[dict[str, Any]] = None
     runtime_plan: Optional[dict[str, Any]] = None
     resource_requirement: Optional[dict[str, Any]] = None
+    routing_dag_preview: Optional[dict[str, Any]] = None
     validation_errors: Optional[list[str]] = None
     parse_status: ParseStatus
     parser_name: Optional[str] = None
@@ -76,7 +77,7 @@ class RoutingRequestResponse(BaseModel):
     business_end_time: Optional[datetime] = None
     input_payload: Optional[dict[str, Any]] = None
     result_payload: Optional[dict[str, Any]] = None
-    placements: Optional[dict[str, str]] = None
+    placements: Optional[dict[str, Any]] = None
     estimated_metric: Optional[dict[str, Any]] = None
     selected_strategy: Optional[str] = None
     external_routing_id: Optional[str] = None
@@ -121,7 +122,8 @@ class RoutingRequestCreate(BaseModel):
 class RoutingResultCallback(BaseModel):
     status: RoutingRequestStatus
     strategy: Optional[str] = None
-    placements: Optional[dict[str, str]] = None
+    placements: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     estimated_metric: Optional[dict[str, Any]] = None
     external_routing_id: Optional[str] = None
     error_message: Optional[str] = None

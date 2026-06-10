@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import TaskEvent, TaskInstance
 from services.dag_executor import DAGExecutor
 from services.order_sync import purge_order_instance_artifacts
+from services.routing_resource_events import emit_release_events_for_instance
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,12 @@ async def auto_cleanup_instance(db: AsyncSession, instance: TaskInstance) -> lis
             logger.exception("auto_cleanup_instance: failed to record TaskEvent")
 
     try:
+        await emit_release_events_for_instance(
+            db,
+            instance_id,
+            reason="auto_cleanup",
+            metadata={"source": "instance_lifecycle"},
+        )
         await purge_order_instance_artifacts(db, instance_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("auto_cleanup_instance: purge failed for %s", instance_id)

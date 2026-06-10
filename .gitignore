@@ -13,6 +13,8 @@ ops/secrets/
 .cursor/
 .playwright-mcp/
 backend/task_manager.db
+backend/app.db
+backend/manage_deploy.db
 backend/.pytest_cache/
 .playwright-cli/
 __pycache__/
@@ -23,3 +25,6 @@ __pycache__/
 htmlcov/
 .idea/
 .vscode/
+.claude/worktrees/
+output/
+reports/

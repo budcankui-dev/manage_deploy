@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 from typing import Any
 
-from services.resource_estimator import estimate_resources, estimate_data_mb
+from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
 
 
 def build_routing_payload(
@@ -27,29 +26,37 @@ def build_routing_payload(
 ) -> dict[str, Any]:
     """生成外部路由系统可消费的 DAG JSON。
 
-    字段映射规则见 docs/conversation-order-routing-design.md。
+    字段映射规则见 docs/routing-system-integration-guide.md。
     """
     job_name = _task_type_to_job_name(task_type)
     modal = modality or task_type
-    job_id = f"{job_name}_{modal}_{order_id}"
+    job_id = order_id
 
     submit_ts_ms = int(business_start_time.timestamp() * 1000)
-    deadline_ms = int(business_end_time.timestamp() * 1000)
 
-    nodes = _build_dag_nodes(task_type, template_nodes, resource_requirement, data_profile)
+    nodes = _build_dag_nodes(
+        task_type,
+        template_nodes,
+        resource_requirement,
+        data_profile,
+        source_name,
+        destination_name,
+    )
     edges = _build_dag_edges(task_type, nodes, data_profile)
 
     return {
         "job_id": job_id,
+        "order_id": order_id,
         "job_name": job_name,
+        "order_name": order_name,
+        "source_name": source_name,
+        "destination_name": destination_name,
         "modal": modal,
         "_comment": modal,
         "policy_type": _infer_policy_type(task_type),
         "submit_ts_ms": submit_ts_ms,
-        "constraints": {
-            "budget": None,
-            "deadline_ms": deadline_ms,
-        },
+        "business_start_ts_ms": submit_ts_ms,
+        "business_end_ts_ms": int(business_end_time.timestamp() * 1000),
         "nodes": nodes,
         "edges": edges,
     }
@@ -78,26 +85,34 @@ def _build_dag_nodes(
     template_nodes: list[dict[str, Any]] | None,
     resource_requirement: dict[str, Any] | None,
     data_profile: dict[str, Any] | None = None,
+    source_name: str | None = None,
+    destination_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的逻辑节点列表。"""
     if template_nodes:
-        return [
-            {
-                "node_id": n.get("name", f"node_{i}"),
+        nodes = []
+        for i, n in enumerate(template_nodes):
+            node_id = n.get("name", f"node_{i}")
+            node_type = n.get("node_type") or _infer_node_type(node_id)
+            node = {
+                "node_id": node_id,
+                "role": _infer_role(node_id),
+                "node_type": node_type,
                 "resources": {
                     "cpu_units": n.get("cpu_units", 10),
                     "mem_mb": n.get("mem_mb", 1024),
                     "disk_mb": n.get("disk_mb", 1024),
                     "gpu_units": n.get("gpu_units", 0),
                 },
-                "exec": {
-                    "est_runtime_ms": n.get("est_runtime_ms", 600000),
-                },
             }
-            for i, n in enumerate(template_nodes)
-        ]
+            node.update(_endpoint_identity(node_id, source_name, destination_name))
+            nodes.append(node)
+        return nodes
 
     defaults = _default_nodes_for_task_type(task_type, resource_requirement, data_profile)
+    for node in defaults:
+        node.setdefault("role", _infer_role(node["node_id"]))
+        node.update(_endpoint_identity(node["node_id"], source_name, destination_name))
     return defaults
 
 
@@ -120,17 +135,51 @@ def _default_nodes_for_task_type(
 
         nodes.append({
             "node_id": role,
+            "role": _infer_role(role),
+            "node_type": _infer_node_type(role),
             "resources": {
                 "cpu_units": merged["cpu_units"],
                 "mem_mb": merged["cpu_mem_mb"],
                 "disk_mb": merged["disk_mb"],
                 "gpu_units": merged["gpu_units"],
             },
-            "exec": {
-                "est_runtime_ms": res_override.get("est_runtime_ms", 600000),
-            },
         })
     return nodes
+
+
+def _infer_node_type(role: Any) -> str:
+    """DAG node category for external routing, not the physical topology node kind."""
+    text = str(role or "").lower()
+    if text in {"compute", "worker", "infer", "train"}:
+        return "compute"
+    if text in {"source", "sink", "video", "input", "output"}:
+        return "endpoint"
+    return "unknown"
+
+
+def _infer_role(role: Any) -> str:
+    text = str(role or "").lower()
+    if text in {"source", "video", "input"}:
+        return "source"
+    if text in {"compute", "worker", "infer", "train"}:
+        return "compute"
+    if text in {"sink", "output"}:
+        return "sink"
+    return text or "unknown"
+
+
+def _endpoint_identity(
+    role: Any,
+    source_name: str | None,
+    destination_name: str | None,
+) -> dict[str, str]:
+    """Expose user-selected topology endpoints while keeping node_id as the DAG role."""
+    text = str(role or "").lower()
+    if text in {"source", "video", "input"} and source_name:
+        return {"fixed_node_name": source_name, "fixed_node_role": "source"}
+    if text in {"sink", "output"} and destination_name:
+        return {"fixed_node_name": destination_name, "fixed_node_role": "destination"}
+    return {}
 
 
 def _build_dag_edges(
@@ -140,6 +189,7 @@ def _build_dag_edges(
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的边列表，表达业务数据流向。"""
     data_mb = estimate_data_mb(task_type, data_profile)
+    bandwidth_mbps = estimate_bandwidth_mbps(task_type, data_profile)
 
     if len(nodes) < 2:
         return []
@@ -150,5 +200,6 @@ def _build_dag_edges(
             "from": nodes[i]["node_id"],
             "to": nodes[i + 1]["node_id"],
             "data_mb": data_mb,
+            "bandwidth_mbps": bandwidth_mbps,
         })
     return edges

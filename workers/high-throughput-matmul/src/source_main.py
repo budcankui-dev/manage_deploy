@@ -133,12 +133,23 @@ def _build_job_from_data_profile() -> dict:
     batch_count = int(profile.get("batch_count") or 4)
     seed = int(profile.get("seed") or 42)
 
-    return {
+    job = {
         "matrix_size": matrix_size,
         "batch_count": batch_count,
         "seed": seed,
         "profile_id": profile.get("profile_id", "matmul_dev"),
     }
+    for key in (
+        "observation_duration_sec",
+        "sample_interval_sec",
+        "sample_batch_count",
+        "warmup_batches",
+        "min_samples",
+        "max_samples",
+    ):
+        if profile.get(key) is not None:
+            job[key] = profile[key]
+    return job
 
 
 def main() -> int:

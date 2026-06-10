@@ -1,8 +1,10 @@
 export const ROUTING_POLICY_LABELS = {
   resource_guarantee: '资源保障优先',
+  fastest_completion: '完成时间优先',
   completion_time_first: '完成时间优先',
   completion_time: '完成时间优先',
   load_balance: '负载均衡',
+  cost_priority: '成本优先',
 }
 
 export function routingPolicyLabel(policy) {
@@ -11,7 +13,7 @@ export function routingPolicyLabel(policy) {
 }
 
 export const ORDER_STATUS_LABELS = {
-  pending: '待处理',
+  pending: '待路由',
   materialized: '已部署',
   completed: '已完成',
   failed: '失败',

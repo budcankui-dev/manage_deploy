@@ -38,8 +38,42 @@ BENCHMARK_PROFILES = {
             "BATCH_COUNT": "50",
             "SEED": "42",
             "WARMUP_BATCHES": "3",
+            "OBSERVATION_DURATION_SEC": "10",
+            "SAMPLE_INTERVAL_SEC": "1",
+            "SAMPLE_BATCH_COUNT": "5",
+            "MIN_SAMPLES": "5",
+            "MAX_SAMPLES": "12",
         },
-        "profile_id": "cpu_standard",
+        "profile_id": "gpu_standard",
+    },
+    "low_latency_video_pipeline": {
+        "metric_key": "frame_latency_p90_ms",
+        "operator": "<=",
+        "unit": "ms",
+        "image": "10.112.244.94:5000/low-latency-video:dev",
+        "command": "python /app/src/compute_main.py",
+        "env": {
+            "BENCHMARK_MODE": "true",
+            "FRAME_COUNT": "100",
+            "RESOLUTION": "720p",
+            "FPS": "30",
+            "FRAME_STRIDE": "30",
+            "WARMUP_FRAMES": "10",
+            "MEASURED_FRAMES": "30",
+            "WORK_UNITS": "45000",
+            "SYNTHETIC_SLEEP_MS": "0",
+            "SEED": "42",
+            "USE_GPU": "true",
+            "VIDEO_ASSET": "bottle-detection.mp4",
+            "VIDEO_INFERENCE_MODE": "yolo_onnx",
+            "VIDEO_MODEL_NAME": "yolov5n",
+            "VIDEO_MODEL_PATH": "models/yolov5n-fp32.onnx",
+            "VIDEO_CLASS_NAMES_PATH": "models/coco.names",
+            "VIDEO_CONFIDENCE_THRESHOLD": "0.25",
+            "VIDEO_NMS_THRESHOLD": "0.45",
+            "VIDEO_MAX_DETECTIONS": "8",
+        },
+        "profile_id": "video_industrial_inspection_720p",
     },
 }
 
@@ -69,11 +103,23 @@ async def run_baseline_on_node(
     async with httpx.AsyncClient(timeout=120.0) as client:
         for i in range(runs):
             container_name = f"baseline-{task_type}-run{i}-{int(time.time())}"
-            gflops = await _run_single_benchmark(
-                client, agent_address, image, env, container_name, command
+            metric_value = await _run_single_benchmark(
+                client,
+                agent_address,
+                image,
+                env,
+                container_name,
+                profile["metric_key"],
+                command,
             )
-            values.append(gflops)
-            logger.info(f"Baseline run {i+1}/{runs}: {gflops:.2f} GFLOPS")
+            values.append(metric_value)
+            logger.info(
+                "Baseline run %s/%s: %.4f %s",
+                i + 1,
+                runs,
+                metric_value,
+                profile["unit"],
+            )
 
     median_val = statistics.median(values)
     std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
@@ -98,6 +144,7 @@ async def _run_single_benchmark(
     image: str,
     env: dict[str, str],
     container_name: str,
+    metric_key: str,
     command: str | None = None,
 ) -> float:
     """启动一个临时容器执行基准测试并收集结果。"""
@@ -144,10 +191,10 @@ async def _run_single_benchmark(
     await client.delete(f"{base_url}/containers/{task_id}/{node_id}")
 
     # 5. 解析结果
-    return _parse_benchmark_result(logs_text)
+    return _parse_benchmark_result(logs_text, metric_key)
 
 
-def _parse_benchmark_result(logs: str) -> float:
+def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> float:
     """从容器日志中解析 benchmark_result JSON。"""
     for line in logs.splitlines():
         line = line.strip()
@@ -159,7 +206,7 @@ def _parse_benchmark_result(logs: str) -> float:
                 line = line[json_start:]
             try:
                 data = json.loads(line)
-                return float(data["benchmark_result"]["effective_gflops"])
+                return float(data["benchmark_result"][metric_key])
             except (json.JSONDecodeError, KeyError, TypeError):
                 continue
     raise RuntimeError(f"无法从容器日志解析基准测试结果")
@@ -171,20 +218,59 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
     """本地执行基准测试（fallback，不通过容器）。"""
     import sys
     import os
+    if task_type not in BENCHMARK_PROFILES:
+        raise ValueError(f"不支持的任务类型: {task_type}")
+
+    worker_dir = "low-latency-video" if task_type == "low_latency_video_pipeline" else "high-throughput-matmul"
     _WORKER_SRC = os.path.join(
-        os.path.dirname(__file__), "../../workers/high-throughput-matmul/src"
+        os.path.dirname(__file__), f"../../workers/{worker_dir}/src"
     )
     if _WORKER_SRC not in sys.path:
         sys.path.insert(0, os.path.abspath(_WORKER_SRC))
-
-    if task_type not in BENCHMARK_PROFILES:
-        raise ValueError(f"不支持的任务类型: {task_type}")
 
     profile = BENCHMARK_PROFILES[task_type]
     env = profile["env"]
 
     for k, v in env.items():
         os.environ.setdefault(k, v)
+
+    if task_type == "low_latency_video_pipeline":
+        video_src = os.path.join(
+            os.path.dirname(__file__), "../../workers/low-latency-video/src"
+        )
+        if video_src not in sys.path:
+            sys.path.insert(0, os.path.abspath(video_src))
+        from video_core import run_video_profile
+
+        values: list[float] = []
+        job = {
+            "frame_count": env["FRAME_COUNT"],
+            "resolution": env["RESOLUTION"],
+            "fps": env["FPS"],
+            "frame_stride": env["FRAME_STRIDE"],
+            "warmup_frames": env["WARMUP_FRAMES"],
+            "measured_frames": env["MEASURED_FRAMES"],
+            "work_units": env["WORK_UNITS"],
+            "seed": env["SEED"],
+        }
+        for _ in range(runs):
+            result = run_video_profile(job)
+            values.append(float(result[profile["metric_key"]]))
+
+        median_val = statistics.median(values)
+        std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
+        stable = std_dev < median_val * STABILITY_THRESHOLD if median_val > 0 else True
+        return {
+            "metric_key": profile["metric_key"],
+            "operator": profile["operator"],
+            "unit": profile["unit"],
+            "baseline_value": median_val,
+            "raw_values": values,
+            "run_count": runs,
+            "std_dev": round(std_dev, 4),
+            "stable": stable,
+            "profile_id": profile["profile_id"],
+        }
 
     matrix_size = int(env["MATRIX_SIZE"])
     batch_count = int(env["BATCH_COUNT"])

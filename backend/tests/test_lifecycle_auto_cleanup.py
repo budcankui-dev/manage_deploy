@@ -226,6 +226,61 @@ async def test_restore_pending_jobs_registers_future_end_jobs(db_session, seeded
     ap_scheduler.remove_job(job_id)
 
 
+@pytest.mark.asyncio
+async def test_restore_pending_jobs_registers_overdue_running_end_jobs(db_session, seeded_instance):
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    instance_id, _order_id = seeded_instance
+    job_id = f"end_{instance_id}"
+    if ap_scheduler.get_job(job_id):
+        ap_scheduler.remove_job(job_id)
+
+    instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance_id))
+    ).scalar_one()
+    instance.status = TaskStatus.RUNNING
+    instance.scheduled_end_time = datetime.utcnow() - timedelta(minutes=5)
+    await db_session.commit()
+
+    test_session_maker = async_sessionmaker(
+        db_session.bind, class_=AsyncSession, expire_on_commit=False
+    )
+    await restore_pending_jobs(session_maker=test_session_maker)
+
+    job = ap_scheduler.get_job(job_id)
+    assert job is not None, "超时但仍运行的实例应在恢复时注册立即停止 job"
+    assert job.trigger.run_date is not None
+
+    ap_scheduler.remove_job(job_id)
+
+
+@pytest.mark.asyncio
+async def test_restore_pending_jobs_registers_overdue_running_end_job(db_session, seeded_instance):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    instance_id, _order_id = seeded_instance
+    instance = await db_session.get(TaskInstance, instance_id)
+    instance.status = TaskStatus.RUNNING
+    instance.scheduled_end_time = datetime.utcnow() - timedelta(minutes=5)
+    await db_session.commit()
+
+    job_id = f"end_{instance_id}"
+    if ap_scheduler.get_job(job_id):
+        ap_scheduler.remove_job(job_id)
+
+    test_session_maker = async_sessionmaker(
+        db_session.bind, class_=AsyncSession, expire_on_commit=False
+    )
+    await restore_pending_jobs(session_maker=test_session_maker)
+
+    job = ap_scheduler.get_job(job_id)
+    assert job is not None, "超时仍运行的 scheduled 实例应在重启恢复时注册立即停止 job"
+    assert job.trigger.run_date.replace(tzinfo=None) > datetime.utcnow() - timedelta(seconds=2)
+
+    ap_scheduler.remove_job(job_id)
+
+
 # ---------- API：business-tasks 默认 SCHEDULED + end_time ----------
 
 

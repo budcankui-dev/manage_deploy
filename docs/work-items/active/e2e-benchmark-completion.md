@@ -1,7 +1,7 @@
 # Work Item: 端到端验收测试完善
 
 Status: in_progress  
-Last Updated: 2026-06-02
+Last Updated: 2026-06-08
 
 ## 已完成
 
@@ -26,7 +26,7 @@ Last Updated: 2026-06-02
 - task_orders.is_benchmark 字段区分测试/功能性工单
 - matmul 模板端口改为 auto=true（范围 18800-19100），支持同节点并发多实例
 - POST /api/orders/batch-benchmark：一键创建 N 个测试工单
-- POST /api/orders/auto-route / batch-auto-route：mock 随机路由（后续对接真实路由模块）
+- POST /api/orders/auto-route / batch-auto-route：内置随机路由策略（后续对接真实路由模块）
 
 ### 前端
 - 验收测试独立页面（/benchmark）：四步流程（基线管理/批量压测/路由启动/成功率统计）
@@ -40,19 +40,92 @@ Last Updated: 2026-06-02
 - 前端部署在 admin-server（10.112.244.94:8182，nginx）
 - MANAGER_PUBLIC_URL=http://10.112.244.94:8181，容器上报路径正确
 
+### 视频AI推理真实验收轮次（2026-06-08）
+- 远端视频 worker 镜像已重建并推送：`10.112.244.94:5000/low-latency-video:dev`。
+- `compute-3` 当前 Node Agent 已恢复可达，静态 IP 为 `10.112.59.209`；路由与部署可继续使用该节点。
+- 视频 baseline 已在可调度节点重跑并稳定：
+  - compute-1：`frame_latency_p90_ms=9.38037 ms`，`stable=true`
+  - compute-2：`frame_latency_p90_ms=9.32026 ms`，`stable=true`
+- 视频 smoke：`video-smoke-20260608102101`，2 个工单均完成指标上报，2/2 达标。
+- 视频 30 任务验收轮次：`video-acceptance-20260608102409`，30 个工单全部创建、内置随机路由、启动、指标上报成功；`evaluated_count=30`，`success_count=30`，业务目标成功率 `100%`。
+- 验收轮次执行后已调用“清理实例保留工单”，释放远端容器和实例运行态；工单、路由结果、GPU 分配、业务指标、结果摘要仍保留用于页面回看，列表中 `instance_exists=false`。
+- 抽查工单详情可见：
+  - `routing_input_dag.edges[]` 包含 `data_mb` 和 `bandwidth_mbps`
+  - compute placement 包含 `gpu_device: "0"`
+  - evaluation.result_metadata 包含 `profile_id=video_industrial_inspection_720p`、`resolution=720p`、`fps=30`、`measured_frames=30`、`frame_latency_p90_ms`、`detections` 和带框预览图
+
 ## 待完成
 
-### 高优先级
-- [ ] 视频推理 worker（source/compute/sink + Dockerfile，YOLO）
+- [x] 视频AI推理 worker（source/compute/sink + Dockerfile，固定视频 + YOLOv5n ONNX + 带框预览）
+- [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=30，每个可调度节点重复 3 次取中位数
+- [x] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足节点历史基准 × 1.5，成功率达到 90%
+- [x] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情、结果摘要和带框预览图
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
 - [ ] 前端：LLM prompt 输入 + 生成文本展示
 
 ### 中优先级
-- [ ] 真实路由系统对接（替换 mock 随机路由）
+- [ ] 真实路由系统对接（接入外部路由模式）
 - [ ] 实例删除时同步清理 Node Agent 容器注册（当前只删 DB 记录）
-- [ ] 意图解析数据集扩展到 200 条
+- [ ] 意图解析固定数据集继续保持 360 条口径，扩展样本覆盖多模态命名并加入模态标签
 
 ### 验收
 - matmul 批量压测 30 任务成功率 ≥ 90%（端口并发已支持）
+- 视频AI推理基本链路跑通：源节点按固定视频抽帧发送数据，推理节点统计有效帧时延并生成带框结果，目的节点或结果回调能够展示输出摘要
+- 视频AI推理批量压测 30 任务成功率 ≥ 90%
 - 意图解析准确率 ≥ 90%（需构建数据集）
+
+## 近期执行顺序
+
+1. 先跑通视频AI推理单任务端到端链路，确认容器启动、数据流、指标上报、GPU 分配和带框结果展示都真实可见。
+2. 再补视频AI推理基线采集与批量工单成功率统计。
+3. 最后优化验收测试页面展示，使矩阵计算和视频AI推理两个演示业务都能给专家展示完整证据链。
+
+## 视频业务真实四节点最小执行序列
+
+```bash
+# 构建并推送 AMD64 视频 worker 镜像
+WORKER_KIND=video \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+WORKER_PUSH=1 \
+WORKER_PLATFORM=linux/amd64 \
+./scripts/build_workers.sh
+
+# 重建视频模板和 catalog
+DEMO_BASE_URL=http://127.0.0.1:8000 \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+PYTHONPATH=backend \
+backend/venv/bin/python backend/scripts/rebuild_video_template.py
+
+# 登录后执行视频 baseline
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/baselines/batch-run \
+  -H 'Content-Type: application/json' \
+  -d '{"task_type":"low_latency_video_pipeline","runs":3}'
+
+# 创建 30 个视频验收工单
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/batch-benchmark \
+  -H 'Content-Type: application/json' \
+  -d '{"task_type":"low_latency_video_pipeline","count":30,"benchmark_run_id":"video-acceptance-001"}'
+
+# 内置随机路由策略；正式对接时由外部路由系统写回 placements
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/batch-auto-route \
+  -H 'Content-Type: application/json' \
+  -d '{"benchmark_run_id":"video-acceptance-001","task_type":"low_latency_video_pipeline"}'
+
+# 启动本轮已路由实例
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8000/api/orders/start-all-routed \
+  -H 'Content-Type: application/json' \
+  -d '{"benchmark_run_id":"video-acceptance-001","task_type":"low_latency_video_pipeline"}'
+```
+
+风险记录：
+
+- `batch-auto-route` 是验收闭环 mock，不保证选中有 GPU 的 compute 节点；真实验收和外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"` 或 `gpu_indices`。
+- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline * 1.5` 判定，重点展示随路计算、GPU 分配、带框结果、指标上报和成功率统计闭环。该系数用于覆盖共享算力节点和并发压测下的视频 P90 时延波动。
+- 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。

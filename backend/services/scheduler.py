@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -72,9 +72,11 @@ class TaskScheduler:
 
         async def _run_stop():
             from database import async_session_maker
+            from models import TaskInstance
             from services.dag_executor import DAGExecutor
             from services.instance_lifecycle import auto_cleanup_instance
             from services.order_sync import mark_orders_completed_for_instance
+            from services.routing_resource_events import emit_release_events_for_instance
 
             async with async_session_maker() as db:
                 try:
@@ -91,6 +93,12 @@ class TaskScheduler:
                         return
 
                     await mark_orders_completed_for_instance(db, instance_id)
+                    await emit_release_events_for_instance(
+                        db,
+                        instance_id,
+                        reason="scheduled_stop",
+                        metadata={"source": "scheduler"},
+                    )
                     if not instance.keep_after_stop:
                         await auto_cleanup_instance(db, instance)
                     await db.commit()
@@ -145,6 +153,7 @@ async def restore_pending_jobs(session_maker=None) -> None:
     scheduler_inst = TaskScheduler()
     restored_starts = 0
     restored_ends = 0
+    restored_overdue_ends = 0
 
     async with session_maker() as db:
         result = await db.execute(
@@ -172,9 +181,25 @@ async def restore_pending_jobs(session_maker=None) -> None:
                 if inst.scheduled_end_time is not None and inst.scheduled_end_time > now:
                     await scheduler_inst.schedule_task_end(inst.id, inst.scheduled_end_time)
                     restored_ends += 1
+                elif (
+                    inst.scheduled_end_time is not None
+                    and inst.scheduled_end_time <= now
+                    and inst.status in (TaskStatus.STARTING, TaskStatus.RUNNING)
+                ):
+                    # 错峰恢复过期收尾，避免 backend 重启后大量 stop/remove 同时打满
+                    # DB 连接池和 Node Agent。
+                    delay_seconds = 1 + restored_overdue_ends * 3
+                    await scheduler_inst.schedule_task_end(
+                        inst.id,
+                        datetime.now(UTC) + timedelta(seconds=delay_seconds),
+                    )
+                    restored_overdue_ends += 1
             except Exception:
                 logger.exception("Failed to restore schedule for instance %s", inst.id)
 
     logger.info(
-        "Restored scheduled jobs: starts=%d, ends=%d", restored_starts, restored_ends
+        "Restored scheduled jobs: starts=%d, ends=%d, overdue_ends=%d",
+        restored_starts,
+        restored_ends,
+        restored_overdue_ends,
     )

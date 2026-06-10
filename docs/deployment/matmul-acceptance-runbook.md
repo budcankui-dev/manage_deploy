@@ -1,6 +1,6 @@
-# Matmul 业务目标验收 Runbook
+# 业务目标验收 Runbook（矩阵乘法 / 视频推理）
 
-> 适用场景：将本地业务目标验收改动迁移到 4 节点真实实验拓扑，并完成 `/benchmark` 页面 30 任务验收截图。
+> 适用场景：将本地业务目标验收改动迁移到真实实验拓扑，并完成 `/benchmark` 页面 30 任务验收截图。矩阵乘法是主验收链路，视频推理作为第二模态扩展业务按同一工具链执行。
 
 ## 0. 验收目标
 
@@ -8,11 +8,19 @@
 
 ```text
 任务类型：矩阵乘法计算任务
-统计范围：is_benchmark=true 的验收压测工单
+统计范围：当前 benchmark_run_id 下 is_benchmark=true 的验收压测工单
 正式通过：已评估任务数 >= 30 且业务目标成功率 >= 90%
 ```
 
-当前 `/benchmark` 页面的一键路由是验收 mock 路由，只用于跑通闭环，不替代外部路由系统，也不证明路由算法最优。
+当前 `/benchmark` 页面的“内置随机路由策略”用于跑通闭环，可作为外部路由系统未接入时的 fallback 策略；它不证明外部路由算法最优。正式矩阵验收使用“自动执行”，按计算节点/GPU 槽位限流执行，避免 30 个任务一次性并发启动导致单任务基线口径失真。
+
+最近一次真实矩阵验收轮次：
+
+```text
+benchmark_run_id: high_throughput_matmul-controlled-20260608-01
+结果: 30 / 30 已评估，30 / 30 达标，业务目标成功率 100.0%
+页面: http://10.112.244.94:8182/benchmark?benchmark_run_id=high_throughput_matmul-controlled-20260608-01
+```
 
 ## 1. 本地提交前检查
 
@@ -71,6 +79,27 @@ curl -sS http://10.112.244.94:8181/docs >/dev/null
 curl -sS http://10.112.244.94:8181/api/nodes | python3 -m json.tool
 ```
 
+启用业务面 IPv6 时，管理节点 `backend/.env` 至少确认：
+
+```bash
+PREFER_BUSINESS_IPV6=true
+BACKEND_PORT=8181
+```
+
+`BACKEND_PORT` 必须等于实际后端端口。该值会参与生成 worker 容器内的 `MANAGER_API_BASE`；如果仍是默认 `8000`，source/compute/sink 的 IPv6 数据面可能跑通，但 sink 指标回写会失败。
+
+后端重启后检查日志：
+
+```bash
+ssh manage-admin "grep 'Resolved MANAGER_PUBLIC_URL' /home/bupt/manage_deploy/backend/backend.log | tail -1"
+```
+
+期望包含：
+
+```text
+Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181
+```
+
 ## 3. AMD64 Worker 镜像
 
 在 `admin-server` 构建并推送，不要使用本地 macOS ARM64 镜像：
@@ -84,6 +113,54 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
   ./scripts/build_workers.sh"
 ```
 
+如果现场网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，但 registry 中已有可运行的 `linux/amd64` 旧镜像，可用“刷新业务代码层”的备用路径，避免重新下载系统依赖：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  docker pull localhost:5000/scientific-matmul:dev && \
+  docker tag localhost:5000/scientific-matmul:dev scientific-matmul:base-cache && \
+  cat >/tmp/Dockerfile.matmul-refresh <<'EOF'
+FROM scientific-matmul:base-cache
+COPY _common /app/_common
+COPY high-throughput-matmul/src /app/src
+ENV PYTHONPATH=/app/src:/app
+ENV USE_GPU=true
+CMD [\"python3\", \"/app/src/source_main.py\"]
+EOF
+  docker build --pull=false --platform linux/amd64 \
+    -f /tmp/Dockerfile.matmul-refresh \
+    -t localhost:5000/scientific-matmul:dev workers && \
+  docker run --rm --entrypoint python3 localhost:5000/scientific-matmul:dev \
+    -c 'import pathlib; t=pathlib.Path(\"/app/src/compute_main.py\").read_text(); print(\"observation_duration_sec\" in t, \"sample_count\" in t)' && \
+  docker push localhost:5000/scientific-matmul:dev"
+```
+
+该备用路径只适用于已确认旧镜像基础依赖正确的验收环境。若改动涉及系统包、Python 依赖或 CUDA 版本，仍需恢复网络后完整重建。
+
+如果只是刷新公共业务通信代码（例如 `_common/http_server.py` 的 IPv6 双栈监听修复），且现场网络无法访问 Docker Hub / apt / NVIDIA 源，可使用更小的补丁镜像路径：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  printf 'FROM localhost:5000/scientific-matmul:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
+    >/tmp/Dockerfile.scientific-matmul-ipv6 && \
+  docker build -f /tmp/Dockerfile.scientific-matmul-ipv6 \
+    -t 10.112.244.94:5000/scientific-matmul:dev workers && \
+  docker push 10.112.244.94:5000/scientific-matmul:dev"
+```
+
+视频 worker 同理：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  printf 'FROM 10.112.244.94:5000/low-latency-video:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
+    >/tmp/Dockerfile.low-latency-video-ipv6 && \
+  docker build -f /tmp/Dockerfile.low-latency-video-ipv6 \
+    -t 10.112.244.94:5000/low-latency-video:dev workers && \
+  docker push 10.112.244.94:5000/low-latency-video:dev"
+```
+
+推送后，三台业务节点必须重新 `docker pull` 对应 tag。Node Agent 不会自动拉取已存在的同名旧 tag。
+
 重建矩阵乘法模板，确保模板镜像指向私有仓库：
 
 ```bash
@@ -96,6 +173,31 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
 ```
 
 模板节点必须开启 `port_defs.auto=true`。正式 `/benchmark` 批量验收会并发物化 30 个实例，如果端口仍固定为 `18801/18802/18803`，同一物理节点上的多个容器会互相抢端口或串到其它实例，表现为只有少数任务上报指标。
+
+视频推理 worker 使用固定测试视频和 YOLO 权重，镜像同样在 `admin-server` 构建并推送：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && \
+  WORKER_KIND=video \
+  WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+  WORKER_TAG=dev \
+  WORKER_PLATFORM=linux/amd64 \
+  WORKER_PUSH=1 \
+  ./scripts/build_workers.sh"
+```
+
+重建视频业务模板和 catalog：
+
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
+  WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+  WORKER_TAG=dev \
+  DEMO_BASE_URL=http://127.0.0.1:8181 \
+  PYTHONPATH=/home/bupt/manage_deploy/backend \
+  /home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_video_template.py"
+```
+
+视频模板同样要求 `port_defs.auto=true`。compute 子任务默认需要 GPU，路由结果应写回 `gpu_device`；如果现场临时 CPU 兜底，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。
 
 ## 4. 业务节点预检
 
@@ -127,13 +229,28 @@ E2E_REMOTE=1 \
 WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
 WORKER_TAG=dev \
 E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
-E2E_NODE_AGENT_HOSTS="10.112.249.191 10.112.150.166 10.112.116.165" \
+E2E_NODE_AGENT_HOSTS="10.112.249.191 10.112.150.166 10.112.59.209" \
 MATMUL_MATRIX_SIZE=1024 \
 MATMUL_BATCH_COUNT=50 \
 ./scripts/e2e_matmul_live.sh
 ```
 
 E2E 通过后再进入页面完整验收，避免专家演示时暴露镜像架构或 Node Agent 问题。
+
+IPv6 数据面验证必须额外抽查真实容器，而不是只看 `OK`：
+
+```bash
+docker inspect <container_name> --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E 'PEER_.*_URL|TASK_PEERS_JSON|MANAGER_API_BASE'
+docker logs --tail 50 <sink_container_name>
+```
+
+期望：
+
+- `PEER_*_URL` 使用 `http://[2001:...]:port` 方括号 IPv6 URL。
+- `TASK_PEERS_JSON` 中 `business_address` 为 IPv6。
+- `MANAGER_API_BASE=http://10.112.244.94:8181`。
+- sink 日志出现 `SINK_DONE`，业务评估返回 `business_success=true`。
 
 ## 6. 页面验收流程
 
@@ -146,16 +263,29 @@ http://10.112.244.94:8182/benchmark
 操作顺序：
 
 1. Step 1 点击“批量测试所有节点”，确认 `compute-1/2/3` 都有稳定 baseline。
-2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建压测工单”。
-3. Step 3 点击“一键路由”，再点击“一键启动”，等待状态进入“已完成”或“失败”。
-4. Step 4 点击“刷新结果”，确认“已评估数 >= 30”。
+2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建压测工单”，记录页面顶部显示的 `benchmark_run_id`。
+3. Step 3 点击“生成随机路由”，再点击“自动执行”，等待当前轮次状态进入“已评估完成”或“失败”。自动执行会按计算节点/GPU 槽位启动下一批任务，已评估样本会自动清理容器实例但保留工单证据。
+4. Step 4 点击“计算/更新成功率”，确认“已评估数 >= 30”。
 5. 若成功率 `>= 90%`，保存页面截图和后端 summary JSON；若不足，保存失败任务详情和容器日志。
+
+视频推理业务页面流程基本相同：
+
+1. 在页面顶部任务类型选择“视频AI推理任务”。
+2. Step 1 对参与计算的节点执行视频 profile baseline，确认基线稳定。
+3. Step 2 使用默认 `任务数=30`、`frame_stride=30`、`warmup_frames=10`、`measured_frames=30` 创建压测工单。
+4. Step 3 生成随机路由后点击“自动执行”，系统按计算节点/GPU 槽位分批运行。
+5. 在工单详情中确认 source / compute / sink 放置、compute GPU 编号、`frame_latency_p90_ms`、检测类别、画框坐标和带框预览图。
+6. Step 4 确认已评估任务数 `>= 30` 且成功率 `>= 90%`。
 
 后端结果留档：
 
 ```bash
-curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true" \
+RUN_ID="high_throughput_matmul-YYYYMMDDHHMMSS"
+curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true&benchmark_run_id=${RUN_ID}" \
   | tee reports/business_objective_summary_$(date +%Y%m%d_%H%M%S).json
+
+curl -sS "http://10.112.244.94:8181/api/orders?is_benchmark=true&benchmark_run_id=${RUN_ID}&limit=100" \
+  | tee reports/business_objective_orders_${RUN_ID}.json
 ```
 
 ## 7. 常见失败定位
@@ -167,4 +297,8 @@ curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true
 | Step 4 样本不足 | 任务未完成、指标未上报、无 baseline 导致不可评价 |
 | 成功率异常 100% 但任务数很少 | 不是正式验收；必须达到 30 个已评估任务 |
 | 批量压测只有少数任务上报指标 | 检查模板 `port_defs.auto=true`、backend 自动端口 fallback、同一节点端口是否重复 |
-| 一键启动后无运行中状态 | 检查 `/tmp/manage_deploy_backend.log`、Node Agent 日志、端口冲突预检 |
+| 自动执行长时间无进展 | 检查当前轮次是否已路由、是否仍有运行中任务未上报指标、Node Agent 日志、容器日志和端口冲突预检 |
+| 一次性启动后成功率低于 90% | 不建议作为正式矩阵验收口径；改用“自动执行”，因为 baseline 是同 profile 单任务历史能力 |
+| 视频详情没有带框图 | 确认 worker 镜像已包含 `workers/low-latency-video/assets`，sink 上报 tags.result 中有 `annotated_frame_data_url`，后端已重启到最新代码 |
+| 视频详情 GPU 显示无分配 | 检查路由结果是否为 compute/worker 写回 `gpu_device`，以及 Node Agent 创建容器时是否传入 GPU 设备 |
+| 视频基线或任务很慢 | 优先确认是否走 GPU；正式参数为 `measured_frames=30`，不要在演示前临时提高帧数 |

@@ -19,7 +19,11 @@
         </router-link>
         <router-link to="/benchmark" class="nav-item">
           <el-icon><TrendCharts /></el-icon>
-          <span>验收测试</span>
+          <span>业务测评</span>
+        </router-link>
+        <router-link to="/intent-evaluation" class="nav-item">
+          <el-icon><DataLine /></el-icon>
+          <span>意图评测</span>
         </router-link>
         <router-link to="/nodes" class="nav-item">
           <el-icon><Monitor /></el-icon>

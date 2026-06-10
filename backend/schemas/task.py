@@ -1,6 +1,6 @@
 from typing import Optional, Any
 
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, model_validator
 from datetime import datetime, timedelta, UTC
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
@@ -170,6 +170,7 @@ class TaskInstanceCreate(TaskInstanceBase):
     auto_start: bool = False
     keep_after_stop: bool = False
     macro_values: Optional[dict[str, str]] = None
+    enabled_template_node_names: Optional[list[str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -244,15 +245,21 @@ class TaskEventResponse(BaseModel):
 class BatchOperationRequest(BaseModel):
     order_ids: list[str] = Field(default_factory=list, description="要删除的工单 ID 列表")
     instance_ids: list[str] = Field(default_factory=list, description="废弃字段，请使用 order_ids（兼容旧调用方）")
+    benchmark_run_id: Optional[str] = Field(
+        default=None,
+        description="按验收压测轮次批量操作；order_ids 为空时生效",
+    )
+    task_type: Optional[str] = Field(default=None, description="按任务类型缩小批量操作范围")
+    is_benchmark: Optional[bool] = Field(default=None, description="按是否验收压测缩小批量操作范围")
 
-    @field_validator('order_ids', mode='before')
+    @model_validator(mode="before")
     @classmethod
-    def promote_instance_ids_to_order_ids(cls, v, info):
+    def promote_instance_ids_to_order_ids(cls, values):
         # 如果 order_ids 为空但 instance_ids 有值，沿用 instance_ids（兼容旧调用方）
-        values = info.data
-        if not v and values.get('instance_ids'):
-            return values['instance_ids']
-        return v if v is not None else []
+        if isinstance(values, dict) and not values.get("order_ids") and values.get("instance_ids"):
+            values = dict(values)
+            values["order_ids"] = values["instance_ids"]
+        return values
 
 
 class BatchOperationResponse(BaseModel):
@@ -345,11 +352,18 @@ class TaskOrderResponse(BaseModel):
     routing_input_dag: Optional[dict] = None
     materialized_instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None
+    deployment_status: Optional[TaskStatus] = None
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     task_type: Optional[str] = None
     routing_policy: Optional[str] = None
+    metric_key: Optional[str] = None
+    actual_value: Optional[float] = None
+    target_value: Optional[float] = None
+    unit: Optional[str] = None
+    business_success: Optional[bool] = None
+    failure_reason: Optional[str] = None
 
 
 class TaskMetricReport(BaseModel):
@@ -396,7 +410,7 @@ class RoutingResult(BaseModel):
         default="resource_guarantee",
         validation_alias=AliasChoices("strategy", "routing_policy"),
     )
-    placements: dict[str, str]
+    placements: dict[str, Any]
     estimated_metric: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
@@ -435,6 +449,8 @@ class BusinessTaskListItem(BaseModel):
     external_task_id: Optional[str] = None
     name: str
     task_type: Optional[str] = None
+    is_benchmark: bool = False
+    benchmark_run_id: Optional[str] = None
     modality: Optional[str] = None
     routing_policy: Optional[str] = None
     order_status: OrderStatus
@@ -482,11 +498,23 @@ class TaskOrderEvaluationSummary(BaseModel):
     result_metadata: Optional[dict[str, Any]] = None
 
 
+class TaskOrderNodePlacementSummary(BaseModel):
+    role: str
+    instance_node_name: str
+    node_id: str
+    hostname: Optional[str] = None
+    gpu_id: Optional[str] = None
+    gpu_device: Optional[str] = None
+    port_values: Optional[dict[str, Any]] = None
+    status: Optional[NodeStatus] = None
+
+
 class TaskOrderDetailResponse(TaskOrderResponse):
     business_task: Optional[dict[str, Any]] = None
     routing_result: Optional[dict[str, Any]] = None
     instance: Optional[TaskOrderInstanceSummary] = None
     evaluation: Optional[TaskOrderEvaluationSummary] = None
+    node_placements: list[TaskOrderNodePlacementSummary] = Field(default_factory=list)
 
 
 class BusinessTemplateCatalogCreate(BaseModel):
@@ -538,6 +566,7 @@ class BusinessObjectiveEvaluationResponse(BaseModel):
     estimated_value: Optional[float] = None
     estimation_error_ratio: Optional[float] = None
     object_uris: Optional[dict] = None
+    result_metadata: Optional[dict[str, Any]] = None
     created_at: datetime
 
 

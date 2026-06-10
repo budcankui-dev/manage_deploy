@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Build from repo root: docker build -f workers/high-throughput-matmul/Dockerfile -t matmul-worker:latest workers
 #
 # GPU mode: docker run --gpus all -e USE_GPU=true matmul-worker:latest
@@ -11,8 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --no-cache-dir \
+RUN pip3 install --no-cache-dir \
     numpy==2.2.5 \
     cupy-cuda12x==13.4.1 \
     httpx==0.28.1 \

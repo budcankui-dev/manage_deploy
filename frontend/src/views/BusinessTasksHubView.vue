@@ -13,71 +13,117 @@
       </div>
     </header>
 
-    <div class="success-rate-cards" v-if="totalEvaluated > 0">
-      <div v-for="item in successRateByType" :key="item.task_type" class="success-rate-card">
-        <div class="rate-number" :class="{ pass: item.rate >= 90, fail: item.rate < 90 }">
-          {{ item.rate.toFixed(1) }}%
-        </div>
-        <div class="rate-label">{{ taskTypeLabel(item.task_type) }}</div>
-        <div class="rate-detail">{{ item.success }}/{{ item.evaluated }} 达标</div>
-      </div>
-    </div>
-
-    <el-collapse v-model="summaryOpen">
-      <el-collapse-item title="按任务类型和路由策略统计" name="summary">
-        <el-table :data="summary" size="small" v-loading="summaryLoading">
-          <el-table-column prop="task_type" label="任务类型" min-width="180" />
-          <el-table-column label="路由策略" min-width="140">
-            <template #default="{ row }">{{ routingPolicyLabel(row.routing_strategy) }}</template>
-          </el-table-column>
-          <el-table-column prop="count" label="工单数" width="80" />
-          <el-table-column label="已评估" width="80">
-            <template #default="{ row }">{{ row.evaluated_count ?? 0 }}</template>
-          </el-table-column>
-          <el-table-column label="成功率" min-width="140">
-            <template #default="{ row }">
-              <span v-if="row.business_success_rate == null">-</span>
-              <span v-else>{{ successRateLabel(row) }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-collapse-item>
-    </el-collapse>
-
     <section class="card">
       <div class="card-header">
         <h2>工单列表</h2>
+        <div class="batch-actions">
+          <span>已选 {{ selectedOrderIds.length }} 个</span>
+          <el-button
+            size="small"
+            type="warning"
+            plain
+            :disabled="!selectedOrderIds.length"
+            :loading="batchCleanupLoading"
+            @click="cleanupSelectedOrderInstances"
+          >
+            清理实例保留工单
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="!selectedOrderIds.length"
+            :loading="batchDeleteLoading"
+            @click="deleteSelectedOrders"
+          >
+            删除选中工单
+          </el-button>
+          <el-button
+            size="small"
+            type="warning"
+            :disabled="!hasBenchmarkRunScope"
+            :loading="runCleanupLoading"
+            @click="cleanupCurrentBenchmarkRun"
+          >
+            清理本轮实例
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            :disabled="!hasBenchmarkRunScope"
+            :loading="runDeleteLoading"
+            @click="deleteCurrentBenchmarkRun"
+          >
+            删除本轮工单
+          </el-button>
+        </div>
         <div class="filters">
-          <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="loadList" />
-          <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="loadList">
-            <el-option v-for="t in taskTypeOptions" :key="t" :label="t" :value="t" />
+          <el-input v-model="filters.q" placeholder="搜索名称/任务ID" clearable style="width: 200px" @keyup.enter="applyFilters" />
+          <el-select v-model="filters.task_type" placeholder="任务类型" clearable style="width: 180px" @change="applyFilters">
+            <el-option v-for="t in taskTypeOptions" :key="t" :label="taskTypeLabel(t)" :value="t" />
           </el-select>
-          <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="loadList">
+          <el-select v-model="filters.is_benchmark" placeholder="工单来源" clearable style="width: 130px" @change="applyFilters">
+            <el-option label="验收压测" :value="true" />
+            <el-option label="普通工单" :value="false" />
+          </el-select>
+          <el-input
+            v-model="filters.benchmark_run_id"
+            placeholder="验收轮次ID"
+            clearable
+            style="width: 230px"
+            @keyup.enter="applyFilters"
+            @clear="applyFilters"
+          />
+          <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="applyFilters">
             <el-option v-for="(label, key) in ROUTING_POLICY_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="loadList">
+          <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="applyFilters">
             <el-option v-for="(label, key) in ORDER_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="loadList">
+          <el-select v-model="filters.deployment_status" placeholder="部署状态" clearable style="width: 130px" @change="applyFilters">
             <el-option v-for="(label, key) in DEPLOYMENT_STATUS_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
-          <el-select v-model="filters.business_success" placeholder="性能达标" clearable style="width: 120px" @change="loadList">
+          <el-select v-model="filters.business_success" placeholder="性能达标" clearable style="width: 120px" @change="applyFilters">
             <el-option label="达标" :value="true" />
             <el-option label="未达标" :value="false" />
           </el-select>
-          <el-checkbox v-model="filters.include_cancelled" @change="loadList">显示已取消</el-checkbox>
+          <el-checkbox v-model="filters.include_cancelled" @change="applyFilters">显示已取消</el-checkbox>
+          <el-button size="small" @click="applyFilters">应用筛选</el-button>
         </div>
+        <p class="batch-hint">
+          清理实例会释放远端容器和实例记录，但保留工单、路由结果、业务指标和结果文件；删除工单用于清掉废弃压测轮次。
+        </p>
       </div>
 
-      <el-table :data="items" size="small" v-loading="listLoading">
+      <el-table
+        :data="items"
+        size="small"
+        v-loading="listLoading"
+        @selection-change="handleOrderSelectionChange"
+      >
+        <el-table-column type="selection" width="44" />
         <el-table-column label="工单ID" width="120">
-          <template #default="{ row }"><code style="font-size:11px">{{ row.id?.slice(0,8) }}</code></template>
+          <template #default="{ row }"><code style="font-size:11px">{{ row.order_id?.slice(0,8) }}</code></template>
         </el-table-column>
         <el-table-column label="任务类型" min-width="160">
-          <template #default="{ row }">{{ taskTypeLabel(row.task_type) || '-' }}</template>
+          <template #default="{ row }">
+            {{ taskTypeLabel(row.task_type) || '-' }}
+            <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain" style="margin-left:6px">压测</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="所属模态" min-width="150">
+          <template #default="{ row }">
+            <el-tag size="small" type="success" effect="plain">{{ modalityLabel(row.modality) }}</el-tag>
+          </template>
         </el-table-column>
         <el-table-column label="路由策略" min-width="130">
           <template #default="{ row }">{{ routingPolicyLabel(row.routing_policy) }}</template>
+        </el-table-column>
+        <el-table-column label="验收轮次" min-width="190">
+          <template #default="{ row }">
+            <code v-if="row.benchmark_run_id" style="font-size:11px">{{ row.benchmark_run_id }}</code>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
         <el-table-column label="工单状态" width="110">
           <template #default="{ row }">
@@ -104,7 +150,7 @@
         <el-table-column label="性能达标" width="90">
           <template #default="{ row }">
             <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-            <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+            <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -188,7 +234,7 @@
             <el-descriptions :column="1" border class="detail-desc">
               <el-descriptions-item label="外部任务ID">{{ orderDetail.external_task_id || '-' }}</el-descriptions-item>
               <el-descriptions-item label="任务类型">{{ taskTypeLabel(orderDetail.business_task.task_type) }}</el-descriptions-item>
-              <el-descriptions-item label="模态">{{ orderDetail.business_task.modality || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="模态">{{ modalityLabel(orderDetail.business_task.modality) }}</el-descriptions-item>
               <el-descriptions-item label="描述">{{ orderDetail.description || orderDetail.business_task.description || '-' }}</el-descriptions-item>
             </el-descriptions>
 
@@ -231,6 +277,11 @@
         </el-tab-pane>
 
         <el-tab-pane label="路由" name="routing">
+          <el-collapse v-if="orderDetail?.routing_input_dag" class="raw-collapse">
+            <el-collapse-item title="提交给外部路由系统的 DAG JSON" name="routing_input_dag">
+              <pre class="json-block">{{ pretty(orderDetail.routing_input_dag) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
           <template v-if="orderDetail?.routing_result">
             <el-descriptions :column="1" border class="detail-desc">
               <el-descriptions-item label="路由策略">
@@ -242,13 +293,21 @@
               <el-table-column prop="role" label="角色" width="120" />
               <el-table-column label="部署节点" min-width="220">
                 <template #default="{ row }">
-                  <span v-if="row.node_id === '未部署'" style="color: #909399">未部署容器</span>
-                  <span v-else>{{ row.node_id }}</span>
+                  <span v-if="row.worker_host === '未部署'" style="color: #909399">未部署容器</span>
+                  <span v-else>{{ row.worker_host }}</span>
                 </template>
               </el-table-column>
+              <el-table-column label="GPU" width="120">
+                <template #default="{ row }">
+                  <span :class="{ 'warning-text': row.requires_gpu && !hasGpuValue(row.gpu_device) }">
+                    {{ row.gpu_display }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="node_id" label="路由角色" width="110" />
             </el-table>
           </template>
-          <el-empty v-else description="无路由结果" />
+          <el-empty v-else-if="!orderDetail?.routing_input_dag" description="无路由结果" />
         </el-tab-pane>
 
         <el-tab-pane label="部署" name="deployment">
@@ -331,6 +390,78 @@
               <p>{{ detailMatmulVerdict.subtitle }}</p>
             </div>
           </template>
+          <template v-else-if="isVideoDetail">
+            <h3 class="section-title">本任务在做什么</h3>
+            <p class="task-summary">{{ detailTaskSummary }}</p>
+            <ol class="pipeline-steps">
+              <li v-for="step in videoPipelineSteps" :key="step.role">
+                <strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}
+              </li>
+            </ol>
+
+            <div class="video-result-card">
+              <div class="video-preview">
+                <template v-if="detailVideoPreview">
+                  <div class="video-proof-frame">
+                    <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                    <div v-if="detailVideoNeedsOverlay" class="video-proof-overlay">
+                      <div v-if="detailVideoEvidenceRows.length" class="video-proof-badge">
+                        <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
+                      </div>
+                      <div
+                        v-for="row in detailVideoDetections"
+                        :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                        class="video-proof-box"
+                        :style="detailVideoBoxStyle(row)"
+                      >
+                        <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <el-empty v-else description="等待带框预览图" :image-size="80" />
+              </div>
+              <div class="video-result-side">
+                <h3 class="section-title">输入参数</h3>
+                <el-descriptions v-if="detailVideoInputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in detailVideoInputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+
+                <h3 class="section-title">推理输出</h3>
+                <el-descriptions v-if="detailVideoOutputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in detailVideoOutputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </div>
+
+            <h3 v-if="detailVideoDetections.length" class="section-title">分类检测结果</h3>
+            <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small">
+              <el-table-column label="类别" min-width="140">
+                <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="置信度" width="100">
+                <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column label="画框坐标" min-width="180">
+                <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="来源" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <h3 class="section-title">性能验收</h3>
+            <div class="result-verdict" :class="detailVideoVerdict.statusClass">
+              <strong>{{ detailVideoVerdict.title }}</strong>
+              <p>{{ detailVideoVerdict.subtitle }}</p>
+            </div>
+          </template>
           <template v-else-if="orderDetail?.evaluation">
             <div class="result-verdict" :class="resultVerdictClass">
               <strong>{{ resultVerdictTitle }}</strong>
@@ -352,6 +483,11 @@
             </el-descriptions>
           </template>
           <el-empty v-else description="任务尚未跑完或未上报业务指标" />
+          <el-collapse v-if="orderDetail?.evaluation?.result_metadata" class="raw-collapse">
+            <el-collapse-item title="原始结果 JSON" name="result_metadata">
+              <pre class="json-block">{{ pretty(orderDetail.evaluation.result_metadata) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
           <el-collapse v-if="resultObjects.length" class="raw-collapse">
             <el-collapse-item title="结果文件 URI" name="result_files">
               <el-table :data="resultObjects" size="small">
@@ -410,37 +546,52 @@ import {
 } from '@/constants/routingPolicy'
 import {
   MATMUL_PIPELINE_STEPS,
+  TASK_TYPE_LABELS,
+  VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
   buildMatmulVerdict,
+  buildVideoInputRows,
+  buildVideoOutputRows,
+  buildVideoVerdict,
   describeDataProfile,
   describeObjectiveMeaning,
   describeRuntimePlan,
   formatObjectiveSentence,
+  modalityLabel,
   taskTypeLabel,
   taskTypeSummary,
+  videoDetectionBoxStyle,
+  videoDetections,
+  videoPreviewEvidenceRows,
+  videoPreviewNeedsOverlay,
+  videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
 
 const route = useRoute()
 const router = useRouter()
 const demoRunning = ref(false)
-const summaryOpen = ref(['summary'])
-const summary = ref([])
-const summaryLoading = ref(false)
 const listLoading = ref(false)
 const detailLoading = ref(false)
+const batchCleanupLoading = ref(false)
+const batchDeleteLoading = ref(false)
+const runCleanupLoading = ref(false)
+const runDeleteLoading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const nodes = ref([])
+const selectedOrderIds = ref([])
 
 const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
 
 const filters = reactive({
   q: '',
   task_type: '',
+  is_benchmark: '',
+  benchmark_run_id: '',
   routing_policy: '',
   order_status: '',
   deployment_status: '',
@@ -454,25 +605,10 @@ const orderDetail = ref(null)
 const instanceDetail = ref(null)
 const resultObjects = ref([])
 
-const taskTypeOptions = computed(() => {
-  const fromSummary = summary.value.map((row) => row.task_type).filter(Boolean)
-  const fromList = items.value.map((row) => row.task_type).filter(Boolean)
-  return [...new Set([...fromSummary, ...fromList])]
-})
-
-const totalEvaluated = computed(() => summary.value.reduce((s, r) => s + (r.evaluated_count || 0), 0))
-const totalSuccessCount = computed(() => summary.value.reduce((s, r) => s + (r.success_count || 0), 0))
-const totalSuccessRate = computed(() => totalEvaluated.value > 0 ? (totalSuccessCount.value / totalEvaluated.value) * 100 : 0)
-const successRateByType = computed(() => {
-  const map = {}
-  summary.value.forEach(row => {
-    const t = row.task_type || 'unknown'
-    if (!map[t]) map[t] = { task_type: t, evaluated: 0, success: 0 }
-    map[t].evaluated += row.evaluated_count || 0
-    map[t].success += row.success_count || 0
-  })
-  return Object.values(map).filter(x => x.evaluated > 0).map(x => ({ ...x, rate: (x.success / x.evaluated) * 100 }))
-})
+const taskTypeOptions = computed(() => Object.keys(TASK_TYPE_LABELS))
+const hasBenchmarkRunScope = computed(() =>
+  filters.is_benchmark === true && Boolean(String(filters.benchmark_run_id || '').trim())
+)
 
 const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
 
@@ -489,19 +625,52 @@ const manualPlacements = ref({
 const placementRows = computed(() => {
   const placements = orderDetail.value?.routing_result?.placements
   if (!placements) return []
+  const rowFor = (role, placement) => {
+    const roleName = { source: '数据源', worker: '计算', compute: '计算', sink: '汇总' }[role] || role
+    const requiresGpu = ['worker', 'compute'].includes(role)
+    if (!placement) {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: '未部署',
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    if (typeof placement === 'string') {
+      return {
+        role: roleName,
+        node_id: role,
+        worker_host: placement,
+        gpu_device: null,
+        gpu_display: requiresGpu ? '未记录' : '不需要',
+        requires_gpu: requiresGpu,
+      }
+    }
+    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
+    return {
+      role: roleName,
+      node_id: placement.node_id || role,
+      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      gpu_device: gpu,
+      gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
+      requires_gpu: requiresGpu,
+    }
+  }
   if (Array.isArray(placements)) {
     const map = {}
-    placements.forEach(p => { map[p.node_id] = p.worker_host })
+    placements.forEach(p => { map[p.node_id] = p })
     return [
-      { role: '数据源', node_id: map.source || '未部署' },
-      { role: '计算', node_id: map.compute || map.worker || '未部署' },
-      { role: '汇总', node_id: map.sink || '未部署' },
+      rowFor('source', map.source),
+      rowFor('compute', map.compute || map.worker),
+      rowFor('sink', map.sink),
     ]
   }
   return [
-    { role: '数据源', node_id: placements.source || '未部署' },
-    { role: '计算', node_id: placements.compute || placements.worker || '未部署' },
-    { role: '汇总', node_id: placements.sink || '未部署' },
+    rowFor('source', placements.source),
+    rowFor('compute', placements.compute || placements.worker),
+    rowFor('sink', placements.sink),
   ]
 })
 
@@ -536,7 +705,9 @@ const detailRuntimePlanRows = computed(() =>
   describeRuntimePlan(detailTaskType.value, orderDetail.value?.business_task?.runtime_plan)
 )
 const isMatmulDetail = computed(() => detailTaskType.value === 'high_throughput_matmul')
+const isVideoDetail = computed(() => detailTaskType.value === 'low_latency_video_pipeline')
 const matmulPipelineSteps = MATMUL_PIPELINE_STEPS
+const videoPipelineSteps = VIDEO_PIPELINE_STEPS
 const detailMatmulInputRows = computed(() =>
   buildMatmulInputRows(orderDetail.value?.business_task?.data_profile)
 )
@@ -553,6 +724,33 @@ const detailMatmulConsistency = computed(() =>
   )
 )
 const detailMatmulVerdict = computed(() => buildMatmulVerdict(orderDetail.value?.evaluation))
+const detailVideoInputRows = computed(() =>
+  buildVideoInputRows(orderDetail.value?.business_task?.data_profile)
+)
+const detailVideoOutputRows = computed(() =>
+  buildVideoOutputRows(
+    orderDetail.value?.evaluation?.result_metadata,
+    orderDetail.value?.evaluation
+  )
+)
+const detailVideoVerdict = computed(() => buildVideoVerdict(orderDetail.value?.evaluation))
+const detailVideoPreview = computed(() =>
+  videoPreviewDataUrl(orderDetail.value?.evaluation?.result_metadata)
+)
+const detailVideoDetections = computed(() =>
+  videoDetections(orderDetail.value?.evaluation?.result_metadata)
+)
+const detailVideoEvidenceRows = computed(() =>
+  videoPreviewEvidenceRows(orderDetail.value?.evaluation?.result_metadata)
+)
+const detailVideoNeedsOverlay = computed(() =>
+  videoPreviewNeedsOverlay(orderDetail.value?.evaluation?.result_metadata)
+)
+
+function detailVideoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, orderDetail.value?.evaluation?.result_metadata)
+}
+
 const resultVerdictClass = computed(() => {
   const evaluation = orderDetail.value?.evaluation
   if (!evaluation) return 'pending'
@@ -575,6 +773,7 @@ const resultVerdictSubtitle = computed(() => {
 })
 
 onMounted(async () => {
+  applyRouteFilters()
   await refreshAll()
   const orderId = route.query.orderId
   if (typeof orderId === 'string' && orderId) {
@@ -593,17 +792,15 @@ watch(
   }
 )
 
-
-function percent(value) {
-  return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`
+function applyRouteFilters() {
+  const query = route.query
+  if (typeof query.task_type === 'string') filters.task_type = query.task_type
+  if (typeof query.benchmark_run_id === 'string') filters.benchmark_run_id = query.benchmark_run_id
+  if (typeof query.is_benchmark === 'string') {
+    filters.is_benchmark = query.is_benchmark === 'true'
+  }
 }
 
-function successRateLabel(row) {
-  const rate = percent(row.business_success_rate)
-  const evaluated = row.evaluated_count ?? 0
-  const success = row.success_count ?? 0
-  return `${rate}（${success}/${evaluated}）`
-}
 
 function formatMetric(value) {
   return value == null ? '-' : Number(value)
@@ -615,7 +812,7 @@ function metricMeaningLabel(row) {
     end_to_end_latency_ms: '端到端时延',
     effective_gflops: '有效算力',
     tokens_per_second: '推理吞吐',
-    frame_latency_p90_ms: '帧延迟P90',
+    frame_latency_p90_ms: '帧推理时延 P90',
   }
   return METRIC_LABELS[row.metric_key] || row.metric_key || '指标'
 }
@@ -627,6 +824,10 @@ function formatTime(value) {
 function pretty(value) {
   if (value == null) return '-'
   return JSON.stringify(value, null, 2)
+}
+
+function hasGpuValue(value) {
+  return value !== null && value !== undefined && String(value) !== ''
 }
 
 function orderStatusTag(status) {
@@ -647,21 +848,42 @@ function deploymentStatusTag(status) {
 }
 
 function canStart(status) {
-  return ['pending', 'stopped', 'failed'].includes(status)
+  return ['pending', 'scheduled', 'stopped', 'failed'].includes(status)
+}
+
+function handleOrderSelectionChange(rows) {
+  selectedOrderIds.value = rows.map(row => row.order_id).filter(Boolean)
 }
 
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadList(), loadNodes()])
+  await Promise.all([loadList(), loadNodes()])
 }
 
-async function loadSummary() {
-  summaryLoading.value = true
-  try {
-    const { data } = await businessApi.summary()
-    summary.value = data
-  } finally {
-    summaryLoading.value = false
+function buildFilterParams({ includePaging = false } = {}) {
+  const params = {
+    include_cancelled: filters.include_cancelled,
   }
+  if (includePaging) {
+    params.page = page.value
+    params.page_size = pageSize.value
+  }
+  if (filters.q && includePaging) params.q = filters.q
+  if (filters.task_type) params.task_type = filters.task_type
+  if (filters.is_benchmark !== '' && filters.is_benchmark != null) params.is_benchmark = filters.is_benchmark
+  if (filters.benchmark_run_id) params.benchmark_run_id = String(filters.benchmark_run_id).trim()
+  if (filters.routing_policy && includePaging) params.routing_policy = filters.routing_policy
+  if (filters.order_status && includePaging) params.order_status = filters.order_status
+  if (filters.deployment_status && includePaging) params.deployment_status = filters.deployment_status
+  if (filters.business_success !== '' && filters.business_success != null && includePaging) {
+    params.business_success = filters.business_success
+  }
+  return params
+}
+
+async function applyFilters() {
+  page.value = 1
+  selectedOrderIds.value = []
+  await loadList()
 }
 
 async function loadNodes() {
@@ -672,22 +894,10 @@ async function loadNodes() {
 async function loadList() {
   listLoading.value = true
   try {
-    const params = {
-      page: page.value,
-      page_size: pageSize.value,
-      include_cancelled: filters.include_cancelled,
-    }
-    if (filters.q) params.q = filters.q
-    if (filters.task_type) params.task_type = filters.task_type
-    if (filters.routing_policy) params.routing_policy = filters.routing_policy
-    if (filters.order_status) params.order_status = filters.order_status
-    if (filters.deployment_status) params.deployment_status = filters.deployment_status
-    if (filters.business_success !== '' && filters.business_success != null) {
-      params.business_success = filters.business_success
-    }
-    const { data } = await businessApi.list(params)
+    const { data } = await businessApi.list(buildFilterParams({ includePaging: true }))
     items.value = data.items
     total.value = data.total
+    selectedOrderIds.value = []
   } finally {
     listLoading.value = false
   }
@@ -702,14 +912,30 @@ async function openDetail(orderId, tab = 'business') {
   resultObjects.value = []
   try {
     const { data } = await ordersApi.get(orderId)
-    orderDetail.value = data
+    const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
+    let evaluationData = data.evaluation || null
     if (data.instance?.id) {
-      const [instResp, objectsResp] = await Promise.all([
+      const [instResp, objectsResp, evalResp] = await Promise.all([
         instancesApi.get(data.instance.id),
-        businessApi.results(data.instance.id).catch(() => ({ data: [] })),
+        evidenceInstanceId ? businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })) : { data: [] },
+        evidenceInstanceId && !evaluationData
+          ? businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null }))
+          : { data: evaluationData },
       ])
       instanceDetail.value = instResp.data
       resultObjects.value = objectsResp.data
+      evaluationData = evalResp.data || evaluationData
+    } else if (evidenceInstanceId) {
+      const [objectsResp, evalResp] = await Promise.all([
+        businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })),
+        evaluationData ? Promise.resolve({ data: evaluationData }) : businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null })),
+      ])
+      resultObjects.value = objectsResp.data
+      evaluationData = evalResp.data || evaluationData
+    }
+    orderDetail.value = {
+      ...data,
+      evaluation: evaluationData || data.evaluation || null,
     }
   } finally {
     detailLoading.value = false
@@ -751,6 +977,108 @@ async function deleteOrder(row) {
   ElMessage.success('工单已删除')
   drawerOpen.value = false
   await refreshAll()
+}
+
+async function cleanupSelectedOrderInstances() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将清理 ${selectedOrderIds.value.length} 个已选工单的容器实例，工单、路由和评估结果会保留，继续吗？`,
+      '清理实例保留证据',
+      { type: 'warning', confirmButtonText: '清理实例', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  batchCleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
+    ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
+    selectedOrderIds.value = []
+    await refreshAll()
+  } finally {
+    batchCleanupLoading.value = false
+  }
+}
+
+async function deleteSelectedOrders() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${selectedOrderIds.value.length} 个工单及其关联实例，删除后不可恢复，继续吗？`,
+      '确认批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  batchDeleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
+    selectedOrderIds.value = []
+    drawerOpen.value = false
+    await refreshAll()
+  } finally {
+    batchDeleteLoading.value = false
+  }
+}
+
+function buildBenchmarkRunScopePayload() {
+  return {
+    benchmark_run_id: String(filters.benchmark_run_id || '').trim(),
+    task_type: filters.task_type || undefined,
+    is_benchmark: true,
+  }
+}
+
+async function cleanupCurrentBenchmarkRun() {
+  if (!hasBenchmarkRunScope.value) return
+  const payload = buildBenchmarkRunScopePayload()
+  const typeText = filters.task_type ? `，任务类型 ${taskTypeLabel(filters.task_type)}` : ''
+  try {
+    await ElMessageBox.confirm(
+      `将清理验收轮次 ${payload.benchmark_run_id}${typeText} 的全部容器实例，但保留工单、路由和评估证据，继续吗？`,
+      '清理本轮实例',
+      { type: 'warning', confirmButtonText: '清理实例', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  runCleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.cleanupInstances(payload)
+    ElMessage.success(`本轮已清理 ${data.succeeded?.length || 0} 个工单实例，证据已保留`)
+    selectedOrderIds.value = []
+    await refreshAll()
+  } finally {
+    runCleanupLoading.value = false
+  }
+}
+
+async function deleteCurrentBenchmarkRun() {
+  if (!hasBenchmarkRunScope.value) return
+  const payload = buildBenchmarkRunScopePayload()
+  const typeText = filters.task_type ? `，任务类型 ${taskTypeLabel(filters.task_type)}` : ''
+  try {
+    await ElMessageBox.confirm(
+      `将删除验收轮次 ${payload.benchmark_run_id}${typeText} 的全部工单及关联实例。删除后该轮不会再计入验收统计，继续吗？`,
+      '删除本轮工单',
+      { type: 'error', confirmButtonText: '删除本轮', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  runDeleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(payload)
+    ElMessage.success(`本轮已删除 ${data.succeeded?.length || 0} 个工单`)
+    selectedOrderIds.value = []
+    drawerOpen.value = false
+    await refreshAll()
+  } finally {
+    runDeleteLoading.value = false
+  }
 }
 
 function openManualRouting(row) {
@@ -914,6 +1242,22 @@ async function submitSample() {
   align-items: center;
 }
 
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.batch-hint {
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .pagination-wrap {
   display: flex;
   justify-content: flex-end;
@@ -1024,6 +1368,78 @@ async function submitSample() {
   font-size: 12px;
 }
 
+.video-result-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.video-preview {
+  min-height: 240px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.video-proof-frame {
+  position: relative;
+}
+
+.video-preview img,
+.video-proof-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.video-proof-badge span,
+.video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
+}
+
+.video-result-side .section-title:first-child {
+  margin-top: 0;
+}
+
 .consistency-row {
   display: flex;
   flex-wrap: wrap;
@@ -1035,6 +1451,11 @@ async function submitSample() {
 .consistency-detail {
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.warning-text {
+  color: #e6a23c;
+  font-weight: 700;
 }
 
 .text-success {

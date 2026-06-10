@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, String, DateTime, func, ForeignKey
+from sqlalchemy import Boolean, BigInteger, Integer, String, DateTime, func, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -267,6 +267,40 @@ class TaskMetric(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     tags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class RoutingResourceEvent(Base):
+    __tablename__ = "routing_resource_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_type",
+            "order_id",
+            "node_hostname",
+            "resource_kind",
+            "resource_id",
+            name="uq_routing_resource_event_once",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(50), default="release", server_default="release", index=True)
+    order_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    external_routing_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    benchmark_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    task_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    node_hostname: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    resource_kind: Mapped[str] = mapped_column(String(50), default="gpu", server_default="gpu", index=True)
+    resource_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    amount: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    reason: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    router_ack_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    event_metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
 class BusinessTemplateCatalog(Base):

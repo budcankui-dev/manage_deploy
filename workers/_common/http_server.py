@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
@@ -187,6 +188,27 @@ class ResultDataHandler(BaseHTTPRequestHandler):
         pass  # quiet
 
 
+class _ReuseIPv4HTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
+class _DualStackHTTPServer(HTTPServer):
+    """IPv6 listener that also accepts IPv4 when the host kernel allows it."""
+
+    address_family = socket.AF_INET6
+    allow_reuse_address = True
+
+    def server_bind(self):
+        if hasattr(socket, "IPV6_V6ONLY"):
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except OSError:
+                # Some kernels disallow changing this flag. IPv6 still works; IPv4
+                # health checks may require the fallback listener in non-IPv6 envs.
+                pass
+        super().server_bind()
+
+
 def wait_for_data_handler(port: int, timeout_sec: float = 120.0, interval_sec: float = 0.5) -> dict:
     """Wait for POST /data to be received by the handler. Returns the received data."""
     deadline = time.time() + timeout_sec
@@ -200,17 +222,27 @@ def wait_for_data_handler(port: int, timeout_sec: float = 120.0, interval_sec: f
 
 
 def start_server(port: int, handler_class: type[BaseHTTPRequestHandler]) -> Thread:
-    """Start an HTTP server on the given port in a background thread."""
-    for attempt in range(3):
-        try:
-            server = HTTPServer(("0.0.0.0", port), handler_class)
-            server.allow_reuse_address = True
-            break
-        except OSError:
-            if attempt < 2:
-                time.sleep(0.5)
-            else:
-                raise
-    t = Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    return t
+    """Start a dual-stack HTTP server for business-plane peer traffic."""
+    candidates: tuple[tuple[type[HTTPServer], tuple[str, int]], ...] = (
+        (_DualStackHTTPServer, ("::", port)),
+        (_ReuseIPv4HTTPServer, ("0.0.0.0", port)),
+    )
+    last_error: OSError | None = None
+
+    for server_cls, address in candidates:
+        for attempt in range(3):
+            try:
+                server = server_cls(address, handler_class)
+                t = Thread(target=server.serve_forever, daemon=True)
+                t.start()
+                return t
+            except OSError as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5)
+        # If IPv6 is unavailable, keep compatibility with IPv4-only hosts.
+        continue
+
+    if last_error is not None:
+        raise last_error
+    raise OSError(f"Failed to start HTTP server on port {port}")

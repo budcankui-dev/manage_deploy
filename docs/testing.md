@@ -99,6 +99,8 @@ git diff --check
 
 ## 科学计算矩阵乘法 E2E
 
+正式业务目标成功率验收以 [/benchmark](benchmark-test-plan.md) 为主入口。命令行 E2E 用于验证镜像、Node Agent、端口、网络通信和指标上报链路；专家演示时必须结合浏览器页面查看基线、压测工单证据链和最终成功率。
+
 构建 worker 镜像：
 
 ```bash
@@ -136,9 +138,74 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 - 脚本末尾输出 `OK matmul live e2e passed`
 - 实例状态进入 `running`
-- evaluation 返回 `metric_key=compute_latency_ms`
+- 验收环境启用业务 IPv6 时，还必须抽查容器环境变量，确认 `PEER_*_URL` 为 `http://[IPv6]:port`，`TASK_PEERS_JSON.business_address` 为 IPv6，且 sink 日志出现指标回写完成标记。
+- evaluation 返回 `metric_key=effective_gflops`
 - `business_success=true`
 - source / compute / sink 均有非空 `ports` 和 `port_values`
+
+## 业务目标成功率页面验收
+
+页面入口：
+
+```text
+http://10.112.244.94:8182/benchmark
+```
+
+正式验收步骤：
+
+1. Step 1 批量测试所有可调度节点 baseline，确认每行都有基线值且稳定。
+2. Step 2 创建 30 个压测工单，矩阵 profile 与 baseline 保持一致，默认使用 10 秒观测窗口和最少 5 个有效样本。
+3. 记录页面顶部显示的当前 `benchmark_run_id`；后续列表、路由、启动和 Step 4 统计都应限定在该轮次。
+4. Step 3 使用外部路由系统回写 placements；联调阶段可用页面“内置随机路由策略”生成 placements，用于验证部署与评价闭环。
+5. Step 3 启动已路由实例，等待状态进入已评估完成。
+6. 打开“验收工单证据链”中若干工单详情，核对业务参数 JSON、路由结果 JSON、source/compute/sink 节点、compute GPU 编号、实测指标和采集元数据。
+7. Step 4 截图最终结果，要求同一 `benchmark_run_id` 下已评估任务数 >= 30 且业务目标成功率 >= 90%。
+
+管理员验收页面应能看到全部 `is_benchmark=true` 压测工单；普通用户页面仍只展示自己的工单。如果 Step 4 有 30 个已评估任务但证据链表为空，应优先检查 `/api/orders` 的管理员可见性、登录 token 和 nginx `/api` 代理，而不是只截图成功率进度条。
+
+如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建压测工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
+
+## 视频推理扩展业务验证
+
+当前视频业务是轻量工业检测抽帧推理，主要用于扩展模态演示和后续联调。它不上载完整视频流，而是让 source 读取固定测试视频并抽帧，compute 运行 `yolov5n-fp32.onnx` 统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。
+
+本地单测：
+
+```bash
+PYTHONPATH=workers/low-latency-video/src backend/venv/bin/python -m pytest -q workers/low-latency-video/tests
+```
+
+本地 baseline fallback：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python - <<'PY'
+from services.baseline_runner import run_benchmark
+print(run_benchmark("low_latency_video_pipeline", runs=1))
+PY
+```
+
+远端镜像构建：
+
+```bash
+WORKER_KIND=video \
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+WORKER_PLATFORM=linux/amd64 \
+WORKER_PUSH=1 \
+./scripts/build_workers.sh
+```
+
+注册视频业务模板和 catalog：
+
+```bash
+cd backend
+WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_TAG=dev \
+DEMO_BASE_URL=http://127.0.0.1:8181 \
+PYTHONPATH=. \
+/home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_video_template.py
+```
 
 ## 端口冲突验收
 
@@ -182,6 +249,7 @@ docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}'
 
 - backend 是否重启并执行过 `init_db()`
 - 当前数据库是否缺少新增列，如 `nodes.business_ipv6`
+- 验收环境 `.env` 是否设置 `PREFER_BUSINESS_IPV6=true` 与正确的 `BACKEND_PORT`，避免 worker 数据面走 IPv6 但指标回写到错误端口
 - backend 控制台完整 traceback
 - 当前服务连接的是 MySQL 还是 SQLite
 

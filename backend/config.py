@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_model: str = "qwen3-max"
+    dashscope_eval_models: str = "qwen3.7-plus,qwen-long"
     dashscope_timeout: float = 30.0
     dashscope_temperature: float = 0.1
 

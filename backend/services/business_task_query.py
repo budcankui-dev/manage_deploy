@@ -17,6 +17,8 @@ class BusinessTaskListFilters:
     page: int = 1
     page_size: int = 20
     task_type: str | None = None
+    is_benchmark: bool | None = None
+    benchmark_run_id: str | None = None
     routing_policy: str | None = None
     order_status: OrderStatus | None = None
     deployment_status: TaskStatus | None = None
@@ -30,6 +32,15 @@ def _extract_business_task(order: TaskOrder) -> dict[str, Any] | None:
     business_task = config.get("business_task")
     if isinstance(business_task, dict):
         return business_task
+    return None
+
+
+def _extract_benchmark_run_id(order: TaskOrder) -> str | None:
+    config = order.runtime_config or {}
+    benchmark = config.get("benchmark")
+    if isinstance(benchmark, dict):
+        value = benchmark.get("run_id")
+        return str(value) if value else None
     return None
 
 
@@ -57,6 +68,10 @@ def _matches_filters(
     if filters.order_status and order.status != filters.order_status:
         return False
     if filters.task_type and business_task.get("task_type") != filters.task_type:
+        return False
+    if filters.is_benchmark is not None and bool(order.is_benchmark) != filters.is_benchmark:
+        return False
+    if filters.benchmark_run_id and _extract_benchmark_run_id(order) != filters.benchmark_run_id:
         return False
     routing_policy = _routing_policy_from_order(order)
     if filters.routing_policy and routing_policy != filters.routing_policy:
@@ -93,6 +108,8 @@ def _build_list_item(
         external_task_id=order.external_task_id or business_task.get("external_task_id"),
         name=order.name,
         task_type=business_task.get("task_type"),
+        is_benchmark=bool(order.is_benchmark),
+        benchmark_run_id=_extract_benchmark_run_id(order),
         modality=business_task.get("modality"),
         routing_policy=_routing_policy_from_order(order),
         order_status=order.status,
@@ -214,6 +231,8 @@ async def summarize_business_tasks(
     db: AsyncSession,
     include_cancelled: bool = False,
     is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
+    task_type: str | None = None,
 ) -> list[dict[str, Any]]:
     query = select(TaskOrder).where(TaskOrder.runtime_config.isnot(None))
     if not include_cancelled:
@@ -225,7 +244,11 @@ async def summarize_business_tasks(
     for order in rows.scalars():
         if not include_cancelled and order.status == OrderStatus.CANCELLED:
             continue
+        if benchmark_run_id and _extract_benchmark_run_id(order) != benchmark_run_id:
+            continue
         business_task = _extract_business_task(order)
+        if task_type and business_task and business_task.get("task_type") != task_type:
+            continue
         if business_task:
             business_orders.append((order, business_task))
 
@@ -285,7 +308,6 @@ async def get_order_detail_context(
             .options(selectinload(TaskInstance.nodes))
         )
         instance = inst_row.scalar_one_or_none()
-        if instance:
-            eval_map = await _latest_evaluations(db, [instance.id])
-            evaluation = eval_map.get(instance.id)
+        eval_map = await _latest_evaluations(db, [order.materialized_instance_id])
+        evaluation = eval_map.get(order.materialized_instance_id)
     return order, instance, evaluation

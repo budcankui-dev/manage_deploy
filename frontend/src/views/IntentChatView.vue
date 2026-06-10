@@ -120,6 +120,11 @@
               {{ taskTypeLabel(row.task_type) || row.task_type || '-' }}
             </template>
           </el-table-column>
+          <el-table-column label="所属模态" min-width="140">
+            <template #default="{ row }">
+              {{ modalityLabel(row.modality) }}
+            </template>
+          </el-table-column>
           <el-table-column label="路由策略" min-width="120">
             <template #default="{ row }">
               {{ routingPolicyLabel(row.routing_policy) || row.routing_policy || '-' }}
@@ -144,7 +149,7 @@
           <el-table-column label="达标" width="90">
             <template #default="{ row }">
               <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-              <el-tag v-else-if="row.business_success === false" type="danger" size="small">超标</el-tag>
+              <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
               <span v-else>待评估</span>
             </template>
           </el-table-column>
@@ -224,6 +229,7 @@
               <strong>参数已完整</strong>
               <div class="confirm-params">
                 <p v-if="draft?.task_type"><span class="param-label">任务类型：</span>{{ taskTypeLabel(draft.task_type) }}</p>
+                <p v-if="draft?.modality"><span class="param-label">所属模态：</span>{{ modalityLabel(draft.modality) }}</p>
                 <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ draft.source_name || '-' }} → {{ draft.destination_name || '-' }}</p>
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-if="draft?.data_profile?.matrix_size"><span class="param-label">规模：</span>{{ draft.data_profile.matrix_size }}×{{ draft.data_profile.matrix_size }} 矩阵 × {{ draft.data_profile.batch_count || 1 }} 批</p>
@@ -300,6 +306,7 @@
               </el-descriptions-item>
               <el-descriptions-item label="任务名称">{{ selectedOrderDetail.name || '-' }}</el-descriptions-item>
               <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail.business_task?.task_type) || selectedOrderDetail.business_task?.task_type || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="所属模态">{{ modalityLabel(selectedOrderDetail.business_task?.modality) }}</el-descriptions-item>
               <el-descriptions-item label="路由策略">{{ routingPolicyLabel(selectedOrderDetail.business_task?.runtime_plan?.routing_strategy) || '-' }}</el-descriptions-item>
               <el-descriptions-item label="源节点">{{ selectedOrderDetail.source_name || '-' }}</el-descriptions-item>
               <el-descriptions-item label="目的节点">{{ selectedOrderDetail.destination_name || '-' }}</el-descriptions-item>
@@ -317,6 +324,11 @@
 
           <!-- Tab 2: 路由结果 -->
           <el-tab-pane label="路由结果" name="routing">
+            <el-collapse v-if="selectedOrderDetail.routing_input_dag" class="raw-collapse" style="margin-bottom:12px">
+              <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input-dag">
+                <pre class="json-block">{{ pretty(selectedOrderDetail.routing_input_dag) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
             <div v-if="orderPlacementRows.length">
               <el-table :data="orderPlacementRows" size="small" border>
                 <el-table-column label="逻辑节点" prop="node_id" width="100" />
@@ -353,10 +365,10 @@
                 {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
               </p>
               <div style="margin-bottom:12px">
-                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="i"
+                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="step.role || i"
                      style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
                   <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
-                  <span>{{ step }}</span>
+                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
                 </div>
               </div>
               <div v-if="detailMatmulInputRows.length" style="margin-bottom:12px">
@@ -382,6 +394,79 @@
                 <div style="font-size:12px;margin-top:4px">{{ detailMatmulVerdict.subtitle }}</div>
               </div>
             </template>
+            <template v-else-if="isVideoDetail && detailEvaluation">
+              <p style="color:var(--el-text-color-secondary);font-size:13px;margin-bottom:12px">
+                {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
+              </p>
+              <div style="margin-bottom:12px">
+                <div v-for="(step, i) in VIDEO_PIPELINE_STEPS" :key="step.role || i"
+                     style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
+                  <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
+                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
+                </div>
+              </div>
+
+              <div class="video-result-card">
+                <div class="video-preview">
+                  <template v-if="detailVideoPreview">
+                    <div class="video-proof-frame">
+                      <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
+                      <div v-if="detailVideoNeedsOverlay" class="video-proof-overlay">
+                        <div v-if="detailVideoEvidenceRows.length" class="video-proof-badge">
+                          <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
+                        </div>
+                        <div
+                          v-for="row in detailVideoDetections"
+                          :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
+                          class="video-proof-box"
+                          :style="detailVideoBoxStyle(row)"
+                        >
+                          <span>{{ row.label_zh || row.display_label || row.label }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                  <el-empty v-else description="等待带框预览图" :image-size="80" />
+                </div>
+                <div class="video-result-side">
+                  <div v-if="detailVideoInputRows.length" style="margin-bottom:12px">
+                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">输入参数</div>
+                    <el-descriptions :column="1" border size="small">
+                      <el-descriptions-item v-for="r in detailVideoInputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+                  <div v-if="detailVideoOutputRows.length" style="margin-bottom:12px">
+                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">推理输出</div>
+                    <el-descriptions :column="1" border size="small">
+                      <el-descriptions-item v-for="r in detailVideoOutputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="detailVideoDetections.length" style="font-weight:500;font-size:13px;margin:12px 0 6px">分类检测结果</div>
+              <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small" border style="margin-bottom:12px">
+                <el-table-column label="类别" min-width="140">
+                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
+                </el-table-column>
+                <el-table-column label="置信度" width="100">
+                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column label="画框坐标" min-width="180">
+                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
+                </el-table-column>
+                <el-table-column label="来源" width="110">
+                  <template #default="{ row }">
+                    <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div v-if="detailVideoVerdict" :class="['verdict-block', detailVideoVerdict.statusClass]" style="padding:12px;border-radius:6px;margin-bottom:12px">
+                <div style="font-weight:600;font-size:14px">{{ detailVideoVerdict.title }}</div>
+                <div style="font-size:12px;margin-top:4px">{{ detailVideoVerdict.subtitle }}</div>
+              </div>
+            </template>
             <template v-else-if="detailEvaluation">
               <div :class="['verdict-block', detailEvaluation.business_success ? 'success' : 'danger']"
                    style="padding:12px;border-radius:6px;margin-bottom:12px">
@@ -394,6 +479,11 @@
               </el-descriptions>
             </template>
             <el-empty v-else description="任务尚未跑完或未上报业务指标" :image-size="60" />
+            <el-collapse v-if="detailEvaluation?.result_metadata" class="raw-collapse" style="margin-top:12px">
+              <el-collapse-item title="原始结果 JSON" name="result_metadata">
+                <pre class="json-block">{{ pretty(detailEvaluation.result_metadata) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
             <template v-if="orderResultObjects.length">
               <div style="font-weight:500;font-size:13px;margin:12px 0 6px">结果文件</div>
               <el-table :data="orderResultObjects" size="small" border>
@@ -415,6 +505,7 @@
         </template>
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
           <el-descriptions-item label="源节点">{{ draft.source_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
@@ -427,6 +518,11 @@
         <div v-if="draft?.validation_errors?.length" class="errors">
           <el-alert v-for="(item, index) in draft.validation_errors" :key="index" :title="item" type="warning" show-icon :closable="false" />
         </div>
+        <el-collapse v-if="draft?.routing_dag_preview" class="raw-collapse">
+          <el-collapse-item title="路由 DAG JSON 预览" name="draft-dag">
+            <pre class="json-block">{{ pretty(draft.routing_dag_preview) }}</pre>
+          </el-collapse-item>
+        </el-collapse>
       </el-card>
 
       <el-card class="panel-card">
@@ -465,6 +561,11 @@
             <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
             <el-descriptions-item label="节点分配">{{ routing.placements ? `${routing.placements.source} → ${routing.placements.compute} → ${routing.placements.sink}` : '-' }}</el-descriptions-item>
           </el-descriptions>
+          <el-collapse v-if="routing.input_payload" class="raw-collapse">
+            <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input">
+              <pre class="json-block">{{ pretty(routing.input_payload) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
         </div>
         <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
           <el-icon class="is-loading"><Loading /></el-icon>
@@ -498,10 +599,12 @@ import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refre
 import { conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import {
-  taskTypeLabel, describeDataProfile, taskTypeSummary,
+  modalityLabel, taskTypeLabel, describeDataProfile, taskTypeSummary,
   buildMatmulInputRows, buildMatmulOutputRows,
   buildMatmulParamConsistency, buildMatmulVerdict,
-  MATMUL_PIPELINE_STEPS
+  buildVideoInputRows, buildVideoOutputRows, buildVideoVerdict,
+  videoDetectionBoxStyle, videoDetections, videoPreviewEvidenceRows, videoPreviewNeedsOverlay, videoPreviewDataUrl,
+  MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
@@ -531,6 +634,9 @@ const orderResultObjects = ref([])
 const isMatmulDetail = computed(() =>
   selectedOrderDetail.value?.business_task?.task_type === 'high_throughput_matmul'
 )
+const isVideoDetail = computed(() =>
+  selectedOrderDetail.value?.business_task?.task_type === 'low_latency_video_pipeline'
+)
 const detailEvaluation = computed(() => selectedOrderDetail.value?.evaluation)
 const detailDataProfile = computed(() => selectedOrderDetail.value?.business_task?.data_profile)
 const detailMatmulInputRows = computed(() => buildMatmulInputRows(detailDataProfile.value))
@@ -541,6 +647,19 @@ const detailMatmulConsistency = computed(() =>
   buildMatmulParamConsistency(detailDataProfile.value, detailEvaluation.value?.result_metadata)
 )
 const detailMatmulVerdict = computed(() => buildMatmulVerdict(detailEvaluation.value))
+const detailVideoInputRows = computed(() => buildVideoInputRows(detailDataProfile.value))
+const detailVideoOutputRows = computed(() =>
+  buildVideoOutputRows(detailEvaluation.value?.result_metadata, detailEvaluation.value)
+)
+const detailVideoVerdict = computed(() => buildVideoVerdict(detailEvaluation.value))
+const detailVideoPreview = computed(() => videoPreviewDataUrl(detailEvaluation.value?.result_metadata))
+const detailVideoDetections = computed(() => videoDetections(detailEvaluation.value?.result_metadata))
+const detailVideoEvidenceRows = computed(() => videoPreviewEvidenceRows(detailEvaluation.value?.result_metadata))
+const detailVideoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(detailEvaluation.value?.result_metadata))
+
+function detailVideoBoxStyle(row) {
+  return videoDetectionBoxStyle(row, detailEvaluation.value?.result_metadata)
+}
 
 let routingTimer = null
 let abortController = null
@@ -553,8 +672,18 @@ const filteredOrders = computed(() => {
 const orderPlacementRows = computed(() => {
   const p = selectedOrderDetail.value?.routing_result?.placements
   if (!p) return []
-  if (Array.isArray(p)) return p
-  return Object.entries(p).map(([role, node_id]) => ({ node_id: role, worker_host: node_id, gpu_device: null }))
+  const normalize = (role, placement) => {
+    if (!placement) return { node_id: role, worker_host: '未部署', gpu_device: null }
+    if (typeof placement === 'string') return { node_id: role, worker_host: placement, gpu_device: null }
+    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
+    return {
+      node_id: placement.node_id || role,
+      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      gpu_device: gpu,
+    }
+  }
+  if (Array.isArray(p)) return p.map(item => normalize(item.node_id || item.role || 'node', item))
+  return Object.entries(p).map(([role, placement]) => normalize(role, placement))
 })
 
 const orderDataProfileRows = computed(() =>
@@ -572,9 +701,9 @@ const displayMessages = computed(() => {
 function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
-  '矩阵计算，从compute-1到compute-3，跑2小时',
-  '视频转发任务，低延迟要求',
-  '大模型推理服务部署',
+  '矩阵乘法任务，从 compute-1 到 compute-3，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
+  '从 compute-2 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
+  '矩阵计算，源节点 compute-1 目的节点 compute-2，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
@@ -606,6 +735,11 @@ function formatBubbleTime(value) {
   if (!value) return ''
   const d = new Date(value)
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function pretty(value) {
+  if (!value) return '{}'
+  return JSON.stringify(value, null, 2)
 }
 
 function parseStatusType(status) {
@@ -1684,6 +1818,21 @@ onBeforeUnmount(stopRoutingPolling)
 
 .routing-summary { margin-bottom: 12px; }
 
+.raw-collapse {
+  margin-top: 12px;
+}
+
+.json-block {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .routing-waiting {
   display: flex;
   align-items: center;
@@ -1696,6 +1845,78 @@ onBeforeUnmount(stopRoutingPolling)
 .verdict-block.success { background: var(--el-color-success-light-9); border: 1px solid var(--el-color-success-light-5); }
 .verdict-block.danger  { background: var(--el-color-danger-light-9);  border: 1px solid var(--el-color-danger-light-5); }
 .verdict-block.warning { background: var(--el-color-warning-light-9); border: 1px solid var(--el-color-warning-light-5); }
+
+.video-result-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.video-preview {
+  min-height: 220px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+  background: var(--el-fill-color-light);
+  overflow: hidden;
+}
+
+.video-proof-frame {
+  position: relative;
+}
+
+.video-preview img,
+.video-proof-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.video-proof-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.video-proof-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.video-proof-badge span,
+.video-proof-box span {
+  color: #fff;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+.video-proof-box {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.3);
+}
+
+.video-proof-box span {
+  position: absolute;
+  left: -2px;
+  top: -28px;
+  background: rgba(22, 163, 74, 0.94);
+  white-space: nowrap;
+}
+
+.video-result-side {
+  min-width: 0;
+}
 
 @media (max-width: 900px) {
   .intent-workspace {

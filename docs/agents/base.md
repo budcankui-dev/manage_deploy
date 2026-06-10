@@ -13,7 +13,7 @@
 
 按任务需要阅读：
 
-- `docs/conversation-order-routing-design.md`
+- `docs/routing-system-integration-guide.md`
 - `docs/worker-data-io-design.md`
 - `docs/deployment/test-lab.md`
 

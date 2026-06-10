@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import settings
 from database import get_db
 from enums import DeploymentMode, NodeStatus, TaskStatus
 from models import (
@@ -52,6 +53,7 @@ from services.port_plan import (
 )
 from services.auto_port_allocator import auto_allocate_ports
 from services.instance_builder import resolve_port_values
+from services.routing_resource_events import emit_release_events_for_instance
 
 logger = logging.getLogger(__name__)
 
@@ -453,12 +455,31 @@ async def _create_instance_from_template(
     nodes_result = await db.execute(
         select(TaskTemplateNode).where(TaskTemplateNode.template_id == instance.template_id)
     )
-    template_nodes = nodes_result.scalars().all()
+    all_template_nodes = nodes_result.scalars().all()
+    enabled_template_node_names = (
+        set(instance.enabled_template_node_names)
+        if instance.enabled_template_node_names is not None
+        else None
+    )
+    if enabled_template_node_names is not None:
+        available_template_node_names = {node.name for node in all_template_nodes}
+        missing_template_node_names = enabled_template_node_names - available_template_node_names
+        if missing_template_node_names:
+            missing_text = ", ".join(sorted(missing_template_node_names))
+            raise HTTPException(status_code=400, detail=f"Template node(s) not found: {missing_text}")
+    template_nodes = [
+        node for node in all_template_nodes
+        if enabled_template_node_names is None or node.name in enabled_template_node_names
+    ]
+    enabled_template_node_ids = {node.id for node in template_nodes}
 
     edges_result = await db.execute(
         select(TaskTemplateEdge).where(TaskTemplateEdge.template_id == instance.template_id)
     )
-    template_edges = edges_result.scalars().all()
+    template_edges = [
+        edge for edge in edges_result.scalars().all()
+        if edge.from_node_id in enabled_template_node_ids and edge.to_node_id in enabled_template_node_ids
+    ]
 
     instance_node_map: dict[str, str] = {}
     allocated_ports_by_node: dict[str, set[int]] = {}
@@ -632,7 +653,11 @@ async def get_instance(
             select(NodeModel).where(NodeModel.id == inst_node.node_id)
         )).scalar_one_or_none()
         if machine:
-            object.__setattr__(inst_node, "business_address", get_business_address(machine))
+            object.__setattr__(
+                inst_node,
+                "business_address",
+                get_business_address(machine, settings.prefer_business_ipv6),
+            )
         else:
             object.__setattr__(inst_node, "business_address", None)
 
@@ -749,6 +774,12 @@ async def delete_instance(
 
     task_scheduler = TaskScheduler()
     await task_scheduler.cancel_all_schedules(instance_id)
+    await emit_release_events_for_instance(
+        db,
+        instance_id,
+        reason="delete_instance",
+        metadata={"source": "instances_api"},
+    )
     cleanup_warnings = await _cleanup_instance_runtime(db, instance)
     await mark_orders_cancelled_for_instance(db, instance_id)
 
@@ -797,11 +828,23 @@ async def stop_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if instance.status in (TaskStatus.STOPPED, TaskStatus.PENDING):
+        await emit_release_events_for_instance(
+            db,
+            instance_id,
+            reason="stop_instance",
+            metadata={"source": "instances_api", "already_stopped": True},
+        )
         return {"message": "Instance already stopped"}
     executor = DAGExecutor(db)
     success, error = await executor.execute_dag_stop(instance_id)
     if not success:
         raise HTTPException(status_code=500, detail=error)
+    await emit_release_events_for_instance(
+        db,
+        instance_id,
+        reason="stop_instance",
+        metadata={"source": "instances_api"},
+    )
     return {"message": "Instance stopped"}
 
 
@@ -839,6 +882,12 @@ async def batch_stop_instances(request: BatchOperationRequest, db: AsyncSession 
             executor = DAGExecutor(db)
             success, error = await executor.execute_dag_stop(instance_id)
             if success:
+                await emit_release_events_for_instance(
+                    db,
+                    instance_id,
+                    reason="stop_instance",
+                    metadata={"source": "batch_stop"},
+                )
                 succeeded.append(instance_id)
             else:
                 failed[instance_id] = error or "Unknown error"
@@ -865,6 +914,12 @@ async def batch_delete_instances(request: BatchOperationRequest, db: AsyncSessio
                 continue
 
             await task_scheduler.cancel_all_schedules(instance_id)
+            await emit_release_events_for_instance(
+                db,
+                instance_id,
+                reason="delete_instance",
+                metadata={"source": "batch_delete"},
+            )
             await _cleanup_instance_runtime(db, instance)
             await mark_orders_cancelled_for_instance(db, instance_id)
             await db.delete(instance)

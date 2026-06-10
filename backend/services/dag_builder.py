@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from services.resource_estimator import estimate_resources, estimate_data_mb
+from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -37,6 +37,7 @@ def build_matmul_dag(
     profile = {"matrix_size": ms, "batch_count": bc}
     resources = estimate_resources("high_throughput_matmul", profile)
     data_mb = estimate_data_mb("high_throughput_matmul", profile)
+    bandwidth_mbps = estimate_bandwidth_mbps("high_throughput_matmul", profile)
 
     policy = POLICY_TYPE_MAP.get(routing_strategy or "resource_guarantee", "RESOURCE_GUARANTEE")
 
@@ -49,8 +50,8 @@ def build_matmul_dag(
         "scheduled_start_time": business_start_time.strftime(fmt) if business_start_time else now.strftime(fmt),
         "scheduled_end_time": business_end_time.strftime(fmt) if business_end_time else "",
         "edges": [
-            {"from": "source", "to": "compute", "data_mb": data_mb},
-            {"from": "compute", "to": "sink", "data_mb": data_mb},
+            {"from": "source", "to": "compute", "data_mb": data_mb, "bandwidth_mbps": bandwidth_mbps},
+            {"from": "compute", "to": "sink", "data_mb": data_mb, "bandwidth_mbps": bandwidth_mbps},
         ],
         "nodes": [
             {

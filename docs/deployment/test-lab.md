@@ -11,9 +11,30 @@
 | admin-server | 管理面主控 | `10.112.244.94` | `22` | `bupt` | - | `/mnt/data` | 部署前端、后端、MySQL、MinIO、私有 Registry |
 | compute-1 | 业务节点 | `10.112.249.191` | `2345` | `chengyubin` | TITAN X x 1 | `/disk/sdc` | 可作为 source / compute / sink |
 | compute-2 | 业务节点 | `10.112.150.166` | `2345` | `chengyubin` | TITAN X x 1 | `/data/hdd1` | 可作为 source / compute / sink |
-| compute-3 | 业务节点 | `10.112.116.165` | `22` | `compute` | Tesla P40 x 8 | `/data` | 可作为 source / compute / sink |
+| compute-3 | 业务节点 | `10.112.59.209` | `22` | `compute` | Tesla P40 x 8 | `/data` | 静态 IP，MAC `0c:c4:7a:85:78:14`，可作为 source / compute / sink |
 
 当前阶段默认 `admin-server` 是管理节点，`compute-*` 是业务节点。矩阵乘法演示仍按随路计算数据流 `source -> compute -> sink` 验证，业务数据不通过共享宿主机文件传递。
+
+## Docker / containerd 存储
+
+Docker `data-root` 和 containerd `root/state` 是两套路径；即使 Docker `data-root` 已经放在数据盘，containerd 仍可能默认写入系统盘 `/var/lib/containerd`，导致拉取大镜像时报 `no space left on device`。
+
+当前已完成如下迁移：
+
+| 节点 | Docker data-root | containerd root | containerd state | 备注 |
+|------|------------------|-----------------|------------------|------|
+| admin-server | `/mnt/data/docker` | `/mnt/data/containerd-root` | `/mnt/data/containerd-state` | 已从系统盘迁移，Registry/MySQL/前端已恢复 |
+| compute-1 | `/disk/sdb/docker` | `/disk/sdc/containerd-root` | `/disk/sdc/containerd-state` | 已显式迁移，Docker 与 containerd 均不写系统盘 |
+| compute-2 | `/data/hdd1/docker` | `/data/hdd1/containerd-root` | `/data/hdd1/containerd-state` | 已从系统盘迁移，解决拉大镜像空间不足 |
+| compute-3 | `/disk/sdb/docker` | `/data/containerd-root` | `/data/containerd-state` | 已从系统盘迁移 |
+
+迁移后应通过以下命令复核：
+
+```bash
+sudo grep -E '^(root|state) =' /etc/containerd/config.toml
+sudo du -sh /var/lib/containerd
+docker ps
+```
 
 ## SSH 访问
 
@@ -34,7 +55,7 @@ ssh manage-compute-3 hostname
 ssh -p 22 bupt@10.112.244.94 hostname
 ssh -p 2345 chengyubin@10.112.249.191 hostname
 ssh -p 2345 chengyubin@10.112.150.166 hostname
-ssh -p 22 compute@10.112.116.165 hostname
+ssh -p 22 compute@10.112.59.209 hostname
 ```
 
 ## 管理面服务
@@ -43,7 +64,7 @@ ssh -p 22 compute@10.112.116.165 hostname
 |------|------|
 | 前端 | `http://10.112.244.94:8182` |
 | 后端 API | `http://10.112.244.94:8181` |
-| 验收测试页 | `http://10.112.244.94:8182/benchmark` |
+| 业务测评页 | `http://10.112.244.94:8182/benchmark` |
 | MySQL | `10.112.244.94:3306`，db=`task_manager` |
 | MinIO | `http://10.112.244.94:9000` |
 | Docker Registry | `10.112.244.94:5000`，HTTP insecure registry |
@@ -96,17 +117,31 @@ sudo chown -R "$USER":"$USER" /path/to/manage_deploy
 
 ## 部署更新流程
 
-```bash
-# 1. 推送代码
-git push origin main
+admin-server 当前 `/home/bupt/manage_deploy` 可能是 Git 仓库，也可能是手工同步目录。更新前先检查：
 
-# 2. 在 admin-server 拉取最新代码
+```bash
+ssh manage-admin "cd /home/bupt/manage_deploy && git status --short"
+```
+
+如果返回 `not a git repository`，不要继续使用 `git pull`；改用本地 `rsync` 同步源码和构建产物，同时排除 `.env`、数据库、虚拟环境和缓存文件。
+
+```bash
+# 方式 A：admin-server 是 Git 仓库
+git push origin main
 ssh manage-admin "cd /home/bupt/manage_deploy && git pull"
 
-# 3. 重启后端
-ssh manage-admin "pkill -f 'uvicorn main:app' 2>/dev/null; sleep 1; cd /home/bupt/manage_deploy/backend && nohup /home/bupt/miniconda3/envs/manage_deploy/bin/uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
+# 方式 B：admin-server 是手工同步目录
+rsync -az --exclude '.env' --exclude '*.db' --exclude 'venv' --exclude '__pycache__' backend/ manage-admin:/home/bupt/manage_deploy/backend/
+rsync -az frontend/dist/ manage-admin:/home/bupt/manage_deploy/frontend/dist/
+rsync -az workers/low-latency-video/ manage-admin:/home/bupt/manage_deploy/workers/low-latency-video/
 
-# 4. 验证节点 API
+# 重启后端。避免 pkill -f 匹配到当前 SSH 命令本身。
+ssh manage-admin "pids=\$(pgrep -f '[u]vicorn main:app.*8181' || true); [ -n \"\$pids\" ] && kill \$pids || true; sleep 1; cd /home/bupt/manage_deploy/backend && nohup /home/bupt/miniconda3/envs/manage_deploy/bin/uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
+
+# 刷新前端静态文件
+ssh manage-admin "docker cp /home/bupt/manage_deploy/frontend/dist/. idn-frontend:/usr/share/nginx/html/"
+
+# 验证节点 API
 ssh manage-admin "curl -s http://localhost:8181/api/nodes | python3 -c 'import sys,json; print(len(json.load(sys.stdin)), \"nodes\")'"
 ```
 
@@ -142,7 +177,40 @@ sudo systemctl restart docker
 - compute-1 的 `/disk/sdc/manage_deploy` 已创建并可写。
 - compute-2 的 `/data/hdd1/manage_deploy` 已创建并可写。
 - compute-2 当前按 1 张 TITAN X 记录。
+- compute-3 已固定为静态 IP `10.112.59.209/16`，默认路由 `10.112.0.1`，Node Agent 地址 `http://10.112.59.209:8001`。
 - admin-server 上已有私有 registry 容器 `registry:2`，地址为 `10.112.244.94:5000`。
+
+## 业务面 IPv6 配置
+
+当前验收拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。
+
+| 节点 | 10.112 网卡 | 业务 IPv6 | 调度 |
+|------|-------------|-----------|------|
+| admin-server | `eno1` | `2001:da8:215:6a01:d6ae:52ff:fec9:1188` | 否 |
+| compute-1 | `enp4s0` | `2001:da8:215:6a01:ad10:31fd:fe24:5f61` | 是 |
+| compute-2 | `enp7s0` | `2001:da8:215:6a01:26b4:87d6:14d6:154f` | 是 |
+| compute-3 | `enp129s0f0` | `2001:da8:215:6a01:ec4:7aff:fe85:7814` | 是 |
+
+切换要求：
+
+- 后端 `.env` 设置 `PREFER_BUSINESS_IPV6=true`。
+- 后端 `.env` 设置 `BACKEND_PORT=8181`，确保 worker 指标回写到 `http://10.112.244.94:8181`。
+- `nodes.business_ipv6` 写入上表地址；admin 节点保持 `is_schedulable=false`。
+- 重启后端后，日志应出现 `Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181`。
+
+连通性核验：
+
+```bash
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ad10:31fd:fe24:5f61"
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:26b4:87d6:14d6:154f"
+ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ec4:7aff:fe85:7814"
+```
+
+业务核验不只看实例 `running`。需要抽查真实容器环境变量和日志，确认：
+
+- `PEER_COMPUTE_URL` / `PEER_SINK_URL` 形如 `http://[2001:...]:18000`。
+- `TASK_PEERS_JSON[*].business_address` 为 IPv6。
+- sink 日志出现 `SINK_DONE` 或 `VIDEO_SINK_DONE`，且业务评估接口返回 `business_success=true`。
 
 ## 给 E2E Deploy Test Agent 的提示
 
@@ -151,5 +219,5 @@ sudo systemctl restart docker
 - 需要 sudo 时读取 `ops/secrets/test-lab-credentials.local.md`，不要把密码打印到日志。
 - 需要私有镜像仓库时，优先使用 `10.112.244.94:5000`，并按需配置业务节点 Docker daemon。
 - 部署验证应记录每台机器的 `hostname`、`docker --version`、`nvidia-smi` 或无 GPU 可用的原因。
-- 注册平台 Node 时，管理地址和业务地址初期可都使用上述 IP；后续如启用业务 IPv6，再更新 `business_ipv6`。
-- 当前矩阵乘法验收页面是 `http://10.112.244.94:8182/benchmark`，管理面后端是 `http://10.112.244.94:8181`。
+- 注册平台 Node 时，管理地址和业务 IPv4 可使用 10.112 地址；正式验收前必须按“业务面 IPv6 配置”更新 `business_ipv6`。
+- 当前业务测评页面是 `http://10.112.244.94:8182/benchmark`，管理面后端是 `http://10.112.244.94:8181`。

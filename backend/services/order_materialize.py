@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from config import settings
 from enums import DeploymentMode, OrderStatus
@@ -35,12 +36,15 @@ async def materialize_after_routing(
         order.error_message = "Routing completed but no placements provided"
         return None
 
-    catalog_result = await db.execute(
-        select(BusinessTemplateCatalog).where(
-            BusinessTemplateCatalog.template_id == order.template_id
-        )
+    business_task = (order.runtime_config or {}).get("business_task") or {}
+    task_type = business_task.get("task_type")
+    catalog_query = select(BusinessTemplateCatalog).where(
+        BusinessTemplateCatalog.template_id == order.template_id
     )
-    catalog = catalog_result.scalar_one_or_none()
+    if task_type:
+        catalog_query = catalog_query.where(BusinessTemplateCatalog.task_type == task_type)
+    catalog_result = await db.execute(catalog_query)
+    catalog = catalog_result.scalars().first()
     if not catalog:
         order.status = OrderStatus.FAILED
         order.error_message = f"No catalog entry for template_id={order.template_id}"
@@ -80,9 +84,22 @@ async def materialize_after_routing(
 
     try:
         instance = await _create_instance_from_template(db, instance_create, source_order_id=order.id)
+        for node in instance.nodes:
+            if node.env and node.env.get("TASK_INSTANCE_ID") == order.id:
+                node.env = {**node.env, "TASK_INSTANCE_ID": instance.id}
+                flag_modified(node, "env")
         order.materialized_instance_id = instance.id
         order.status = OrderStatus.MATERIALIZED
         order.error_message = None
+        rc = order.runtime_config or {}
+        rc["routing_result"] = {
+            "strategy": routing.selected_strategy or routing.strategy,
+            "placements": routing.placements,
+            "estimated_metric": routing.estimated_metric,
+            "external_routing_id": routing.external_routing_id,
+        }
+        order.runtime_config = rc
+        flag_modified(order, "runtime_config")
         logger.info(f"Order {order.id} materialized as instance {instance.id}")
         return instance.id
     except Exception as exc:
@@ -102,29 +119,68 @@ async def _build_overrides(
     placements = routing.placements or {}
     overrides: list[TaskInstanceNodeOverride] = []
 
+    business_task = (order.runtime_config or {}).get("business_task") or {}
     shared_env = {
-        "TASK_TYPE": order.name,
+        "TASK_TYPE": business_task.get("task_type") or order.name,
         "SOURCE_NAME": order.source_name or "",
         "DESTINATION_NAME": order.destination_name or "",
     }
+    if business_task.get("data_profile"):
+        shared_env["DATA_PROFILE"] = json.dumps(business_task["data_profile"])
+    if business_task.get("business_objective"):
+        shared_env["BUSINESS_OBJECTIVE"] = json.dumps(business_task["business_objective"])
+    if business_task.get("runtime_plan"):
+        shared_env["RUNTIME_PLAN"] = json.dumps(business_task["runtime_plan"])
 
     for role, template_node_name in role_node_names.items():
-        raw_node_id = placements.get(role)
+        placement = placements.get(role)
+        if role == "compute" and placement is None:
+            placement = placements.get("worker")
+        raw_node_id = _placement_node_name(placement)
         if not raw_node_id:
             continue
 
         node_id = await _resolve_node_id(db, raw_node_id)
         env = dict(shared_env)
         env["TASK_ROLE"] = role
+        env["TASK_INSTANCE_ID"] = order.id
+        gpu_id = _placement_gpu_id(placement)
+        if gpu_id is not None:
+            env["GPU_DEVICE"] = gpu_id
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
                 node_id=node_id,
                 env=env,
+                gpu_id=gpu_id,
             )
         )
 
     return overrides
+
+
+def _placement_node_name(placement: Any) -> str | None:
+    """Support both simple and rich external router placement payloads."""
+    if isinstance(placement, str):
+        return placement
+    if isinstance(placement, dict):
+        for key in ("node_id", "node_name", "worker_host", "hostname"):
+            value = placement.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _placement_gpu_id(placement: Any) -> str | None:
+    if not isinstance(placement, dict):
+        return None
+    gpu_device = placement.get("gpu_device")
+    if gpu_device is not None:
+        return str(gpu_device)
+    gpu_indices = placement.get("gpu_indices")
+    if isinstance(gpu_indices, list) and gpu_indices:
+        return str(gpu_indices[0])
+    return None
 
 
 async def _resolve_node_id(db: AsyncSession, raw: str) -> str:

@@ -79,7 +79,7 @@ async def build_instance_create_from_business_task(
         "ROUTING_RESULT": payload.routing_result.model_dump_json(),
         "RESULT_STORAGE": _json_env(payload.result_storage),
     }
-    if payload.task_type == "high_throughput_matmul":
+    if payload.task_type in {"high_throughput_matmul", "low_latency_video_pipeline"}:
         shared_env["USE_GPU"] = "true"
     overrides: list[TaskInstanceNodeOverride] = []
     gpu_roles = set()
@@ -90,7 +90,10 @@ async def build_instance_create_from_business_task(
     elif payload.task_type == "llm_text_generation":
         gpu_roles.add("compute")
     for role, template_node_name in role_node_names.items():
-        raw_node_id = payload.routing_result.placements.get(role)
+        placement = payload.routing_result.placements.get(role)
+        if role == "compute" and placement is None:
+            placement = payload.routing_result.placements.get("worker")
+        raw_node_id = _placement_node_name(placement)
         if not raw_node_id:
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
         if _is_uuid(raw_node_id):
@@ -99,7 +102,10 @@ async def build_instance_create_from_business_task(
             node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
         env = dict(shared_env)
         env["TASK_ROLE"] = role
-        gpu_id = "all" if role in gpu_roles else None
+        placement_gpu_id = _placement_gpu_id(placement)
+        gpu_id = placement_gpu_id if placement_gpu_id is not None else ("all" if role in gpu_roles else None)
+        if placement_gpu_id is not None:
+            env["GPU_DEVICE"] = placement_gpu_id
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
@@ -238,6 +244,8 @@ async def list_business_tasks_api(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     task_type: str | None = None,
+    is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
     routing_policy: str | None = None,
     order_status: OrderStatus | None = None,
     deployment_status: TaskStatus | None = None,
@@ -252,6 +260,8 @@ async def list_business_tasks_api(
         page=page,
         page_size=page_size,
         task_type=task_type,
+        is_benchmark=is_benchmark,
+        benchmark_run_id=benchmark_run_id,
         routing_policy=routing_policy,
         order_status=order_status,
         deployment_status=deployment_status,
@@ -272,7 +282,11 @@ async def get_business_task_evaluation(instance_id: str, db: AsyncSession = Depe
     row = result.scalars().first()
     if not row:
         raise HTTPException(status_code=404, detail="Business evaluation not found")
-    return row
+    data = BusinessObjectiveEvaluationResponse.model_validate(row).model_dump()
+    object_uris = row.object_uris if isinstance(row.object_uris, dict) else {}
+    result_metadata = object_uris.get("result_metadata")
+    data["result_metadata"] = result_metadata if isinstance(result_metadata, dict) else None
+    return data
 
 
 @router.get("/business-tasks/{instance_id}/results", response_model=list[TaskResultObjectResponse])
@@ -288,9 +302,16 @@ async def list_business_task_results(instance_id: str, db: AsyncSession = Depend
 @router.get("/business-tasks/summary")
 async def business_task_summary(
     is_benchmark: bool | None = None,
+    benchmark_run_id: str | None = None,
+    task_type: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await summarize_business_tasks(db, is_benchmark=is_benchmark)
+    return await summarize_business_tasks(
+        db,
+        is_benchmark=is_benchmark,
+        benchmark_run_id=benchmark_run_id,
+        task_type=task_type,
+    )
 
 
 async def _lookup_baseline(
@@ -311,7 +332,7 @@ async def _lookup_baseline(
                 worker_host = p.get("worker_host")
                 break
     elif isinstance(placements, dict):
-        worker_host = placements.get("worker") or placements.get("compute")
+        worker_host = _placement_node_name(placements.get("worker") or placements.get("compute"))
     if not worker_host:
         return None
     # Resolve hostname/display name/UUID to node_id.
@@ -336,6 +357,29 @@ async def _lookup_baseline(
         )
     ).scalar_one_or_none()
     return baseline.baseline_value if baseline else None
+
+
+def _placement_node_name(placement: Any) -> str | None:
+    if isinstance(placement, str):
+        return placement
+    if isinstance(placement, dict):
+        for key in ("node_id", "node_name", "worker_host", "hostname"):
+            value = placement.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _placement_gpu_id(placement: Any) -> str | None:
+    if not isinstance(placement, dict):
+        return None
+    gpu_device = placement.get("gpu_device")
+    if gpu_device is not None:
+        return str(gpu_device)
+    gpu_indices = placement.get("gpu_indices")
+    if isinstance(gpu_indices, list) and gpu_indices:
+        return str(gpu_indices[0])
+    return None
 
 
 async def evaluate_and_store_business_metric(
@@ -473,11 +517,63 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(raw, dict):
         return {
             key: raw[key]
-            for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed")
+            for key in (
+                "compute_latency_ms",
+                "effective_gflops",
+                "matrix_size",
+                "batch_count",
+                "seed",
+                "backend",
+                "gpu_device",
+                "aggregation",
+                "mean_effective_gflops",
+                "min_effective_gflops",
+                "max_effective_gflops",
+                "observation_duration_sec",
+                "observed_duration_sec",
+                "sample_interval_sec",
+                "sample_batch_count",
+                "warmup_batches",
+                "sample_count",
+                "min_samples",
+                "frame_latency_p90_ms",
+                "frame_latency_avg_ms",
+                "frame_latency_min_ms",
+                "frame_latency_max_ms",
+                "observed_duration_sec",
+                "profile_id",
+                "resolution",
+                "fps",
+                "frame_count",
+                "frame_stride",
+                "warmup_frames",
+                "measured_frames",
+                "work_units",
+                "detector_backend",
+                "detector_fallback_reason",
+                "model_name",
+                "video_asset",
+                "confidence_threshold",
+                "nms_threshold",
+                "gpu_assigned",
+                "annotated_frame_index",
+                "preview_frame_width",
+                "preview_frame_height",
+                "annotated_frame_latency_ms",
+                "annotated_frame_content_type",
+                "annotated_frame_data_url",
+                "annotated_frame_overlay",
+                "detection_count",
+                "top_label",
+                "top_label_zh",
+                "top_confidence",
+                "detections",
+                "samples",
+            )
             if raw.get(key) is not None
         }
     metadata: dict[str, Any] = {}
-    for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed"):
+    for key in ("compute_latency_ms", "matrix_size", "batch_count", "seed", "backend", "gpu_device"):
         if tags.get(key) is not None:
             metadata[key] = tags[key]
     return metadata
