@@ -44,7 +44,7 @@ def _build_job() -> dict:
         "video_asset": profile.get("video_asset", "bottle-detection.mp4"),
         "inference_mode": profile.get("inference_mode", "yolo_onnx"),
         "model_name": profile.get("model_name", "yolov5n"),
-        "model_path": profile.get("model_path", "models/yolov5n.onnx"),
+        "model_path": profile.get("model_path", "models/yolov5n-fp32.onnx"),
         "class_names_path": profile.get("class_names_path", "models/coco.names"),
         "confidence_threshold": float(profile.get("confidence_threshold", 0.25)),
         "nms_threshold": float(profile.get("nms_threshold", 0.45)),

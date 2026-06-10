@@ -71,7 +71,7 @@ export const MATMUL_PIPELINE_STEPS = [
 
 export const VIDEO_PIPELINE_STEPS = [
   { role: 'source', title: '读取固定视频', detail: '使用验收镜像内置 bottle-detection.mp4，按 frame_stride 抽帧发送给 compute' },
-  { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n.onnx，对抽样帧执行检测并生成分类画框预览图' },
+  { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n-fp32.onnx，对抽样帧执行检测并生成分类画框预览图' },
   { role: 'sink', title: '汇总时延与结果', detail: '上报 frame_latency_p90_ms、检测框、模型信息和带框图片，用于业务目标判定与演示' },
 ]
 

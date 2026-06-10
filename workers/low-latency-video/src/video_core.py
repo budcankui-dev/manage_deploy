@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import math
 import os
+import subprocess
 import statistics
 import time
 from pathlib import Path
@@ -29,10 +30,15 @@ except Exception:  # pragma: no cover - local fallback when Pillow is absent.
     ImageDraw = None
     ImageFont = None
 
+try:  # ONNX Runtime GPU is preferred when the image provides CUDA providers.
+    import onnxruntime as ort  # type: ignore
+except Exception:  # pragma: no cover - optional in local/dev environments.
+    ort = None
+
 
 INPUT_SIZE = 640
 DEFAULT_VIDEO = "bottle-detection.mp4"
-DEFAULT_MODEL = "models/yolov5n.onnx"
+DEFAULT_MODEL = "models/yolov5n-fp32.onnx"
 DEFAULT_CLASSES = "models/coco.names"
 CLASS_LABEL_ZH = {
     "person": "人员",
@@ -166,10 +172,16 @@ def run_surrogate_video_profile(job: dict) -> dict:
         "seed": seed,
         "aggregation": "p90_after_warmup",
         "detector_backend": "deterministic_surrogate",
+        "actual_backend": "cpu",
+        "backend": "cpu",
+        "device": "cpu",
         "model_name": "surrogate",
         "video_asset": job.get("video_asset", DEFAULT_VIDEO),
         "gpu_device": os.environ.get("GPU_DEVICE"),
+        "gpu_requested": _gpu_requested(job),
+        "gpu_available": _gpu_available(),
         "gpu_assigned": _gpu_assigned(),
+        "gpu_error": None,
         "annotated_frame_index": measured[0] if measured else 0,
         "preview_frame_width": 640,
         "preview_frame_height": 360,
@@ -228,8 +240,11 @@ def run_yolo_video_profile(job: dict) -> dict:
     class_path = _resolve_asset_path(asset_root, str(job.get("class_names_path") or DEFAULT_CLASSES))
     class_names = _load_class_names(class_path)
 
-    net = cv2.dnn.readNetFromONNX(str(model_path))
-    detector_backend = _configure_dnn_backend(net, str(job.get("dnn_target") or os.environ.get("VIDEO_DNN_TARGET", "cpu")))
+    backend_info = _configure_inference_backend(
+        model_path,
+        str(job.get("dnn_target") or os.environ.get("VIDEO_DNN_TARGET", "auto")),
+        gpu_requested=_gpu_requested(job),
+    )
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -244,8 +259,8 @@ def run_yolo_video_profile(job: dict) -> dict:
 
     for frame_index in warmup:
         frame = _read_frame(cap, frame_index, total_frames)
-        _detect_frame(
-            net,
+        _, backend_info = _detect_frame_with_backend(
+            backend_info,
             frame,
             class_names,
             confidence_threshold=confidence_threshold,
@@ -266,8 +281,8 @@ def run_yolo_video_profile(job: dict) -> dict:
     for sample_index, frame_index in enumerate(measured):
         frame = _read_frame(cap, frame_index, total_frames)
         t0 = time.perf_counter()
-        detections, annotated = _detect_frame(
-            net,
+        (detections, annotated), backend_info = _detect_frame_with_backend(
+            backend_info,
             frame,
             class_names,
             confidence_threshold=confidence_threshold,
@@ -340,13 +355,19 @@ def run_yolo_video_profile(job: dict) -> dict:
         "work_units": int(job.get("work_units", 0) or 0),
         "seed": seed,
         "aggregation": "p90_after_warmup",
-        "detector_backend": detector_backend,
+        "detector_backend": backend_info["actual_backend"],
+        "actual_backend": backend_info["actual_backend"],
+        "backend": backend_info["actual_backend"],
+        "device": backend_info["device"],
         "model_name": model_name,
         "video_asset": video_asset,
         "confidence_threshold": confidence_threshold,
         "nms_threshold": nms_threshold,
         "gpu_device": os.environ.get("GPU_DEVICE"),
+        "gpu_requested": backend_info["gpu_requested"],
+        "gpu_available": backend_info["gpu_available"],
         "gpu_assigned": _gpu_assigned(),
+        "gpu_error": backend_info.get("gpu_error"),
         "annotated_frame_index": preview_index,
         "preview_frame_width": int(preview_frame_width),
         "preview_frame_height": int(preview_frame_height),
@@ -495,18 +516,226 @@ def _add_preview_evidence_overlay(
     cv2.putText(frame, fallback_line_2, (x1 + 10, y1 + 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (226, 232, 240), 1)
 
 
-def _configure_dnn_backend(net, target: str) -> str:
+def _configure_inference_backend(model_path: Path, target: str, *, gpu_requested: bool | None = None) -> dict:
     target = target.lower()
-    if target == "cuda":
-        try:
-            net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-            return "opencv_dnn_cuda"
-        except Exception:
-            pass
+    if gpu_requested is None:
+        gpu_requested = _gpu_assigned() or target in {"cuda", "gpu"}
+    gpu_available = _gpu_available()
+    info = {
+        "requested_target": target,
+        "actual_backend": "opencv_dnn_cpu",
+        "device": "cpu",
+        "gpu_requested": bool(gpu_requested),
+        "gpu_available": bool(gpu_available),
+        "gpu_error": None,
+        "engine": "opencv_dnn",
+        "model_path": str(model_path),
+        "net": None,
+        "session": None,
+    }
+    wants_cuda = target in {"auto", "cuda", "gpu"} and gpu_requested
+    if wants_cuda and gpu_available:
+        ort_session, ort_error = _create_ort_session(model_path)
+        if ort_session is not None:
+            info["actual_backend"] = "onnxruntime_cuda"
+            info["device"] = f"cuda:{os.environ.get('GPU_DEVICE', '0')}"
+            info["engine"] = "onnxruntime"
+            info["session"] = ort_session
+            return info
+        if ort_error:
+            info["gpu_error"] = ort_error
+    net = cv2.dnn.readNetFromONNX(str(model_path))
+    dnn_info = _configure_dnn_backend(net, target, gpu_requested=gpu_requested, gpu_available=gpu_available)
+    dnn_info["engine"] = "opencv_dnn"
+    dnn_info["net"] = net
+    if info.get("gpu_error") and not dnn_info.get("gpu_error"):
+        dnn_info["gpu_error"] = info["gpu_error"]
+    elif info.get("gpu_error") and dnn_info.get("gpu_error"):
+        dnn_info["gpu_error"] = f"{info['gpu_error']}; {dnn_info['gpu_error']}"
+    return dnn_info
+
+
+def _create_ort_session(model_path: Path):
+    if ort is None:
+        return None, "ONNX Runtime is not installed"
+    try:
+        providers = ort.get_available_providers()
+    except Exception as exc:
+        return None, f"Cannot inspect ONNX Runtime providers: {exc}"
+    if "CUDAExecutionProvider" not in providers:
+        return None, f"ONNX Runtime CUDAExecutionProvider is unavailable; providers={providers}"
+    provider_options: dict[str, str] = {
+        # Pascal-era GPUs in the lab can fail with newer cuDNN frontend plans.
+        # DEFAULT is slower than EXHAUSTIVE/HEURISTIC but much more stable for
+        # an acceptance-demo workload where correctness matters first.
+        "cudnn_conv_algo_search": "DEFAULT",
+        "do_copy_in_default_stream": "1",
+    }
+    gpu_device = os.environ.get("GPU_DEVICE")
+    if gpu_device and gpu_device.isdigit():
+        provider_options["device_id"] = gpu_device
+    try:
+        session = ort.InferenceSession(
+            str(model_path),
+            providers=[("CUDAExecutionProvider", provider_options), "CPUExecutionProvider"],
+        )
+        active = session.get_providers()
+        if not active or active[0] != "CUDAExecutionProvider":
+            return None, f"ONNX Runtime did not activate CUDAExecutionProvider; active_providers={active}"
+        return session, None
+    except Exception as exc:
+        return None, f"ONNX Runtime CUDA session failed: {exc}"
+
+
+def _configure_dnn_backend(
+    net,
+    target: str,
+    *,
+    gpu_requested: bool | None = None,
+    gpu_available: bool | None = None,
+) -> dict:
+    target = target.lower()
+    if gpu_requested is None:
+        gpu_requested = _gpu_assigned() or target in {"cuda", "gpu"}
+    if gpu_available is None:
+        gpu_available = _gpu_available()
+    info = {
+        "requested_target": target,
+        "actual_backend": "opencv_dnn_cpu",
+        "device": "cpu",
+        "gpu_requested": bool(gpu_requested),
+        "gpu_available": bool(gpu_available),
+        "gpu_error": None,
+    }
+    wants_cuda = target in {"auto", "cuda", "gpu"} and gpu_requested
+    if wants_cuda and gpu_available:
+        if _opencv_dnn_cuda_available():
+            try:
+                net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                info["actual_backend"] = "opencv_dnn_cuda"
+                info["device"] = f"cuda:{os.environ.get('GPU_DEVICE', '0')}"
+                return info
+            except Exception as exc:
+                info["gpu_error"] = f"OpenCV CUDA backend setup failed: {exc}"
+        else:
+            info["gpu_error"] = "OpenCV DNN CUDA backend is unavailable in this image"
+    elif wants_cuda and not gpu_available:
+        info["gpu_error"] = "GPU was requested but no CUDA/NVIDIA device was visible in the container"
     net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
     net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-    return "opencv_dnn_cpu"
+    return info
+
+
+def _opencv_dnn_cuda_available() -> bool:
+    try:
+        if not hasattr(cv2, "cuda") or cv2.cuda.getCudaEnabledDeviceCount() <= 0:
+            return False
+        build_info = cv2.getBuildInformation()
+        return "NVIDIA CUDA:                   YES" in build_info or "CUDA:                          YES" in build_info
+    except Exception:
+        return False
+
+
+def _detect_frame_with_backend(
+    backend_info: dict,
+    frame,
+    class_names: list[str],
+    *,
+    confidence_threshold: float,
+    nms_threshold: float,
+    max_detections: int,
+) -> tuple[tuple[list[dict], object], dict]:
+    try:
+        if backend_info.get("engine") == "onnxruntime":
+            return (
+                _detect_frame_ort(
+                    backend_info["session"],
+                    frame,
+                    class_names,
+                    confidence_threshold=confidence_threshold,
+                    nms_threshold=nms_threshold,
+                    max_detections=max_detections,
+                ),
+                backend_info,
+            )
+        return (
+            _detect_frame(
+                backend_info["net"],
+                frame,
+                class_names,
+                confidence_threshold=confidence_threshold,
+                nms_threshold=nms_threshold,
+                max_detections=max_detections,
+            ),
+            backend_info,
+        )
+    except Exception as exc:
+        if backend_info.get("actual_backend") not in {"opencv_dnn_cuda", "onnxruntime_cuda"}:
+            raise
+        fallback_info = dict(backend_info)
+        fallback_info["actual_backend"] = "opencv_dnn_cpu"
+        fallback_info["device"] = "cpu"
+        fallback_info["engine"] = "opencv_dnn"
+        fallback_info["session"] = None
+        fallback_info["gpu_error"] = f"{backend_info.get('actual_backend')} inference failed and fell back to CPU: {exc}"
+        if fallback_info.get("net") is None:
+            fallback_info["net"] = cv2.dnn.readNetFromONNX(str(fallback_info["model_path"]))
+        net = fallback_info["net"]
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        return (
+            _detect_frame(
+                net,
+                frame,
+                class_names,
+                confidence_threshold=confidence_threshold,
+                nms_threshold=nms_threshold,
+                max_detections=max_detections,
+            ),
+            fallback_info,
+        )
+
+
+def _detect_frame_ort(
+    session,
+    frame,
+    class_names: list[str],
+    *,
+    confidence_threshold: float,
+    nms_threshold: float,
+    max_detections: int,
+) -> tuple[list[dict], object]:
+    class OrtNetAdapter:
+        def __init__(self, ort_session):
+            self.session = ort_session
+            model_input = ort_session.get_inputs()[0]
+            self.input_name = model_input.name
+            self.input_type = model_input.type
+            self.blob = None
+
+        def setInput(self, blob):
+            if self.input_type == "tensor(float16)":
+                self.blob = blob.astype(np.float16)
+            else:
+                self.blob = blob.astype(np.float32)
+
+        def forward(self):
+            if self.blob is None:
+                raise RuntimeError("ONNX Runtime input blob was not set")
+            outputs = self.session.run(None, {self.input_name: self.blob})
+            if not outputs:
+                raise RuntimeError("ONNX Runtime returned no outputs")
+            return outputs[0]
+
+    return _detect_frame(
+        OrtNetAdapter(session),
+        frame,
+        class_names,
+        confidence_threshold=confidence_threshold,
+        nms_threshold=nms_threshold,
+        max_detections=max_detections,
+    )
 
 
 def _read_frame(cap, frame_index: int, total_frames: int):
@@ -650,3 +879,39 @@ def _gpu_assigned() -> bool:
     if visible and visible.lower() not in {"", "void", "none"}:
         return True
     return any(Path("/dev").glob("nvidia[0-9]*"))
+
+
+def _gpu_requested(job: dict | None = None) -> bool:
+    if job and str(job.get("use_gpu", "")).lower() in {"1", "true", "yes"}:
+        return True
+    if str(os.environ.get("USE_GPU", "")).lower() in {"1", "true", "yes"}:
+        return True
+    target = str((job or {}).get("dnn_target") or os.environ.get("VIDEO_DNN_TARGET", "")).lower()
+    return target in {"cuda", "gpu"} or _gpu_assigned()
+
+
+def _gpu_available() -> bool:
+    if _opencv_cuda_device_count() > 0:
+        return True
+    if any(Path("/dev").glob("nvidia[0-9]*")):
+        return True
+    try:
+        completed = subprocess.run(
+            ["nvidia-smi", "-L"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return completed.returncode == 0 and "GPU" in completed.stdout
+    except Exception:
+        return False
+
+
+def _opencv_cuda_device_count() -> int:
+    if cv2 is None or not hasattr(cv2, "cuda"):
+        return 0
+    try:
+        return int(cv2.cuda.getCudaEnabledDeviceCount())
+    except Exception:
+        return 0

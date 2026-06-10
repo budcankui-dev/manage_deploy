@@ -1136,7 +1136,7 @@ function buildBenchmarkDataProfile() {
       video_asset: 'bottle-detection.mp4',
       inference_mode: 'yolo_onnx',
       model_name: 'yolov5n',
-      model_path: 'models/yolov5n.onnx',
+      model_path: 'models/yolov5n-fp32.onnx',
       class_names_path: 'models/coco.names',
       confidence_threshold: 0.25,
       nms_threshold: 0.45,

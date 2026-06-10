@@ -20,12 +20,12 @@ curl -sS -L https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/mas
   -o workers/low-latency-video/assets/bottle-detection.mp4
 ```
 
-## models/yolov5n.onnx
+## models/yolov5n-fp32.onnx
 
 - 用途：固定轻量目标检测模型，用于生成分类检测框和帧推理时延。
-- 模型：YOLOv5n ONNX
-- 大小：约 3.8 MB
-- SHA256：`04f0e55c26f58d17145b36045780fe1250d5bd2187543e11568e5141d05b3262`
+- 模型：YOLOv5n ONNX FP32
+- 大小：约 7.6 MB
+- SHA256：`88d9096e76c0bf6ecf364041f5a218d65a3509146de36a82c22d8392d72c0500`
 
 ## models/coco.names
 

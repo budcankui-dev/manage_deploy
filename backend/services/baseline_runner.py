@@ -67,7 +67,7 @@ BENCHMARK_PROFILES = {
             "VIDEO_ASSET": "bottle-detection.mp4",
             "VIDEO_INFERENCE_MODE": "yolo_onnx",
             "VIDEO_MODEL_NAME": "yolov5n",
-            "VIDEO_MODEL_PATH": "models/yolov5n.onnx",
+            "VIDEO_MODEL_PATH": "models/yolov5n-fp32.onnx",
             "VIDEO_CLASS_NAMES_PATH": "models/coco.names",
             "VIDEO_CONFIDENCE_THRESHOLD": "0.25",
             "VIDEO_NMS_THRESHOLD": "0.45",

@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import video_core
 from video_core import run_video_profile
 
 
@@ -23,6 +26,12 @@ def test_video_profile_reports_p90_latency():
     assert result["resolution"] == "720p"
     assert result["fps"] == 30
     assert result["aggregation"] == "p90_after_warmup"
+    assert result["actual_backend"] in {"onnxruntime_cuda", "opencv_dnn_cuda", "opencv_dnn_cpu", "cpu"}
+    assert result["backend"] == result["actual_backend"]
+    assert result["device"]
+    assert isinstance(result["gpu_requested"], bool)
+    assert isinstance(result["gpu_available"], bool)
+    assert "gpu_error" in result
     assert result["annotated_frame_data_url"].startswith("data:image/")
     assert "annotated_frame_latency_ms" in result
     assert result["preview_frame_width"] > 0
@@ -32,3 +41,53 @@ def test_video_profile_reports_p90_latency():
     assert result["detections"]
     assert result["detections"][0]["label_zh"]
     assert result["detections"][0]["bbox_xyxy"]
+
+
+def test_dnn_backend_auto_prefers_cuda_when_gpu_requested(monkeypatch):
+    class FakeDnn:
+        DNN_BACKEND_CUDA = 1
+        DNN_TARGET_CUDA = 2
+        DNN_BACKEND_OPENCV = 3
+        DNN_TARGET_CPU = 4
+
+    class FakeCv2:
+        dnn = FakeDnn()
+
+    class FakeNet:
+        def __init__(self):
+            self.calls = []
+
+        def setPreferableBackend(self, value):
+            self.calls.append(("backend", value))
+
+        def setPreferableTarget(self, value):
+            self.calls.append(("target", value))
+
+    monkeypatch.setattr(video_core, "cv2", FakeCv2())
+    monkeypatch.setattr(video_core, "_gpu_available", lambda: True)
+    monkeypatch.setattr(video_core, "_opencv_dnn_cuda_available", lambda: True)
+    monkeypatch.setenv("GPU_DEVICE", "0")
+
+    net = FakeNet()
+    info = video_core._configure_dnn_backend(net, "auto", gpu_requested=True)
+
+    assert info["actual_backend"] == "opencv_dnn_cuda"
+    assert info["device"] == "cuda:0"
+    assert info["gpu_requested"] is True
+    assert info["gpu_available"] is True
+    assert ("backend", FakeDnn.DNN_BACKEND_CUDA) in net.calls
+
+
+def test_inference_backend_prefers_onnxruntime_cuda(monkeypatch):
+    fake_session = object()
+
+    monkeypatch.setattr(video_core, "_gpu_available", lambda: True)
+    monkeypatch.setattr(video_core, "_create_ort_session", lambda model_path: (fake_session, None))
+    monkeypatch.setenv("GPU_DEVICE", "1")
+
+    info = video_core._configure_inference_backend(Path("model.onnx"), "auto", gpu_requested=True)
+
+    assert info["actual_backend"] == "onnxruntime_cuda"
+    assert info["device"] == "cuda:1"
+    assert info["engine"] == "onnxruntime"
+    assert info["session"] is fake_session
