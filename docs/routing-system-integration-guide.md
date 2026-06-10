@@ -384,7 +384,156 @@ Content-Type: application/json
 - 同一 GPU 不会被多个未释放任务同时占用。
 - 任务清理后平台写 release 事件，路由系统 ack 后能继续路由下一批。
 
-## 12. 可直接交给 AI 的实现提示词
+## 12. 联调测试用例
+
+路由同学或 AI 实现完最小版本后，按下面测试用例自测。测试前建议在平台前端新建一轮“外部路由系统”模式的 benchmark 工单，避免扫到历史旧格式数据。
+
+通用环境变量：
+
+```bash
+export PLATFORM_API_BASE=http://10.112.244.94:8181
+export PLATFORM_SERVICE_TOKEN=<平台提供的 X-Service-Token>
+```
+
+### 用例 1：能读取并领取待路由工单
+
+目的：验证路由系统能拿到平台生成的新 DAG，并用 claim 防止重复处理。
+
+步骤：
+
+```bash
+curl -sS \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  "$PLATFORM_API_BASE/api/routing-orders?status=pending&limit=3"
+
+curl -sS -X PATCH \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  "$PLATFORM_API_BASE/api/routing-orders/<order_id>/claim"
+```
+
+预期结果：
+
+- 第一个接口返回 pending 工单列表。
+- `routing_input_dag.job_id`、`routing_input_dag.order_id`、`order_id` 三者一致。
+- `routing_input_dag.nodes` 至少能解析出 `source`、`compute`、`sink` 或文档支持的两节点 DAG。
+- claim 成功后返回 `routing_status=computing`。
+- 如果并发进程重复 claim，同一个工单只能有一个成功，其他应收到 `409`。
+
+### 用例 2：能回写 compute placement 并完成物化
+
+目的：验证路由系统只回写 compute 节点，平台能自动补齐固定端点并物化实例。
+
+步骤：
+
+```bash
+curl -sS -X POST \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$PLATFORM_API_BASE/api/routing-orders/<order_id>/result" \
+  -d '{
+    "strategy": "resource_guarantee",
+    "selected_strategy": "GPU_EXCLUSIVE_RESOURCE_FIT",
+    "external_routing_id": "router-selftest-001",
+    "placements": [
+      {"node_id": "compute", "worker_host": "<chosen-worker-host>", "gpu_device": "0"}
+    ],
+    "metadata": {
+      "path": ["<source>", "<chosen-worker-host>", "<sink>"],
+      "selected_reason": "self-test placement",
+      "algorithm_version": "router-selftest"
+    }
+  }'
+```
+
+预期结果：
+
+- 接口返回 `routing_status=completed`。
+- 如果该业务需要部署容器，响应中有非空 `instance_id`。
+- 平台工单详情能看到 compute 节点和 GPU 编号。
+- `runtime_config.routing_result.router_placements` 保留路由系统原始回写的 compute placement。
+- `runtime_config.routing_result.placements` 是平台最终用于部署/展示的完整 placement。
+
+### 用例 3：临时资源不足时不能丢工单
+
+目的：验证 GPU 暂时占满时，工单会回到 pending 等待下一轮，而不是被误标 failed。
+
+步骤：
+
+```bash
+curl -sS -X PATCH \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$PLATFORM_API_BASE/api/routing-orders/<order_id>/requeue" \
+  -d '{"reason": "GPU slots temporarily full"}'
+```
+
+预期结果：
+
+- 返回 `routing_status=pending`。
+- 下一轮扫描 `status=pending` 时还能看到该工单。
+- 路由系统日志能记录 requeue 原因。
+
+### 用例 4：确定不可路由时能写失败原因
+
+目的：验证源节点不存在、无任何可用 GPU 等确定不可满足场景有明确失败状态。
+
+步骤：
+
+```bash
+curl -sS -X PATCH \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$PLATFORM_API_BASE/api/routing-orders/<order_id>/fail" \
+  -d '{"reason": "no routable worker has required GPU"}'
+```
+
+预期结果：
+
+- 返回 `routing_status=failed`。
+- 平台前端能看到失败状态和失败原因。
+- 路由系统不会继续重复处理该工单。
+
+### 用例 5：能消费资源释放事件
+
+目的：验证平台清理任务后，路由系统能收到 release 事件并把 GPU 加回自己的资源表。
+
+步骤：
+
+```bash
+curl -sS \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  "$PLATFORM_API_BASE/api/routing-resource-events?event_type=release&unacked=true&limit=10"
+
+curl -sS -X POST \
+  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$PLATFORM_API_BASE/api/routing-resource-events/ack" \
+  -d '{"ids": [<event_id>]}'
+```
+
+预期结果：
+
+- release 事件包含 `order_id`、`node_hostname`、`resource_kind=gpu`、`resource_id`。
+- 路由系统本地资源表把对应 GPU 从占用状态改回可用。
+- ack 后同一个事件不再出现在 `unacked=true` 查询结果中。
+
+### 用例 6：GPU 冲突时平台返回 409
+
+目的：验证平台兜底校验生效，防止路由系统误把同一 GPU 分给多个未释放任务。
+
+步骤：
+
+1. 创建两个时间窗口重叠的 GPU 工单。
+2. 第一个工单回写 `worker_host=A, gpu_device=0` 并成功。
+3. 第二个工单也回写同一个 `worker_host=A, gpu_device=0`。
+
+预期结果：
+
+- 第一个工单回写成功。
+- 第二个工单返回 `409`，错误信息包含 GPU 冲突。
+- 路由系统应撤销第二个工单的本地资源扣减，并 requeue 或重新计算。
+
+## 13. 可直接交给 AI 的实现提示词
 
 ```text
 你要实现一个外部路由系统最小联调版本，对接平台 MySQL 和平台 HTTP 接口。
@@ -413,7 +562,7 @@ Content-Type: application/json
 
 # 第二部分：平台背景说明
 
-## 13. 平台和路由系统的边界
+## 14. 平台和路由系统的边界
 
 平台负责：
 
@@ -433,7 +582,7 @@ Content-Type: application/json
 - 处理平台 release 事件。
 - 回写路由结果和算法解释。
 
-## 14. 为什么路由系统不需要知道容器是否部署
+## 15. 为什么路由系统不需要知道容器是否部署
 
 DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有不同模板：
 
@@ -450,7 +599,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 为什么这样选？
 ```
 
-## 15. 内置随机路由策略
+## 16. 内置随机路由策略
 
 平台前端有两种路由方式：
 
@@ -461,7 +610,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 
 内置随机路由策略不是正式路由算法，只用于兜底演示和平台自测。
 
-## 16. 业务目标成功率和路由的关系
+## 17. 业务目标成功率和路由的关系
 
 业务目标成功率验证的是完整闭环：
 
@@ -478,7 +627,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 
 路由算法不需要证明全局最优，但必须避免明显资源冲突。尤其是 GPU 业务，如果多个并发任务共用同一 GPU，指标会明显波动，影响 90% 成功率验收。
 
-## 17. 当前系统状态
+## 18. 当前系统状态
 
 目前平台侧已经具备对接条件：
 
