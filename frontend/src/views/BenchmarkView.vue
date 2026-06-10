@@ -155,7 +155,7 @@
         <div class="route-mode-title">
           <span>路由方式</span>
           <el-radio-group v-model="routeMode" size="small">
-            <el-radio-button label="mock">mock演示路由</el-radio-button>
+            <el-radio-button label="mock">内置随机路由策略</el-radio-button>
             <el-radio-button label="external">外部路由系统</el-radio-button>
           </el-radio-group>
         </div>
@@ -605,14 +605,14 @@ const executionForm = reactive({
 })
 
 const routeActionLabel = computed(() =>
-  routeMode.value === 'mock' ? '生成 mock 路由' : '刷新外部路由状态'
+  routeMode.value === 'mock' ? '生成随机路由' : '刷新外部路由状态'
 )
 
 const routeModeDescription = computed(() => {
   if (routeMode.value === 'external') {
-    return '外部路由模式不会生成 mock 结果；平台保留 pending 工单和 DAG，等待路由系统扫描并回写 placements/GPU 后再执行。'
+    return '外部路由模式不会由平台生成路由结果；平台保留 pending 工单和 DAG，等待路由系统扫描并回写 placements/GPU 后再执行。'
   }
-  return 'mock 演示模式由平台随机选择可调度节点并写入 placements，用于未接入真实路由系统时跑通验收闭环。'
+  return '内置随机路由策略由平台随机选择可调度节点并写入 placements，可作为外部路由系统未接入时的 fallback 策略，用于跑通业务测评闭环。'
 })
 
 const currentTaskConfig = computed(() =>

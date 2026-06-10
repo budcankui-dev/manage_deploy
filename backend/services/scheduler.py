@@ -76,6 +76,7 @@ class TaskScheduler:
             from services.dag_executor import DAGExecutor
             from services.instance_lifecycle import auto_cleanup_instance
             from services.order_sync import mark_orders_completed_for_instance
+            from services.routing_resource_events import emit_release_events_for_instance
 
             async with async_session_maker() as db:
                 try:
@@ -92,6 +93,12 @@ class TaskScheduler:
                         return
 
                     await mark_orders_completed_for_instance(db, instance_id)
+                    await emit_release_events_for_instance(
+                        db,
+                        instance_id,
+                        reason="scheduled_stop",
+                        metadata={"source": "scheduler"},
+                    )
                     if not instance.keep_after_stop:
                         await auto_cleanup_instance(db, instance)
                     await db.commit()

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
@@ -5,7 +7,7 @@ from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
 from config import settings
 from enums import OrderStatus, RoutingStatus, UserRole
-from models import BusinessObjectiveEvaluation, TaskInstance, TaskInstanceNode, TaskOrder, User
+from models import BusinessObjectiveEvaluation, RoutingResourceEvent, TaskInstance, TaskInstanceNode, TaskOrder, User
 
 
 async def _create_user(db_session, username: str, role: UserRole = UserRole.USER) -> User:
@@ -626,6 +628,238 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
 
 
 @pytest.mark.asyncio
+async def test_routing_result_terminal_only_dag_does_not_create_instance(client, db_session):
+    for idx, hostname in enumerate(["terminal-a", "terminal-b"], start=1):
+        response = await client.post(
+            "/api/nodes",
+            json={
+                "hostname": hostname,
+                "agent_address": f"http://127.0.0.1:81{idx}",
+                "management_ip": f"10.9.0.{idx}",
+                "business_ip": f"10.9.1.{idx}",
+                "node_kind": "terminal",
+                "is_schedulable": False,
+            },
+        )
+        assert response.status_code == 200
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "terminal-only-template",
+            "description": "routing-only terminal DAG",
+            "nodes": [],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="terminal-only-routing",
+        source_name="terminal-a",
+        destination_name="terminal-b",
+        runtime_config={
+            "business_task": {"task_type": "terminal_connectivity"},
+            "platform_deployment": {"deployable_roles": []},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "terminal-only-routing",
+            "order_id": "terminal-only-routing",
+            "nodes": [
+                {"node_id": "source", "role": "source", "node_type": "endpoint", "fixed_node_name": "terminal-a"},
+                {"node_id": "sink", "role": "sink", "node_type": "endpoint", "fixed_node_name": "terminal-b"},
+            ],
+            "edges": [{"from": "source", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/orders/{order.id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [],
+            "metadata": {"path": ["terminal-a", "terminal-b"]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["deployment_required"] is False
+    assert body["instance_id"] is None
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    saved = row.scalar_one()
+    assert saved.routing_status == RoutingStatus.COMPLETED.value
+    assert saved.status == OrderStatus.COMPLETED
+    assert saved.materialized_instance_id is None
+    assert saved.runtime_config["deployment_required"] is False
+
+    instances = await db_session.execute(select(TaskInstance).where(TaskInstance.source_order_id == order.id))
+    assert instances.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_routing_result_two_node_dag_materializes_only_compute_node(client, db_session):
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "endpoint-source",
+            "agent_address": "http://127.0.0.1:8201",
+            "management_ip": "10.10.0.1",
+            "business_ip": "10.10.1.1",
+            "node_kind": "terminal",
+            "is_schedulable": False,
+        },
+    )
+    assert source_response.status_code == 200
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "compute-dest",
+            "agent_address": "http://127.0.0.1:8202",
+            "management_ip": "10.10.0.2",
+            "business_ip": "10.10.1.2",
+            "node_kind": "worker",
+        },
+    )
+    assert compute_response.status_code == 200
+    compute_node_id = compute_response.json()["id"]
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "terminal-to-compute-template",
+            "description": "source endpoint is virtual, compute is deployed",
+            "nodes": [
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": compute_node_id,
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    start = datetime.now(UTC)
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="terminal-to-compute-routing",
+        source_name="endpoint-source",
+        destination_name="compute-dest",
+        business_start_time=start,
+        business_end_time=start + timedelta(minutes=5),
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul", "data_profile": {}},
+            "platform_deployment": {"deployable_roles": ["compute"]},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "terminal-to-compute-routing",
+            "order_id": "terminal-to-compute-routing",
+            "nodes": [
+                {"node_id": "source", "role": "source", "node_type": "endpoint", "fixed_node_name": "endpoint-source"},
+                {"node_id": "compute", "role": "compute", "node_type": "compute", "fixed_node_name": "compute-dest"},
+            ],
+            "edges": [{"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/orders/{order.id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"node_id": "compute", "worker_host": "compute-dest", "gpu_device": "0", "node_type": "compute"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    instance_id = response.json()["instance_id"]
+    assert instance_id
+
+    nodes = await db_session.execute(select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id))
+    instance_nodes = nodes.scalars().all()
+    assert len(instance_nodes) == 1
+    compute_node = instance_nodes[0]
+    assert compute_node.name == "compute"
+    assert compute_node.node_id == compute_node_id
+    assert compute_node.gpu_id == "0"
+    assert compute_node.env["TASK_ROLE"] == "compute"
+    assert compute_node.env["SOURCE_NAME"] == "endpoint-source"
+    assert compute_node.env["DESTINATION_NAME"] == "compute-dest"
+    assert compute_node.env["GPU_DEVICE"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="route-compute-only-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "route-compute-only-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    dag_nodes = []
+    for node in order.routing_input_dag["nodes"]:
+        item = dict(node)
+        if item["node_id"] == "source":
+            item["fixed_node_name"] = "worker-a"
+        elif item["node_id"] == "sink":
+            item["fixed_node_name"] = "worker-c"
+        dag_nodes.append(item)
+    order.source_name = "worker-a"
+    order.destination_name = "worker-c"
+    order.routing_input_dag = {**order.routing_input_dag, "nodes": dag_nodes}
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/orders/{order_id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+            ],
+            "metadata": {"path": ["worker-a", "worker-b", "worker-c"]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    instance_id = response.json()["instance_id"]
+
+    nodes = await db_session.execute(select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id))
+    names = sorted(node.name for node in nodes.scalars().all())
+    assert names == ["compute", "sink", "source"]
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    placements = order.runtime_config["routing_result"]["placements"]
+    assert [item["node_id"] for item in placements] == ["compute", "source", "sink"]
+    assert order.runtime_config["routing_result"]["router_placements"] == [
+        {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_service_token_routing_order_http_flow(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-order-http-user")
@@ -684,6 +918,152 @@ async def test_service_token_routing_order_http_flow(client, db_session):
     order = row.scalar_one()
     assert order.materialized_instance_id
     assert order.runtime_config["routing_result"]["metadata"]["algorithm_version"] == "router-http-test"
+
+
+@pytest.mark.asyncio
+async def test_service_token_can_requeue_and_fail_routing_order(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-status-user")
+    service_headers = {"X-Service-Token": settings.service_api_token}
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-status-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    assert claim_response.status_code == 200
+    assert claim_response.json()["routing_status"] == "computing"
+
+    requeue_response = await client.patch(
+        f"/api/routing-orders/{order_id}/requeue",
+        headers=service_headers,
+        json={"reason": "GPU slots temporarily full"},
+    )
+    assert requeue_response.status_code == 200
+    assert requeue_response.json()["routing_status"] == "pending"
+
+    claim_again = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    assert claim_again.status_code == 200
+
+    fail_response = await client.patch(
+        f"/api/routing-orders/{order_id}/fail",
+        headers=service_headers,
+        json={"reason": "No feasible placement"},
+    )
+    assert fail_response.status_code == 200
+    assert fail_response.json()["routing_status"] == "failed"
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    assert order.error_message == "No feasible placement"
+
+
+@pytest.mark.asyncio
+async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-conflict-user")
+    service_headers = {"X-Service-Token": settings.service_api_token}
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 2,
+            "benchmark_run_id": "routing-conflict-run",
+        },
+    )
+    assert create_response.status_code == 200
+    first_id, second_id = create_response.json()["order_ids"]
+
+    payload = {
+        "strategy": "resource_guarantee",
+        "placements": [
+            {"node_id": "source", "worker_host": "worker-a"},
+            {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+            {"node_id": "sink", "worker_host": "worker-c"},
+        ],
+    }
+    first = await client.post(f"/api/routing-orders/{first_id}/result", headers=service_headers, json=payload)
+    assert first.status_code == 200, first.text
+
+    second = await client.post(f"/api/routing-orders/{second_id}/result", headers=service_headers, json=payload)
+    assert second.status_code == 409
+    assert "GPU slot conflict" in second.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_delete_order_emits_and_acks_routing_resource_release_event(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-release-user")
+    service_headers = {"X-Service-Token": settings.service_api_token}
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-release-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    result_response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        headers=service_headers,
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"node_id": "source", "worker_host": "worker-a"},
+                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+                {"node_id": "sink", "worker_host": "worker-c"},
+            ],
+            "external_routing_id": "route-release-001",
+            "metadata": {"algorithm_version": "release-test"},
+        },
+    )
+    assert result_response.status_code == 200, result_response.text
+
+    delete_response = await client.delete(f"/api/orders/{order_id}")
+    assert delete_response.status_code == 200
+
+    events_response = await client.get(
+        "/api/routing-resource-events",
+        headers=service_headers,
+        params={"benchmark_run_id": "routing-release-run"},
+    )
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert len(events) == 1
+    assert events[0]["order_id"] == order_id
+    assert events[0]["job_id"] == order_id
+    assert events[0]["node_hostname"] == "worker-b"
+    assert events[0]["resource_kind"] == "gpu"
+    assert events[0]["resource_id"] == "0"
+    assert events[0]["reason"] == "delete_order"
+
+    ack_response = await client.post(
+        "/api/routing-resource-events/ack",
+        headers=service_headers,
+        json={"ids": [events[0]["id"]]},
+    )
+    assert ack_response.status_code == 200
+    assert ack_response.json()["acked"] == 1
+
+    event_row = (
+        await db_session.execute(select(RoutingResourceEvent).where(RoutingResourceEvent.id == events[0]["id"]))
+    ).scalar_one()
+    assert event_row.router_ack_at is not None
 
 
 @pytest.mark.asyncio

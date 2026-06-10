@@ -10,7 +10,7 @@ from api.orders import RoutingResultPayload, receive_routing_result as receive_o
 from api.auth import get_current_user, require_service_token
 from database import get_db
 from enums import ConversationStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
-from models import Conversation, IntentDraft, RoutingRequest, TaskOrder, User
+from models import Conversation, IntentDraft, RoutingRequest, RoutingResourceEvent, TaskOrder, User
 from schemas.conversation import RoutingRequestCreate, RoutingRequestResponse, RoutingResultCallback
 from services.order_materialize import materialize_after_routing
 
@@ -27,6 +27,33 @@ class RoutingOrderResponse(BaseModel):
     business_end_time: datetime | None = None
     routing_input_dag: dict[str, Any] | None = None
     runtime_config: dict[str, Any] | None = None
+
+
+class RoutingStatusUpdatePayload(BaseModel):
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class RoutingResourceEventResponse(BaseModel):
+    id: int
+    event_type: str
+    order_id: str
+    job_id: str
+    external_routing_id: str | None = None
+    benchmark_run_id: str | None = None
+    task_type: str | None = None
+    node_hostname: str
+    resource_kind: str
+    resource_id: str
+    amount: int
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
+    router_ack_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class RoutingResourceAckPayload(BaseModel):
+    ids: list[int]
 
 
 def _benchmark_run_id(order: TaskOrder) -> str | None:
@@ -59,6 +86,26 @@ def _routing_order_response(order: TaskOrder) -> RoutingOrderResponse:
         business_end_time=order.business_end_time,
         routing_input_dag=order.routing_input_dag,
         runtime_config=order.runtime_config,
+    )
+
+
+def _resource_event_response(event: RoutingResourceEvent) -> RoutingResourceEventResponse:
+    return RoutingResourceEventResponse(
+        id=event.id,
+        event_type=event.event_type,
+        order_id=event.order_id,
+        job_id=event.job_id,
+        external_routing_id=event.external_routing_id,
+        benchmark_run_id=event.benchmark_run_id,
+        task_type=event.task_type,
+        node_hostname=event.node_hostname,
+        resource_kind=event.resource_kind,
+        resource_id=event.resource_id,
+        amount=event.amount,
+        reason=event.reason,
+        metadata=event.event_metadata,
+        router_ack_at=event.router_ack_at,
+        created_at=event.created_at,
     )
 
 
@@ -110,6 +157,56 @@ async def claim_routing_order(
     return _routing_order_response(order)
 
 
+@router.patch("/routing-orders/{order_id}/requeue", response_model=RoutingOrderResponse)
+async def requeue_routing_order(
+    order_id: str,
+    payload: RoutingStatusUpdatePayload | None = None,
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """Return a claimed order to pending when router capacity is temporarily unavailable."""
+    result = await db.execute(
+        select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
+    )
+    order = result.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.routing_status != RoutingStatus.COMPUTING.value:
+        raise HTTPException(status_code=409, detail=f"Cannot requeue: current status is {order.routing_status}")
+
+    reason = payload.reason if payload else None
+    order.routing_status = RoutingStatus.PENDING.value
+    order.error_message = reason
+    await db.commit()
+    await db.refresh(order)
+    return _routing_order_response(order)
+
+
+@router.patch("/routing-orders/{order_id}/fail", response_model=RoutingOrderResponse)
+async def fail_routing_order(
+    order_id: str,
+    payload: RoutingStatusUpdatePayload | None = None,
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """Mark an order as routing failed when no feasible placement can be produced."""
+    result = await db.execute(
+        select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
+    )
+    order = result.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.routing_status == RoutingStatus.COMPLETED.value:
+        raise HTTPException(status_code=409, detail="Cannot fail: routing result already completed")
+
+    reason = payload.reason if payload else None
+    order.routing_status = RoutingStatus.FAILED.value
+    order.error_message = reason
+    await db.commit()
+    await db.refresh(order)
+    return _routing_order_response(order)
+
+
 @router.post("/routing-orders/{order_id}/result")
 async def receive_routing_order_result(
     order_id: str,
@@ -119,6 +216,51 @@ async def receive_routing_order_result(
 ):
     """Receive placements from an external router for a TaskOrder."""
     return await receive_order_routing_result(order_id=order_id, payload=payload, db=db)
+
+
+@router.get("/routing-resource-events", response_model=list[RoutingResourceEventResponse])
+async def list_routing_resource_events(
+    event_type: str = Query("release"),
+    unacked: bool = Query(True),
+    benchmark_run_id: str | None = Query(None),
+    task_type: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """List platform resource-release events for the external router to consume."""
+    query = select(RoutingResourceEvent).where(RoutingResourceEvent.event_type == event_type)
+    if unacked:
+        query = query.where(RoutingResourceEvent.router_ack_at.is_(None))
+    if benchmark_run_id:
+        query = query.where(RoutingResourceEvent.benchmark_run_id == benchmark_run_id)
+    if task_type:
+        query = query.where(RoutingResourceEvent.task_type == task_type)
+    result = await db.execute(query.order_by(RoutingResourceEvent.created_at.asc()).limit(limit))
+    return [_resource_event_response(event) for event in result.scalars().all()]
+
+
+@router.post("/routing-resource-events/ack")
+async def ack_routing_resource_events(
+    payload: RoutingResourceAckPayload,
+    db: AsyncSession = Depends(get_db),
+    _service: None = Depends(require_service_token),
+):
+    """Acknowledge resource-release events after the router has added capacity back."""
+    if not payload.ids:
+        return {"acked": 0, "ids": []}
+    result = await db.execute(
+        select(RoutingResourceEvent).where(
+            RoutingResourceEvent.id.in_(payload.ids),
+            RoutingResourceEvent.router_ack_at.is_(None),
+        )
+    )
+    now = datetime.utcnow()
+    events = result.scalars().all()
+    for event in events:
+        event.router_ack_at = now
+    await db.commit()
+    return {"acked": len(events), "ids": [event.id for event in events]}
 
 
 @router.post("/routing-requests", response_model=RoutingRequestResponse)

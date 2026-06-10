@@ -170,6 +170,7 @@ class TaskInstanceCreate(TaskInstanceBase):
     auto_start: bool = False
     keep_after_stop: bool = False
     macro_values: Optional[dict[str, str]] = None
+    enabled_template_node_names: Optional[list[str]] = None
     node_overrides: list["TaskInstanceNodeOverride"] = Field(default_factory=list)
 
     @model_validator(mode="before")

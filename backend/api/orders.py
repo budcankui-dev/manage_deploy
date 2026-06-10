@@ -47,6 +47,7 @@ from services.order_sync import (
     reconcile_orphan_orders,
 )
 from services.port_plan import format_service_url, get_business_address
+from services.routing_resource_events import emit_release_events_for_order
 from services.routing_payload_builder import build_routing_payload
 from services.scheduler import TaskScheduler
 
@@ -540,6 +541,12 @@ async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    await emit_release_events_for_order(
+        db,
+        order,
+        reason="delete_order",
+        metadata={"instance_id": order.materialized_instance_id},
+    )
     await purge_order_instance_artifacts(db, order.materialized_instance_id)
     await db.delete(order)
     await db.commit()
@@ -558,6 +565,12 @@ async def batch_delete_orders(
     orders, failed = await _resolve_batch_orders(db, request)
     for order in orders:
         try:
+            await emit_release_events_for_order(
+                db,
+                order,
+                reason="delete_order",
+                metadata={"instance_id": order.materialized_instance_id, "batch": True},
+            )
             await purge_order_instance_artifacts(db, order.materialized_instance_id)
             await db.delete(order)
             succeeded.append(order.id)
@@ -597,6 +610,12 @@ async def batch_cleanup_order_instances(
                 continue
 
             await task_scheduler.cancel_all_schedules(instance.id)
+            await emit_release_events_for_order(
+                db,
+                order,
+                reason="cleanup_instance",
+                metadata={"instance_id": instance.id, "preserve_order": True},
+            )
             await cleanup_instance_runtime(db, instance)
             await purge_instance_artifacts_preserve_evidence(db, instance.id)
             if order.status == OrderStatus.MATERIALIZED:
@@ -679,10 +698,12 @@ class RoutingPlacement(BaseModel):
     node_id: str
     worker_host: str
     gpu_device: Optional[str] = None
+    node_type: Optional[str] = None
+    deployable: Optional[bool] = None
 
 
 class RoutingResultPayload(BaseModel):
-    placements: list[RoutingPlacement]
+    placements: list[RoutingPlacement] = Field(default_factory=list)
     strategy: Optional[str] = None
     selected_strategy: Optional[str] = None
     external_routing_id: Optional[str] = None
@@ -690,6 +711,230 @@ class RoutingResultPayload(BaseModel):
     estimated_metric: dict[str, Any] = Field(default_factory=dict)
     result_payload: dict[str, Any] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+def _placement_role(placement: RoutingPlacement | dict[str, Any]) -> str:
+    if isinstance(placement, RoutingPlacement):
+        return str(placement.node_id or "").lower()
+    return str(placement.get("node_id") or placement.get("role") or "").lower()
+
+
+def _routing_dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
+    dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    nodes = dag.get("nodes") if isinstance(dag, dict) else None
+    if not isinstance(nodes, list):
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        for key in (node.get("node_id"), node.get("role")):
+            if key:
+                result[str(key).lower()] = node
+    return result
+
+
+def _role_set(value: Any) -> set[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return set()
+    return {str(item).lower() for item in value if item is not None}
+
+
+def _platform_deployment_policy(order: TaskOrder) -> tuple[set[str] | None, set[str] | None]:
+    """Platform-owned deployment policy.
+
+    The external router decides placements and paths. Whether a logical DAG node
+    becomes a container is owned by this platform and can be stored on the order.
+    """
+    config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    deployment = config.get("platform_deployment") or config.get("deployment_plan") or {}
+    if not isinstance(deployment, dict):
+        return None, None
+    return (
+        _role_set(deployment.get("deployable_roles")),
+        _role_set(deployment.get("non_deployable_roles") or deployment.get("virtual_roles")),
+    )
+
+
+def _placement_is_deployable(
+    order: TaskOrder,
+    placement: RoutingPlacement,
+    dag_nodes_by_role: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    """Return whether this logical DAG node should be materialized as a container.
+
+    Backward compatibility matters: existing source/sink endpoint containers omit
+    deployable, so the default remains True. New integrations should not ask the
+    router to decide this; use runtime_config.platform_deployment instead.
+    """
+    role = str(placement.node_id or "").lower()
+    deployable_roles, non_deployable_roles = _platform_deployment_policy(order)
+    if deployable_roles is not None:
+        return role in deployable_roles
+    if non_deployable_roles is not None:
+        return role not in non_deployable_roles
+
+    if placement.deployable is not None:
+        return bool(placement.deployable)
+
+    dag_nodes_by_role = dag_nodes_by_role or _routing_dag_nodes_by_role(order)
+    dag_node = dag_nodes_by_role.get(role)
+    if isinstance(dag_node, dict) and isinstance(dag_node.get("deployable"), bool):
+        return bool(dag_node["deployable"])
+
+    return True
+
+
+def _complete_platform_fixed_endpoint_placements(
+    order: TaskOrder,
+    placements: list[RoutingPlacement],
+    dag_nodes_by_role: dict[str, dict[str, Any]],
+) -> list[RoutingPlacement]:
+    """Add platform-known deployable endpoints that the router does not need to compute.
+
+    Routers only need to choose work/compute nodes. If source/sink are deployable
+    containers in this platform, their physical names are already fixed by the
+    user/DAG, so the platform can add them before materialization.
+    """
+    completed = list(placements)
+    existing_roles = {str(item.node_id or "").lower() for item in completed}
+
+    for role in ("source", "sink"):
+        if role in existing_roles:
+            continue
+        dag_node = dag_nodes_by_role.get(role)
+        if not dag_node:
+            continue
+        worker_host = dag_node.get("fixed_node_name")
+        if not worker_host:
+            worker_host = order.source_name if role == "source" else order.destination_name
+        if not worker_host:
+            continue
+        candidate = RoutingPlacement(
+            node_id=role,
+            worker_host=str(worker_host),
+            node_type=dag_node.get("node_type"),
+        )
+        if _placement_is_deployable(order, candidate, dag_nodes_by_role):
+            completed.append(candidate)
+
+    return completed
+
+
+def _placement_worker_host(placement: RoutingPlacement | dict[str, Any]) -> str | None:
+    if isinstance(placement, RoutingPlacement):
+        return placement.worker_host
+    value = placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
+    return str(value) if value else None
+
+
+def _placement_gpu_ids(placement: RoutingPlacement | dict[str, Any]) -> list[str]:
+    if isinstance(placement, RoutingPlacement):
+        return [str(placement.gpu_device)] if placement.gpu_device is not None else []
+    if placement.get("gpu_device") is not None:
+        return [str(placement["gpu_device"])]
+    if placement.get("gpu_id") is not None:
+        return [str(placement["gpu_id"])]
+    indices = placement.get("gpu_indices")
+    if isinstance(indices, list):
+        return [str(item) for item in indices if item is not None]
+    return []
+
+
+def _compute_gpu_slots_from_placements(
+    placements: list[RoutingPlacement] | list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    slots: set[tuple[str, str]] = set()
+    for placement in placements:
+        if _placement_role(placement) not in {"compute", "worker", "infer", "train"}:
+            continue
+        worker_host = _placement_worker_host(placement)
+        if not worker_host:
+            continue
+        for gpu_id in _placement_gpu_ids(placement):
+            slots.add((worker_host, gpu_id))
+    return slots
+
+
+def _order_compute_gpu_slots(order: TaskOrder) -> set[tuple[str, str]]:
+    config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    routing_result = config.get("routing_result")
+    if not isinstance(routing_result, dict):
+        return set()
+    placements = routing_result.get("placements")
+    if isinstance(placements, list):
+        return _compute_gpu_slots_from_placements([p for p in placements if isinstance(p, dict)])
+    if isinstance(placements, dict):
+        rows: list[dict[str, Any]] = []
+        for role, value in placements.items():
+            if isinstance(value, dict):
+                row = dict(value)
+                row.setdefault("node_id", role)
+                rows.append(row)
+        return _compute_gpu_slots_from_placements(rows)
+    return set()
+
+
+def _time_windows_overlap(left: TaskOrder, right: TaskOrder) -> bool:
+    left_start = left.business_start_time or left.scheduled_start_time
+    left_end = left.business_end_time or left.scheduled_end_time
+    right_start = right.business_start_time or right.scheduled_start_time
+    right_end = right.business_end_time or right.scheduled_end_time
+    if left_start and right_end and right_end <= left_start:
+        return False
+    if right_start and left_end and left_end <= right_start:
+        return False
+    return True
+
+
+async def _ensure_no_active_gpu_slot_conflicts(
+    db: AsyncSession,
+    order: TaskOrder,
+    placements: list[RoutingPlacement],
+) -> None:
+    requested_slots = _compute_gpu_slots_from_placements(placements)
+    if not requested_slots:
+        return
+
+    rows = await db.execute(
+        select(TaskOrder).where(
+            TaskOrder.id != order.id,
+            TaskOrder.deleted_at.is_(None),
+            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
+            TaskOrder.status == OrderStatus.MATERIALIZED,
+            TaskOrder.materialized_instance_id.is_not(None),
+        )
+    )
+    candidates = rows.scalars().all()
+    instance_ids = [item.materialized_instance_id for item in candidates if item.materialized_instance_id]
+    if not instance_ids:
+        return
+
+    instance_rows = await db.execute(select(TaskInstance).where(TaskInstance.id.in_(instance_ids)))
+    instance_status = {instance.id: instance.status for instance in instance_rows.scalars().all()}
+    active_statuses = {
+        TaskStatus.PENDING,
+        TaskStatus.SCHEDULED,
+        TaskStatus.STARTING,
+        TaskStatus.RUNNING,
+        TaskStatus.STOPPING,
+    }
+    for candidate in candidates:
+        status = instance_status.get(candidate.materialized_instance_id or "")
+        if status not in active_statuses:
+            continue
+        if not _time_windows_overlap(order, candidate):
+            continue
+        overlap = requested_slots & _order_compute_gpu_slots(candidate)
+        if overlap:
+            slot_text = ", ".join(f"{host}:gpu{gpu}" for host, gpu in sorted(overlap))
+            raise HTTPException(
+                status_code=409,
+                detail=f"GPU slot conflict for {slot_text}; release previous task before routing",
+            )
 
 
 @router.post("/{order_id}/routing-result")
@@ -717,12 +962,22 @@ async def receive_routing_result(
             detail=f"Cannot accept routing result when routing_status is '{order.routing_status}'",
         )
 
+    dag_nodes_by_role = _routing_dag_nodes_by_role(order)
+    effective_placements = _complete_platform_fixed_endpoint_placements(
+        order,
+        payload.placements,
+        dag_nodes_by_role,
+    )
+    await _ensure_no_active_gpu_slot_conflicts(db, order, effective_placements)
+
     # Persist routing result
     order.routing_status = RoutingStatus.COMPUTING.value
     rc = order.runtime_config or {}
     routing_result = {
-        "placements": [p.model_dump() for p in payload.placements],
+        "placements": [p.model_dump(exclude_none=True) for p in effective_placements],
     }
+    if len(effective_placements) != len(payload.placements):
+        routing_result["router_placements"] = [p.model_dump(exclude_none=True) for p in payload.placements]
     if payload.strategy:
         routing_result["strategy"] = payload.strategy
     if payload.selected_strategy:
@@ -752,11 +1007,15 @@ async def receive_routing_result(
 
     # Build node_overrides from placements list
     overrides: list[TaskInstanceNodeOverride] = []
-    for placement in payload.placements:
+    enabled_template_node_names: list[str] = []
+    for placement in effective_placements:
         role = placement.node_id  # node_id field carries the role name from router
         template_node_name = role_node_names.get(role) if catalog else role
         if template_node_name is None:
             template_node_name = role
+
+        if not _placement_is_deployable(order, placement, dag_nodes_by_role):
+            continue
 
         try:
             resolved_node_id = await _resolve_node_id(db, placement.worker_host)
@@ -794,6 +1053,24 @@ async def receive_routing_result(
             env=env,
             gpu_id=gpu_id,
         ))
+        if template_node_name not in enabled_template_node_names:
+            enabled_template_node_names.append(template_node_name)
+
+    if not enabled_template_node_names:
+        order.materialized_instance_id = None
+        order.status = OrderStatus.COMPLETED
+        order.routing_status = RoutingStatus.COMPLETED.value
+        rc["deployment_required"] = False
+        order.runtime_config = rc
+        flag_modified(order, "runtime_config")
+        await db.commit()
+        return {
+            "status": "ok",
+            "order_id": order_id,
+            "routing_status": "completed",
+            "deployment_required": False,
+            "instance_id": None,
+        }
 
     # Create instance
     start_time = order.business_start_time or order.scheduled_start_time or datetime.utcnow()
@@ -806,6 +1083,7 @@ async def receive_routing_result(
         scheduled_end_time=end_time,
         auto_start=False,
         keep_after_stop=order.keep_after_stop,
+        enabled_template_node_names=enabled_template_node_names,
         node_overrides=overrides,
     )
     instance = await _create_instance_from_template(db, instance_create, source_order_id=order.id)
@@ -1097,6 +1375,12 @@ async def _cleanup_evaluated_benchmark_instance(
     if instance.status not in (TaskStatus.STOPPED, TaskStatus.PENDING):
         executor = DAGExecutor(db)
         await executor.execute_dag_stop(instance.id)
+    await emit_release_events_for_order(
+        db,
+        order,
+        reason="benchmark_cleanup",
+        metadata={"instance_id": instance.id, "preserve_order": True},
+    )
 
     refreshed = (
         await db.execute(
@@ -1334,7 +1618,7 @@ async def auto_route_order(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Mock router: randomly assigns schedulable nodes, then calls routing-result logic."""
+    """Built-in random routing strategy for benchmark fallback."""
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
