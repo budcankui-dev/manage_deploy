@@ -743,7 +743,7 @@ function screenshotFrame(slide, file, x, y, w, h, caption) {
   });
   bullet(slide, [
     "远端 Node Agent 控制容器创建、启动、停止与清理",
-    "mock 路由可返回 compute GPU 设备号",
+    "内置随机路由策略可返回 compute GPU 设备号",
     "worker 上报 backend=cupy_gpu、gpu_device、effective_gflops",
     "业务工单中心可筛选 benchmark_run_id 并查看详情",
   ], 1.05, 4.16, 4.85, { h: 1.28, fontSize: 10.6 });
@@ -892,7 +892,7 @@ function screenshotFrame(slide, file, x, y, w, h, caption) {
   });
   const rows = [
     ["业务目标 30 样本留档口径需核对", "远端当前查询到 evaluated=15，需确认历史 30/30 记录与当前库表状态", "重新跑或补齐正式 30 任务，并保存截图/API 报告", "本周内"],
-    ["外部路由系统未正式联调", "目前验收页使用 mock 路由，只证明部署与评价闭环", "对接 DAG 输入、placements/GPU 回写和部署触发", "1 周"],
+    ["外部路由系统未正式联调", "目前验收页使用内置随机路由策略验证部署与评价闭环", "对接 DAG 输入、placements/GPU 回写和部署触发", "1 周"],
     ["视频业务仅扩展演示", "worker 和页面入口已具备，但未做四节点 30 任务正式压测", "构建镜像，复用成功率流程跑视频任务", "1-2 周"],
     ["测试方案材料需整理", "系统功能已迭代，正式文档需同步截图、命令和指标口径", "形成测试方案 PDF/PPT 附录与演示流程", "本周内"],
   ];

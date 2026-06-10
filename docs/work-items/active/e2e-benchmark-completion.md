@@ -26,7 +26,7 @@ Last Updated: 2026-06-08
 - task_orders.is_benchmark 字段区分测试/功能性工单
 - matmul 模板端口改为 auto=true（范围 18800-19100），支持同节点并发多实例
 - POST /api/orders/batch-benchmark：一键创建 N 个测试工单
-- POST /api/orders/auto-route / batch-auto-route：mock 随机路由（后续对接真实路由模块）
+- POST /api/orders/auto-route / batch-auto-route：内置随机路由策略（后续对接真实路由模块）
 
 ### 前端
 - 验收测试独立页面（/benchmark）：四步流程（基线管理/批量压测/路由启动/成功率统计）
@@ -47,7 +47,7 @@ Last Updated: 2026-06-08
   - compute-1：`frame_latency_p90_ms=9.38037 ms`，`stable=true`
   - compute-2：`frame_latency_p90_ms=9.32026 ms`，`stable=true`
 - 视频 smoke：`video-smoke-20260608102101`，2 个工单均完成指标上报，2/2 达标。
-- 视频 30 任务验收轮次：`video-acceptance-20260608102409`，30 个工单全部创建、mock 路由、启动、指标上报成功；`evaluated_count=30`，`success_count=30`，业务目标成功率 `100%`。
+- 视频 30 任务验收轮次：`video-acceptance-20260608102409`，30 个工单全部创建、内置随机路由、启动、指标上报成功；`evaluated_count=30`，`success_count=30`，业务目标成功率 `100%`。
 - 验收轮次执行后已调用“清理实例保留工单”，释放远端容器和实例运行态；工单、路由结果、GPU 分配、业务指标、结果摘要仍保留用于页面回看，列表中 `instance_exists=false`。
 - 抽查工单详情可见：
   - `routing_input_dag.edges[]` 包含 `data_mb` 和 `bandwidth_mbps`
@@ -65,7 +65,7 @@ Last Updated: 2026-06-08
 - [ ] 前端：LLM prompt 输入 + 生成文本展示
 
 ### 中优先级
-- [ ] 真实路由系统对接（替换 mock 随机路由）
+- [ ] 真实路由系统对接（接入外部路由模式）
 - [ ] 实例删除时同步清理 Node Agent 容器注册（当前只删 DB 记录）
 - [ ] 意图解析固定数据集继续保持 360 条口径，扩展样本覆盖多模态命名并加入模态标签
 
@@ -111,7 +111,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"task_type":"low_latency_video_pipeline","count":30,"benchmark_run_id":"video-acceptance-001"}'
 
-# 临时 mock 路由；正式对接时由外部路由系统写回 placements
+# 内置随机路由策略；正式对接时由外部路由系统写回 placements
 curl -H "Authorization: Bearer $TOKEN" \
   -X POST http://127.0.0.1:8000/api/orders/batch-auto-route \
   -H 'Content-Type: application/json' \

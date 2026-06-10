@@ -15,6 +15,27 @@
 
 当前阶段默认 `admin-server` 是管理节点，`compute-*` 是业务节点。矩阵乘法演示仍按随路计算数据流 `source -> compute -> sink` 验证，业务数据不通过共享宿主机文件传递。
 
+## Docker / containerd 存储
+
+Docker `data-root` 和 containerd `root/state` 是两套路径；即使 Docker `data-root` 已经放在数据盘，containerd 仍可能默认写入系统盘 `/var/lib/containerd`，导致拉取大镜像时报 `no space left on device`。
+
+当前已完成如下迁移：
+
+| 节点 | Docker data-root | containerd root | containerd state | 备注 |
+|------|------------------|-----------------|------------------|------|
+| admin-server | `/mnt/data/docker` | `/mnt/data/containerd-root` | `/mnt/data/containerd-state` | 已从系统盘迁移，Registry/MySQL/前端已恢复 |
+| compute-1 | `/disk/sdb/docker` | `/disk/sdc/containerd-root` | `/disk/sdc/containerd-state` | 已显式迁移，Docker 与 containerd 均不写系统盘 |
+| compute-2 | `/data/hdd1/docker` | `/data/hdd1/containerd-root` | `/data/hdd1/containerd-state` | 已从系统盘迁移，解决拉大镜像空间不足 |
+| compute-3 | `/disk/sdb/docker` | `/data/containerd-root` | `/data/containerd-state` | 已从系统盘迁移 |
+
+迁移后应通过以下命令复核：
+
+```bash
+sudo grep -E '^(root|state) =' /etc/containerd/config.toml
+sudo du -sh /var/lib/containerd
+docker ps
+```
+
 ## SSH 访问
 
 本机已配置 SSH alias，供 Codex / Claude CLI / E2E Deploy Test Agent 使用：

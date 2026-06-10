@@ -1,7 +1,7 @@
 # 业务目标验收测试方案
 
 > 最后更新：2026-06-09
-> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；矩阵乘法与视频 AI 推理均已按固定参数完成 30 个可评价工单验收轮次，当前均为 30/30 达标。视频 AI 推理另有带中文 YOLO 画框预览的单工单证据，用于演示业务真实执行结果。
+> 状态：已实现基础闭环，真实远程基线执行已接入 Node Agent；前端已按“成功率 ≥90% 且已评估任务 ≥30”判定正式通过，并增加压测工单证据链详情和验收轮次 ID；矩阵乘法与视频 AI 推理均已按固定参数完成 30 个可评价工单验收轮次，当前均为 30/30 达标。视频 AI 推理工单详情可展示带中文标签的 YOLO 画框预览，用于演示业务真实执行结果。
 
 ## 目标
 
@@ -14,7 +14,7 @@
 
 当前正式主验收业务类型：高吞吐矩阵乘法，系统标识为 `high_throughput_matmul`。
 
-第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 读取固定测试视频并抽帧，compute 加载 `yolov5n.onnx` 执行检测并统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式留档口径同样要求当前轮次已评估任务不少于 30 且业务目标成功率不低于 90%。当前可复现留档轮次为 `video-acceptance-20260608102409`，30/30 达标；带框预览演示工单为 `video-cn-preview-final-20260609042107`。
+第二模态扩展：低时延视频 AI 推理，系统标识为 `low_latency_video_pipeline`。当前已提供轻量 worker `workers/low-latency-video/`，并在 `/benchmark` 页面开放为可选任务类型，用于工业检测抽帧推理场景：source 读取固定测试视频并抽帧，compute 加载 `yolov5n-fp32.onnx` 执行检测并统计逐帧推理时延，sink 上报 `frame_latency_p90_ms`、检测框和带框预览图。它可本地运行 baseline、构建镜像并创建验收工单，用于证明系统具备多模态扩展能力；正式留档口径同样要求当前轮次已评估任务不少于 30 且业务目标成功率不低于 90%。当前可复现留档轮次为 `video-formal-20260610-01`，30/30 达标，并可在工单详情中查看带框预览图。
 
 ## 验收指标
 
@@ -81,7 +81,7 @@
 |------|--------|------|
 | 任务数量 | `30` | 正式验收固定 30；少于 30 只作为调试，不判定正式通过 |
 | 固定测试视频 | `bottle-detection.mp4` | 打包进 worker 镜像，模拟工业检测/瓶体识别场景 |
-| 检测模型 | `yolov5n.onnx` | 打包进 worker 镜像，生成分类检测框和帧推理时延 |
+| 检测模型 | `yolov5n-fp32.onnx` | 打包进 worker 镜像，生成分类检测框和帧推理时延 |
 | 分辨率 | `720p` | 页面展示 profile 名称，实际测试视频为 640x360，按固定资产复现 |
 | fps | `30` | 用于解释抽帧间隔和业务画像 |
 | 抽帧间隔 | `30` | 约每秒抽 1 帧，避免批量压测产生过高数据面流量 |
@@ -107,7 +107,7 @@
 
 创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。压测工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
 
-每次创建批量压测都会生成一个 `benchmark_run_id`，并写入工单 `runtime_config.benchmark.run_id`。页面顶部展示“当前验收轮次”，后续工单列表、一键路由、自动执行和 Step 4 结果默认只统计当前轮次。验收页支持用 `/benchmark?benchmark_run_id=<run_id>` 直接打开指定轮次，便于截图留档和复核。旧版本历史工单没有轮次标记时，页面会退回到“全部历史压测工单”口径，仅用于调试回看，不建议作为正式验收截图。
+每次创建批量压测都会生成一个 `benchmark_run_id`，并写入工单 `runtime_config.benchmark.run_id`。页面顶部展示“当前验收轮次”，后续工单列表、生成随机路由、自动执行和 Step 4 结果默认只统计当前轮次。验收页支持用 `/benchmark?benchmark_run_id=<run_id>` 直接打开指定轮次，便于截图留档和复核。旧版本历史工单没有轮次标记时，页面会退回到“全部历史压测工单”口径，仅用于调试回看，不建议作为正式验收截图。
 
 ### Step 3 执行
 
@@ -119,11 +119,11 @@
 
 操作按钮：
 
-- “一键路由”：仅用于当前批量验收流程的 mock 路由，为当前 `benchmark_run_id` 和当前任务类型的 `is_benchmark=true` 待路由工单随机选择可调度节点并生成 placements。它不替代外部路由系统，也不改变系统边界。
+- “生成随机路由”：使用平台内置随机路由策略，为当前 `benchmark_run_id` 和当前任务类型的 `is_benchmark=true` 待路由工单随机选择可调度节点并生成 placements。它可作为外部路由系统未接入时的 fallback 策略，用于验证部署与评价闭环。
 - “自动执行”：按计算节点和 GPU 编号形成执行槽位，同一槽位默认同一时刻只运行 1 个验收任务；任务上报指标后，系统停止并删除容器实例，保留工单、路由结果、业务指标和结果证据，再启动下一批。
 - “刷新”：重新拉取状态。
 
-正式演示时，Step 3 的 mock 路由和启动操作只应作用于当前 `benchmark_run_id`。如果需要重新跑一轮验收，应重新点击 Step 2 创建新的压测工单，让新旧结果分离，避免把历史失败或历史成功样本混入本轮统计。
+正式演示时，Step 3 的内置随机路由策略和启动操作只应作用于当前 `benchmark_run_id`。如果需要重新跑一轮验收，应重新点击 Step 2 创建新的压测工单，让新旧结果分离，避免把历史失败或历史成功样本混入本轮统计。
 
 自动执行是矩阵计算验收的默认执行口径。原因是节点 baseline 反映单任务在同 profile 下的历史能力；如果把 30 个矩阵任务一次性并发启动，测到的是资源争抢后的吞吐，不再能和单任务基线直接比较，容易把平台执行方式的过载误判成业务目标不达标。自动执行不会调宽达标阈值，只是让验收执行方式与 baseline 定义保持一致。
 
@@ -177,11 +177,11 @@
 - 工单创建时生成 `task_orders.routing_input_dag`。
 - `routing_input_dag.edges[]` 除 `data_mb` 外还包含 `bandwidth_mbps`，表达源节点、业务计算节点、目的节点之间的链路约束。当前值由任务类型和数据画像估算，后续可替换为实测基准。
 - 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。对话/工单主链路使用 `POST /api/routing-results/{routing_request_id}`，验收工单可直接使用 `POST /api/orders/{order_id}/routing-result`。两者都要表达 `source`、`compute/worker`、`sink` placements，compute 节点可携带 `gpu_device` 或 `gpu_indices`。
-- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。当前 `/benchmark` 一键路由写回 list 形式 placements，例如 `[{node_id:"compute", worker_host:"compute-3", gpu_device:"0"}]`；正式路由系统可使用更丰富的 dict 形式，平台按角色解析。
+- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。当前 `/benchmark` 内置随机路由策略写回 list 形式 placements，例如 `[{node_id:"compute", worker_host:"compute-3", gpu_device:"0"}]`；正式路由系统可使用更丰富的 dict 形式，平台按角色解析。
 - 如果多个业务类型复用同一个 source/compute/sink 模板，平台会优先根据工单 `runtime_config.business_task.task_type` 定位 `business_template_catalog`，避免只按 `template_id` 查找时出现多条 catalog 歧义。
 - 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 
-当前 `/benchmark` 页面的一键路由仅作为验收 mock 路由，页面和文档均需明确其边界：它用于跑通部署与评价闭环，不替代外部路由算法，不证明路由最优。
+当前 `/benchmark` 页面的“内置随机路由策略”是平台 fallback 策略，用于跑通部署与评价闭环；它不证明外部路由算法最优，但可以作为外部路由系统未接入时的基线演示策略。
 
 外部路由系统联调的具体接口、字段格式和最短接入路径见 [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)。
 

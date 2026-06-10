@@ -15,7 +15,7 @@
 ## P0：验收双指标闭环
 
 - [x] `/benchmark` 四步验收页面：基线、批量压测、执行、结果
-- [x] 批量验收 mock 路由：仅用于 `is_benchmark=true` 工单，不替代外部路由系统
+- [x] 批量验收内置随机路由策略：仅用于 `is_benchmark=true` 工单，可作为外部路由系统未接入时的 fallback
 - [x] 意图解析评测脚本支持 3 次多数投票
 - [x] 模板 + 槽位替换生成 ≥200 条 matmul 意图解析数据集
 - [x] 真实 compute 节点远程 baseline API/UI 接入：通过 Node Agent 在目标节点执行 benchmark 容器
@@ -28,7 +28,7 @@
 - [ ] 外部路由系统对接联调（扫表 routing_status=pending → 回写 placements）
 - [ ] 回写 placements 后自动物化实例并按业务时间窗口调度
 - [ ] GPU 编号同时落到容器运行约束和环境变量（GPU_DEVICE / CUDA_VISIBLE_DEVICES / NVIDIA_VISIBLE_DEVICES）
-- [ ] mock 路由与真实路由入口在页面和文档中清晰区分
+- [ ] 内置随机路由策略与外部路由系统入口在页面和文档中清晰区分
 
 ## P2：多节点部署运维
 
