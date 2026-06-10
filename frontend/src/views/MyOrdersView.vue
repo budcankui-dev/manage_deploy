@@ -464,7 +464,7 @@ async function cancelOrder() {
 
 function formatStatus(status) {
   return {
-    pending: '待处理',
+    pending: '待路由',
     materialized: '已部署',
     running: '运行中',
     failed: '失败',

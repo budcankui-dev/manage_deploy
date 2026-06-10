@@ -127,7 +127,7 @@
           <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建压测工单</el-button>
         </div>
         <div class="pending-pill">
-          当前待处理工单：<strong>{{ pendingWorkCount }}</strong> 个
+          当前待路由工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>

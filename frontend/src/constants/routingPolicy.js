@@ -13,7 +13,7 @@ export function routingPolicyLabel(policy) {
 }
 
 export const ORDER_STATUS_LABELS = {
-  pending: '待处理',
+  pending: '待路由',
   materialized: '已部署',
   completed: '已完成',
   failed: '失败',
