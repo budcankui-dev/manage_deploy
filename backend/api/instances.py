@@ -54,6 +54,7 @@ from services.port_plan import (
 from services.auto_port_allocator import auto_allocate_ports
 from services.instance_builder import resolve_port_values
 from services.routing_resource_events import emit_release_events_for_instance
+from services.routing_network import instance_waiting_for_network_ready
 
 logger = logging.getLogger(__name__)
 
@@ -805,6 +806,15 @@ async def start_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
         return {"message": "Instance already running"}
     if instance.status not in (TaskStatus.PENDING, TaskStatus.SCHEDULED, TaskStatus.STOPPED, TaskStatus.FAILED):
         raise HTTPException(status_code=400, detail=f"Cannot start instance in status: {instance.status}")
+    waiting_order = await instance_waiting_for_network_ready(db, instance_id)
+    if waiting_order:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"工单 {waiting_order.id} 已物化并返回端口绑定，"
+                "但外部路由系统尚未确认 network-ready"
+            ),
+        )
     preflight = await _preflight_instance_plan(
         db,
         await _build_preflight_plan_from_instance(instance),
@@ -860,6 +870,12 @@ async def batch_start_instances(request: BatchOperationRequest, db: AsyncSession
     failed: dict[str, str] = {}
     for instance_id in request.instance_ids:
         try:
+            waiting_order = await instance_waiting_for_network_ready(db, instance_id)
+            if waiting_order:
+                failed[instance_id] = (
+                    f"工单 {waiting_order.id} 等待外部路由系统确认 network-ready"
+                )
+                continue
             executor = DAGExecutor(db)
             success, error = await executor.execute_dag_start(instance_id)
             if success:

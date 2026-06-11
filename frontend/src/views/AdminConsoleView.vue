@@ -53,6 +53,7 @@
           <el-select v-model="routingFilter.status" placeholder="状态" clearable size="small" @change="loadRouting">
             <el-option label="等待" value="pending" />
             <el-option label="计算中" value="computing" />
+            <el-option label="等待网络确认" value="network_binding_ready" />
             <el-option label="完成" value="completed" />
             <el-option label="失败" value="failed" />
           </el-select>
@@ -129,7 +130,13 @@ function formatTime(v) {
 }
 
 function routingTagType(status) {
-  return { pending: 'warning', computing: 'warning', completed: 'success', failed: 'danger' }[status] || 'info'
+  return {
+    pending: 'warning',
+    computing: 'warning',
+    network_binding_ready: 'primary',
+    completed: 'success',
+    failed: 'danger',
+  }[status] || 'info'
 }
 
 async function loadUsers() {

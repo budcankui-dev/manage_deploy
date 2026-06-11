@@ -58,6 +58,26 @@ def get_peer_url_by_name(peer_name: str) -> str | None:
     return None
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def peer_connect_timeout(default: float = 600.0) -> float:
+    """Long retry window for route/flow-table propagation after network-ready."""
+    return max(1.0, _env_float("PEER_CONNECT_TIMEOUT_SEC", default))
+
+
+def peer_wait_timeout(default: float = 600.0) -> float:
+    """Long receive window so upstream/downstream can tolerate delayed connectivity."""
+    return max(1.0, _env_float("PEER_WAIT_TIMEOUT_SEC", default))
+
+
 def _post_json(
     peer_url: str,
     path: str,
@@ -67,6 +87,7 @@ def _post_json(
 ) -> None:
     import httpx
 
+    timeout_sec = max(float(timeout_sec), peer_connect_timeout())
     url = f"{peer_url}{path}"
     deadline = time.time() + timeout_sec
     last_error: Exception | None = None
@@ -211,6 +232,7 @@ class _DualStackHTTPServer(HTTPServer):
 
 def wait_for_data_handler(port: int, timeout_sec: float = 120.0, interval_sec: float = 0.5) -> dict:
     """Wait for POST /data to be received by the handler. Returns the received data."""
+    timeout_sec = max(float(timeout_sec), peer_wait_timeout())
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         if PostDataHandler.received_data is not None:

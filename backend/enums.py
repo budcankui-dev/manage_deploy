@@ -82,6 +82,7 @@ class RoutingStatus(str, Enum):
     NOT_REQUIRED = "not_required"
     PENDING = "pending"
     COMPUTING = "computing"
+    NETWORK_BINDING_READY = "network_binding_ready"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

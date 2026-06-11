@@ -243,7 +243,7 @@
         </el-table-column>
         <el-table-column label="路由状态" width="110">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.routing_status === 'completed' ? 'success' : 'warning'">
+            <el-tag size="small" :type="routingStatusType(row.routing_status)">
               {{ routingStatusLabel(row.routing_status) }}
             </el-tag>
           </template>
@@ -651,7 +651,12 @@ const orderStats = computed(() => {
       stats.running += 1
     } else if (deploymentStatus === 'stopped' || order.status === 'completed' || order.status === 'stopped') {
       stats.completed += 1
-    } else if (order.materialized_instance_id || order.status === 'materialized' || order.routing_status === 'completed') {
+    } else if (
+      order.materialized_instance_id
+      || order.status === 'materialized'
+      || order.routing_status === 'completed'
+      || order.routing_status === 'network_binding_ready'
+    ) {
       stats.routed += 1
     } else {
       stats.waitingRoute += 1
@@ -869,10 +874,23 @@ function routingStatusLabel(value) {
     not_required: '无需路由',
     pending: '待路由',
     computing: '计算中',
+    network_binding_ready: '等待网络确认',
     completed: '已完成',
     failed: '失败',
   }
   return labels[value] || value || '—'
+}
+
+function routingStatusType(value) {
+  const types = {
+    not_required: 'info',
+    pending: 'warning',
+    computing: 'warning',
+    network_binding_ready: 'primary',
+    completed: 'success',
+    failed: 'danger',
+  }
+  return types[value] || 'info'
 }
 
 function instanceStatusLabel(value) {

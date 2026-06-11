@@ -747,7 +747,13 @@ function parseStatusType(status) {
 }
 
 function routingStatusType(status) {
-  return { pending: 'warning', computing: 'warning', completed: 'success', failed: 'danger' }[status] || 'info'
+  return {
+    pending: 'warning',
+    computing: 'warning',
+    network_binding_ready: 'primary',
+    completed: 'success',
+    failed: 'danger',
+  }[status] || 'info'
 }
 
 function formatRoutingStatus(status) {
@@ -789,6 +795,7 @@ const ORDER_STATUS_LABEL = {
 const ROUTING_STATUS_LABEL = {
   pending: '待路由',
   computing: '路由计算中',
+  network_binding_ready: '等待网络确认',
   completed: '路由完成',
   failed: '路由失败',
 }
@@ -819,6 +826,7 @@ function combinedStatusType(row) {
   if (row.status === 'completed') return 'success'
   if (row.status === 'failed') return 'danger'
   if (row.status === 'cancelled') return 'info'
+  if (row.routing_status === 'network_binding_ready') return 'primary'
   if (row.routing_status === 'computing') return 'warning'
   return 'warning'
 }
@@ -828,6 +836,7 @@ function combinedStatusLabel(row) {
   if (row.status === 'completed') return '已完成'
   if (row.status === 'failed') return '失败'
   if (row.status === 'cancelled') return '已取消'
+  if (row.routing_status === 'network_binding_ready') return '等待网络确认'
   if (row.routing_status === 'computing') return '路由计算中'
   return '待路由'
 }

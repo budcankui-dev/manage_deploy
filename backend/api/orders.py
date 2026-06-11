@@ -49,6 +49,10 @@ from services.order_sync import (
 from services.port_plan import format_service_url, get_business_address
 from services.routing_resource_events import emit_release_events_for_order
 from services.routing_payload_builder import build_routing_payload
+from services.routing_network import (
+    build_network_bindings,
+    mark_network_binding_ready,
+)
 from services.scheduler import TaskScheduler
 
 from .instances import _create_instance_from_template
@@ -711,6 +715,7 @@ class RoutingResultPayload(BaseModel):
     estimated_metric: dict[str, Any] = Field(default_factory=dict)
     result_payload: dict[str, Any] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+    require_network_ready: bool = True
 
 
 def _placement_role(placement: RoutingPlacement | dict[str, Any]) -> str:
@@ -903,7 +908,12 @@ async def _ensure_no_active_gpu_slot_conflicts(
         select(TaskOrder).where(
             TaskOrder.id != order.id,
             TaskOrder.deleted_at.is_(None),
-            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
+            TaskOrder.routing_status.in_(
+                [
+                    RoutingStatus.NETWORK_BINDING_READY.value,
+                    RoutingStatus.COMPLETED.value,
+                ]
+            ),
             TaskOrder.status == OrderStatus.MATERIALIZED,
             TaskOrder.materialized_instance_id.is_not(None),
         )
@@ -952,7 +962,18 @@ async def receive_routing_result(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if order.materialized_instance_id:
-        raise HTTPException(status_code=409, detail="Routing result already processed")
+        rc = order.runtime_config or {}
+        routing_result = rc.get("routing_result") if isinstance(rc.get("routing_result"), dict) else {}
+        return {
+            "status": "ok",
+            "order_id": order_id,
+            "routing_status": order.routing_status,
+            "instance_id": order.materialized_instance_id,
+            "network_bindings": routing_result.get("network_bindings", []),
+            "network_ready_required": bool(routing_result.get("network_ready_required", False)),
+            "network_ready": bool(routing_result.get("network_ready", False)),
+            "idempotent": True,
+        }
     if order.routing_status not in {
         RoutingStatus.PENDING.value,
         RoutingStatus.COMPUTING.value,
@@ -1061,6 +1082,12 @@ async def receive_routing_result(
         order.status = OrderStatus.COMPLETED
         order.routing_status = RoutingStatus.COMPLETED.value
         rc["deployment_required"] = False
+        rc["routing_result"] = {
+            **routing_result,
+            "network_bindings": [],
+            "network_ready_required": False,
+            "network_ready": True,
+        }
         order.runtime_config = rc
         flag_modified(order, "runtime_config")
         await db.commit()
@@ -1070,6 +1097,9 @@ async def receive_routing_result(
             "routing_status": "completed",
             "deployment_required": False,
             "instance_id": None,
+            "network_bindings": [],
+            "network_ready_required": False,
+            "network_ready": True,
         }
 
     # Create instance
@@ -1078,7 +1108,7 @@ async def receive_routing_result(
     instance_create = TaskInstanceCreate(
         template_id=order.template_id,
         name=order.name,
-        deployment_mode=DeploymentMode.SCHEDULED,
+        deployment_mode=DeploymentMode.IMMEDIATE if payload.require_network_ready else DeploymentMode.SCHEDULED,
         scheduled_start_time=start_time,
         scheduled_end_time=end_time,
         auto_start=False,
@@ -1094,19 +1124,28 @@ async def receive_routing_result(
             node.env = {**node.env, "TASK_INSTANCE_ID": instance.id}
             flag_modified(node, "env")
 
-    # Register scheduled jobs
-    ts = TaskScheduler()
-    if order.business_start_time:
-        await ts.schedule_task_start(instance.id, order.business_start_time)
-    if order.business_end_time:
-        await ts.schedule_task_end(instance.id, order.business_end_time)
-
+    network_bindings = await build_network_bindings(db, order, instance)
+    require_network_ready = bool(payload.require_network_ready)
+    mark_network_binding_ready(order, network_bindings, require_ready=require_network_ready)
+    flag_modified(order, "runtime_config")
     order.materialized_instance_id = instance.id
     order.status = OrderStatus.MATERIALIZED
-    order.routing_status = RoutingStatus.COMPLETED.value
+    order.routing_status = (
+        RoutingStatus.NETWORK_BINDING_READY.value
+        if require_network_ready
+        else RoutingStatus.COMPLETED.value
+    )
 
     await db.commit()
-    return {"status": "ok", "order_id": order_id, "routing_status": "completed", "instance_id": instance.id}
+    return {
+        "status": "ok",
+        "order_id": order_id,
+        "routing_status": order.routing_status,
+        "instance_id": instance.id,
+        "network_bindings": network_bindings,
+        "network_ready_required": require_network_ready,
+        "network_ready": not require_network_ready,
+    }
 
 
 class BatchBenchmarkRequest(BaseModel):
@@ -1602,12 +1641,15 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             node_obj.env = {**node_obj.env, "TASK_INSTANCE_ID": instance.id}
             flag_modified(node_obj, "env")
 
+    network_bindings = await build_network_bindings(db, order, instance)
+    mark_network_binding_ready(order, network_bindings, require_ready=False)
     ts = TaskScheduler()
     if order.business_start_time:
         await ts.schedule_task_start(instance.id, order.business_start_time)
     if order.business_end_time:
         await ts.schedule_task_end(instance.id, order.business_end_time)
 
+    flag_modified(order, "runtime_config")
     order.materialized_instance_id = instance.id
     order.status = OrderStatus.MATERIALIZED
 

@@ -50,21 +50,60 @@ def build_matmul_dag(
         "scheduled_start_time": business_start_time.strftime(fmt) if business_start_time else now.strftime(fmt),
         "scheduled_end_time": business_end_time.strftime(fmt) if business_end_time else "",
         "edges": [
-            {"from": "source", "to": "compute", "data_mb": data_mb, "bandwidth_mbps": bandwidth_mbps},
-            {"from": "compute", "to": "sink", "data_mb": data_mb, "bandwidth_mbps": bandwidth_mbps},
+            {
+                "from": "source",
+                "to": "compute",
+                "data_mb": data_mb,
+                "bandwidth_mbps": bandwidth_mbps,
+                "flow": {
+                    "flow_id": f"{order_id}:source->compute",
+                    "protocol": "tcp",
+                    "dst_port_ref": "compute.compute",
+                    "traffic_class": "high_throughput",
+                    "priority": 60,
+                },
+            },
+            {
+                "from": "compute",
+                "to": "sink",
+                "data_mb": data_mb,
+                "bandwidth_mbps": bandwidth_mbps,
+                "flow": {
+                    "flow_id": f"{order_id}:compute->sink",
+                    "protocol": "tcp",
+                    "dst_port_ref": "sink.sink",
+                    "traffic_class": "high_throughput",
+                    "priority": 60,
+                },
+            },
         ],
         "nodes": [
             {
                 "node_id": "source",
                 "resources": resources["source"],
+                "network": {
+                    "port_requirements": [
+                        {"name": "source", "protocol": "tcp", "auto": True, "range": [18800, 19100], "direction": "inbound"}
+                    ]
+                },
             },
             {
                 "node_id": "compute",
                 "resources": resources["compute"],
+                "network": {
+                    "port_requirements": [
+                        {"name": "compute", "protocol": "tcp", "auto": True, "range": [18800, 19100], "direction": "inbound"}
+                    ]
+                },
             },
             {
                 "node_id": "sink",
                 "resources": resources["sink"],
+                "network": {
+                    "port_requirements": [
+                        {"name": "sink", "protocol": "tcp", "auto": True, "range": [18800, 19100], "direction": "inbound"}
+                    ]
+                },
             },
         ],
     }

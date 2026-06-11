@@ -401,6 +401,15 @@ class DAGExecutor:
         )
 
     async def execute_dag_start(self, instance_id: str) -> tuple[bool, Optional[str]]:
+        from services.routing_network import instance_waiting_for_network_ready
+
+        waiting_order = await instance_waiting_for_network_ready(self.db, instance_id)
+        if waiting_order:
+            return (
+                False,
+                f"Order {waiting_order.id} is waiting for external router network-ready",
+            )
+
         instance = await self.get_instance_with_graph(instance_id)
         if not instance:
             return False, "Task instance not found"

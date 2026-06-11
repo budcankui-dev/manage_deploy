@@ -5,14 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from api.orders import RoutingResultPayload, receive_routing_result as receive_order_routing_result
-from api.auth import get_current_user, require_service_token
+from api.auth import get_current_user
 from database import get_db
-from enums import ConversationStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
-from models import Conversation, IntentDraft, RoutingRequest, RoutingResourceEvent, TaskOrder, User
+from enums import ConversationStatus, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus, TaskStatus
+from models import Conversation, IntentDraft, RoutingRequest, RoutingResourceEvent, TaskInstance, TaskOrder, User
 from schemas.conversation import RoutingRequestCreate, RoutingRequestResponse, RoutingResultCallback
+from services.dag_executor import DAGExecutor
 from services.order_materialize import materialize_after_routing
+from services.routing_network import mark_network_ready, network_ready_required
+from services.scheduler import TaskScheduler
 
 router = APIRouter(prefix="/api", tags=["routing"])
 
@@ -54,6 +58,11 @@ class RoutingResourceEventResponse(BaseModel):
 
 class RoutingResourceAckPayload(BaseModel):
     ids: list[int]
+
+
+class NetworkReadyPayload(BaseModel):
+    metadata: dict[str, Any] | None = None
+    auto_start: bool = True
 
 
 def _benchmark_run_id(order: TaskOrder) -> str | None:
@@ -116,7 +125,6 @@ async def list_routing_orders(
     task_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """HTTP interface for external routers to list pending task orders."""
     result = await db.execute(
@@ -139,7 +147,6 @@ async def list_routing_orders(
 async def claim_routing_order(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """Claim a TaskOrder for external route computation."""
     result = await db.execute(
@@ -162,7 +169,6 @@ async def requeue_routing_order(
     order_id: str,
     payload: RoutingStatusUpdatePayload | None = None,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """Return a claimed order to pending when router capacity is temporarily unavailable."""
     result = await db.execute(
@@ -187,7 +193,6 @@ async def fail_routing_order(
     order_id: str,
     payload: RoutingStatusUpdatePayload | None = None,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """Mark an order as routing failed when no feasible placement can be produced."""
     result = await db.execute(
@@ -212,10 +217,93 @@ async def receive_routing_order_result(
     order_id: str,
     payload: RoutingResultPayload,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """Receive placements from an external router for a TaskOrder."""
     return await receive_order_routing_result(order_id=order_id, payload=payload, db=db)
+
+
+@router.post("/routing-orders/{order_id}/network-ready")
+async def confirm_routing_order_network_ready(
+    order_id: str,
+    payload: NetworkReadyPayload | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm that the external router has installed flow rules/QoS for an order."""
+    payload = payload or NetworkReadyPayload()
+    row = await db.execute(
+        select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
+    )
+    order = row.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.routing_status not in {
+        RoutingStatus.NETWORK_BINDING_READY.value,
+        RoutingStatus.COMPLETED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot mark network ready when routing_status is '{order.routing_status}'",
+        )
+
+    already_ready = not network_ready_required(order)
+    mark_network_ready(order, payload.metadata)
+    order.routing_status = RoutingStatus.COMPLETED.value
+    flag_modified(order, "runtime_config")
+
+    instance: TaskInstance | None = None
+    if order.materialized_instance_id:
+        instance = (
+            await db.execute(select(TaskInstance).where(TaskInstance.id == order.materialized_instance_id))
+        ).scalar_one_or_none()
+
+    now = datetime.utcnow()
+    start_time = order.business_start_time or order.scheduled_start_time
+    end_time = order.business_end_time or order.scheduled_end_time
+    start_action = "none"
+    start_error: str | None = None
+
+    if instance and end_time and end_time <= now:
+        instance.status = TaskStatus.EXPIRED
+        instance.error_message = "业务结束时间已过，network-ready 到达后不再启动"
+        order.status = OrderStatus.FAILED
+        order.error_message = instance.error_message
+        start_action = "expired"
+        await db.commit()
+    else:
+        await db.commit()
+
+        if instance and payload.auto_start:
+            scheduler = TaskScheduler()
+            try:
+                if start_time and start_time > now:
+                    await scheduler.schedule_task_start(instance.id, start_time)
+                    start_action = "scheduled"
+                else:
+                    executor = DAGExecutor(db)
+                    success, error = await executor.execute_dag_start(instance.id)
+                    if success:
+                        start_action = "started"
+                    else:
+                        start_action = "start_failed"
+                        start_error = error or "Unknown error"
+                if end_time and end_time > now:
+                    await scheduler.schedule_task_end(instance.id, end_time)
+            except Exception as exc:
+                start_action = "start_failed"
+                start_error = str(exc)
+
+    return {
+        "status": "ok",
+        "order_id": order_id,
+        "routing_status": RoutingStatus.COMPLETED.value,
+        "instance_id": order.materialized_instance_id,
+        "network_ready": True,
+        "already_ready": already_ready,
+        "auto_start": payload.auto_start,
+        "start_action": start_action,
+        "start_error": start_error,
+    }
 
 
 @router.get("/routing-resource-events", response_model=list[RoutingResourceEventResponse])
@@ -226,7 +314,6 @@ async def list_routing_resource_events(
     task_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """List platform resource-release events for the external router to consume."""
     query = select(RoutingResourceEvent).where(RoutingResourceEvent.event_type == event_type)
@@ -244,7 +331,6 @@ async def list_routing_resource_events(
 async def ack_routing_resource_events(
     payload: RoutingResourceAckPayload,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """Acknowledge resource-release events after the router has added capacity back."""
     if not payload.ids:
@@ -306,7 +392,6 @@ async def receive_routing_result(
     routing_request_id: str,
     payload: RoutingResultCallback,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     result = await db.execute(select(RoutingRequest).where(RoutingRequest.id == routing_request_id))
     routing = result.scalar_one_or_none()
@@ -361,7 +446,6 @@ async def receive_routing_result(
 async def list_routing_requests(
     status: RoutingRequestStatus | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """供外部路由系统扫描待计算的路由请求。"""
     query = select(RoutingRequest).where(RoutingRequest.deleted_at.is_(None))
@@ -376,7 +460,6 @@ async def list_routing_requests(
 async def claim_routing_request(
     routing_request_id: str,
     db: AsyncSession = Depends(get_db),
-    _service: None = Depends(require_service_token),
 ):
     """外部路由系统领取任务，标记为 computing。"""
     result = await db.execute(select(RoutingRequest).where(RoutingRequest.id == routing_request_id))

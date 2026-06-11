@@ -105,6 +105,7 @@ def _build_dag_nodes(
                     "gpu_units": n.get("gpu_units", 0),
                 },
             }
+            node["network"] = _network_requirements_for_role(node_id, n.get("port_defs"))
             node.update(_endpoint_identity(node_id, source_name, destination_name))
             nodes.append(node)
         return nodes
@@ -112,6 +113,7 @@ def _build_dag_nodes(
     defaults = _default_nodes_for_task_type(task_type, resource_requirement, data_profile)
     for node in defaults:
         node.setdefault("role", _infer_role(node["node_id"]))
+        node.setdefault("network", _network_requirements_for_role(node["node_id"]))
         node.update(_endpoint_identity(node["node_id"], source_name, destination_name))
     return defaults
 
@@ -182,6 +184,49 @@ def _endpoint_identity(
     return {}
 
 
+def _network_requirements_for_role(
+    role: Any,
+    port_defs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Logical port requirements. Actual host ports are returned after placement."""
+    role_text = str(role or "node").lower()
+    requirements: list[dict[str, Any]] = []
+    for item in port_defs or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or role_text)
+        requirements.append(
+            {
+                "name": name,
+                "protocol": item.get("protocol") or "tcp",
+                "auto": bool(item.get("auto", False)),
+                "range": item.get("range") or [18800, 19100],
+                "direction": item.get("direction") or "inbound",
+            }
+        )
+    if not requirements and role_text in {"source", "compute", "worker", "sink"}:
+        requirements.append(
+            {
+                "name": role_text,
+                "protocol": "tcp",
+                "auto": True,
+                "range": [18800, 19100],
+                "direction": "inbound",
+            }
+        )
+    return {"port_requirements": requirements} if requirements else {}
+
+
+def _flow_profile(task_type: str) -> tuple[str, int]:
+    if task_type == "low_latency_video_pipeline":
+        return "low_latency", 90
+    if task_type == "high_throughput_matmul":
+        return "high_throughput", 60
+    if task_type == "llm_text_generation":
+        return "interactive", 70
+    return "best_effort", 40
+
+
 def _build_dag_edges(
     task_type: str,
     nodes: list[dict[str, Any]],
@@ -195,11 +240,21 @@ def _build_dag_edges(
         return []
 
     edges = []
+    traffic_class, priority = _flow_profile(task_type)
     for i in range(len(nodes) - 1):
+        src = nodes[i]["node_id"]
+        dst = nodes[i + 1]["node_id"]
         edges.append({
-            "from": nodes[i]["node_id"],
-            "to": nodes[i + 1]["node_id"],
+            "from": src,
+            "to": dst,
             "data_mb": data_mb,
             "bandwidth_mbps": bandwidth_mbps,
+            "flow": {
+                "flow_id": f"{task_type}:{src}->{dst}",
+                "protocol": "tcp",
+                "dst_port_ref": f"{dst}.{dst}",
+                "traffic_class": traffic_class,
+                "priority": priority,
+            },
         })
     return edges

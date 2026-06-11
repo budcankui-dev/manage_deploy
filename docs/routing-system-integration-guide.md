@@ -64,25 +64,24 @@
 
 ```bash
 PLATFORM_API_BASE=http://127.0.0.1:8181
-PLATFORM_SERVICE_TOKEN=<平台提供的 X-Service-Token>
 ROUTER_DB_URL=<平台 MySQL 连接串>
 ROUTER_POLL_INTERVAL_SEC=5
 ROUTER_PORT=8190
+ROUTER_HTTP_TIMEOUT_SEC=120
 ```
 
 ## 4. 平台已提供的 HTTP 接口
 
-所有接口都带请求头：
+这些接口是验收演示用内部接口，当前不需要 token 或签名。路由服务只要能访问平台后端地址即可。
 
-```http
-X-Service-Token: <平台提供的 service token>
-```
+建议路由系统把 HTTP 超时设置为 **不少于 60 秒，推荐 120 秒**。`/result` 会物化实例并预分配端口，偶尔比普通查询慢；如果请求超时，先查询该工单状态，看到已进入 `network_binding_ready` 或 `completed` 就不要重复扣资源。
 
 | 动作 | 方法与路径 | 说明 |
 |------|------------|------|
 | 获取待路由工单 | `GET /api/routing-orders?status=pending&limit=100` | 平台返回 pending 工单和 DAG。也可以直接读 MySQL，但推荐先用接口联调。 |
 | 领取工单 | `PATCH /api/routing-orders/{order_id}/claim` | 平台把 `pending -> computing`，并发时只有一个路由进程能成功。 |
-| 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例。 |
+| 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例，并返回实际端口绑定 `network_bindings`。 |
+| 确认网络就绪 | `POST /api/routing-orders/{order_id}/network-ready` | 路由系统下发流表/QoS 后调用，平台才启动或注册启动计划。 |
 | 临时资源不足 | `PATCH /api/routing-orders/{order_id}/requeue` | 把 `computing -> pending`，稍后重试，不要丢工单。 |
 | 确定无法路由 | `PATCH /api/routing-orders/{order_id}/fail` | 把工单标记为 `failed`，需要写清失败原因。 |
 | 查询释放事件 | `GET /api/routing-resource-events?event_type=release&unacked=true&limit=100` | 平台告诉路由系统哪些 GPU 已释放。 |
@@ -128,6 +127,14 @@ while True:
         if result.status_code == 409:
             router_resource_pool.release(placement.worker_host, "gpu", placement.gpu_device)
             PATCH(f"/api/routing-orders/{order_id}/requeue", {"reason": result.text})
+            continue
+
+        bindings = result.json()["network_bindings"]
+        install_flow_rules(bindings)
+        POST(
+            f"/api/routing-orders/{order_id}/network-ready",
+            {"metadata": {"flow_rule_count": len(bindings)}},
+        )
 ```
 
 ## 6. 需要读取的 MySQL 表
@@ -141,7 +148,7 @@ while True:
 | 字段 | 用途 |
 |------|------|
 | `id` | 统一工单 ID，也是 `job_id/order_id`。 |
-| `routing_status` | `pending`、`computing`、`completed`、`failed`。 |
+| `routing_status` | `pending`、`computing`、`network_binding_ready`、`completed`、`failed`。 |
 | `routing_input_dag` | 路由算法输入 DAG。 |
 | `source_name` / `destination_name` | 用户输入的源节点和目的节点。 |
 | `business_start_time` / `business_end_time` | 业务时间窗口。 |
@@ -222,12 +229,22 @@ while True:
       "role": "source",
       "node_type": "endpoint",
       "fixed_node_name": "terminal-a",
+      "network": {
+        "port_requirements": [
+          {"name": "source", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
+        ]
+      },
       "resources": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0}
     },
     {
       "node_id": "compute",
       "role": "compute",
       "node_type": "compute",
+      "network": {
+        "port_requirements": [
+          {"name": "compute", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
+        ]
+      },
       "resources": {"cpu_units": 10, "mem_mb": 2048, "disk_mb": 1024, "gpu_units": 1}
     },
     {
@@ -235,12 +252,41 @@ while True:
       "role": "sink",
       "node_type": "endpoint",
       "fixed_node_name": "terminal-b",
+      "network": {
+        "port_requirements": [
+          {"name": "sink", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
+        ]
+      },
       "resources": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0}
     }
   ],
   "edges": [
-    {"from": "source", "to": "compute", "data_mb": 20, "bandwidth_mbps": 20},
-    {"from": "compute", "to": "sink", "data_mb": 20, "bandwidth_mbps": 20}
+    {
+      "from": "source",
+      "to": "compute",
+      "data_mb": 20,
+      "bandwidth_mbps": 20,
+      "flow": {
+        "flow_id": "order-uuid-001:source->compute",
+        "protocol": "tcp",
+        "dst_port_ref": "compute.compute",
+        "traffic_class": "low_latency",
+        "priority": 90
+      }
+    },
+    {
+      "from": "compute",
+      "to": "sink",
+      "data_mb": 20,
+      "bandwidth_mbps": 20,
+      "flow": {
+        "flow_id": "order-uuid-001:compute->sink",
+        "protocol": "tcp",
+        "dst_port_ref": "sink.sink",
+        "traffic_class": "low_latency",
+        "priority": 90
+      }
+    }
   ]
 }
 ```
@@ -252,6 +298,8 @@ while True:
 - 源节点和目的节点可以是物理计算节点；在本 DAG 中它们仍然只是 endpoint 角色。
 - `compute` 是路由系统需要选择真实部署节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
+- `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
+- `edges[].flow` 用于识别业务流、优先级和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。
 
 ## 8. 支持的 DAG 形态
 
@@ -298,7 +346,6 @@ while True:
 
 ```http
 POST /api/routing-orders/{order_id}/result
-X-Service-Token: <service-token>
 Content-Type: application/json
 ```
 
@@ -327,7 +374,89 @@ Content-Type: application/json
 - 平台会根据业务模板决定哪些逻辑节点要物化为容器。
 - 如果 source/sink 是固定端点且平台需要部署对应容器，平台会自动补齐，不要求路由系统回写。
 - 如果没有任何节点需要部署，平台只保存结果并把工单标记完成，不创建容器实例。
+- 如果需要部署容器，平台会物化实例、动态分配端口，并返回 `network_bindings`。
+- 默认返回后工单进入 `routing_status=network_binding_ready`，等待路由系统下发流表/QoS。
 - 如果 GPU 冲突，平台返回 `409`，路由系统需要撤销本次资源扣减并重新路由或 requeue。
+- 回写接口是幂等的；如果 HTTP 超时，路由系统可以重新 POST 同一结果，平台会返回已有 `instance_id` 和 `network_bindings`。
+
+典型响应：
+
+```json
+{
+  "status": "ok",
+  "order_id": "order-uuid-001",
+  "routing_status": "network_binding_ready",
+  "instance_id": "instance-uuid-001",
+  "network_ready_required": true,
+  "network_ready": false,
+  "network_bindings": [
+    {
+      "flow_id": "order-uuid-001:source->compute",
+      "from": "source",
+      "to": "compute",
+      "src_host": "terminal-a",
+      "src_ip": "fd00::10",
+      "dst_host": "compute-node-a",
+      "dst_ip": "fd00::21",
+      "dst_port": 18842,
+      "dst_named_ports": {"compute": 18842},
+      "dst_port_ref": "compute.compute",
+      "protocol": "tcp",
+      "traffic_class": "low_latency",
+      "priority": 90,
+      "data_mb": 20,
+      "bandwidth_mbps": 20
+    }
+  ]
+}
+```
+
+路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口、`traffic_class`、`priority` 下发真实网络规则。
+
+## 9.1 网络就绪确认
+
+路由系统完成流表/QoS 下发后，调用：
+
+```http
+POST /api/routing-orders/{order_id}/network-ready
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "metadata": {
+    "flow_rule_count": 2,
+    "switch_batch_id": "batch-20260611-001"
+  },
+  "auto_start": true
+}
+```
+
+语义：
+
+- 平台把 `routing_status` 从 `network_binding_ready` 置为 `completed`。
+- 如果业务开始时间已到且结束时间未过，平台会自动启动实例。
+- 如果业务开始时间在未来，平台会注册定时启动/停止。
+- 如果业务结束时间已过，平台不会启动实例，会标记为过期/失败，避免过期工单误运行。
+- 如果只想联调接口、不启动容器，可以传 `"auto_start": false`。
+
+响应示例：
+
+```json
+{
+  "status": "ok",
+  "order_id": "order-uuid-001",
+  "routing_status": "completed",
+  "instance_id": "instance-uuid-001",
+  "network_ready": true,
+  "auto_start": true,
+  "start_action": "started"
+}
+```
+
+业务容器还有第二层兜底：`PEER_CONNECT_TIMEOUT_SEC` 和 `PEER_WAIT_TIMEOUT_SEC` 默认 600 秒。即使路由系统确认后流表传播有延迟，worker 也会持续重试一段时间，不会立即失败。
 
 ## 10. GPU 独占和资源释放
 
@@ -378,7 +507,8 @@ Content-Type: application/json
 - 路由系统能解析 `routing_input_dag`。
 - 路由系统能读取 `nodes`、`node_baselines` 并选择 compute 节点。
 - GPU 业务能回写 `gpu_device`。
-- 平台前端能看到 `routing_status=completed`。
+- 回写 `/result` 后能拿到 `network_bindings`，前端能看到 `routing_status=network_binding_ready`。
+- 路由系统下发网络规则后调用 `/network-ready`，前端能看到 `routing_status=completed`。
 - 工单详情能看到 compute 节点和 GPU 编号。
 - 平台启动任务后能完成业务指标评估。
 - 同一 GPU 不会被多个未释放任务同时占用。
@@ -392,7 +522,6 @@ Content-Type: application/json
 
 ```bash
 export PLATFORM_API_BASE=http://10.112.244.94:8181
-export PLATFORM_SERVICE_TOKEN=<平台提供的 X-Service-Token>
 ```
 
 ### 用例 1：能读取并领取待路由工单
@@ -403,11 +532,9 @@ export PLATFORM_SERVICE_TOKEN=<平台提供的 X-Service-Token>
 
 ```bash
 curl -sS \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   "$PLATFORM_API_BASE/api/routing-orders?status=pending&limit=3"
 
 curl -sS -X PATCH \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   "$PLATFORM_API_BASE/api/routing-orders/<order_id>/claim"
 ```
 
@@ -427,7 +554,6 @@ curl -sS -X PATCH \
 
 ```bash
 curl -sS -X POST \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   "$PLATFORM_API_BASE/api/routing-orders/<order_id>/result" \
   -d '{
@@ -443,11 +569,21 @@ curl -sS -X POST \
       "algorithm_version": "router-selftest"
     }
   }'
+
+curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  "$PLATFORM_API_BASE/api/routing-orders/<order_id>/network-ready" \
+  -d '{
+    "metadata": {"flow_rule_count": 2, "switch_batch_id": "router-selftest-001"},
+    "auto_start": true
+  }'
 ```
 
 预期结果：
 
-- 接口返回 `routing_status=completed`。
+- `/result` 返回 `routing_status=network_binding_ready`，并返回 `network_bindings`。
+- `network_bindings` 中能看到每条业务流的 `dst_ip`、`dst_port`、`traffic_class`、`priority`。
+- `/network-ready` 返回 `routing_status=completed`。
 - 如果该业务需要部署容器，响应中有非空 `instance_id`。
 - 平台工单详情能看到 compute 节点和 GPU 编号。
 - `runtime_config.routing_result.router_placements` 保留路由系统原始回写的 compute placement。
@@ -461,7 +597,6 @@ curl -sS -X POST \
 
 ```bash
 curl -sS -X PATCH \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   "$PLATFORM_API_BASE/api/routing-orders/<order_id>/requeue" \
   -d '{"reason": "GPU slots temporarily full"}'
@@ -481,7 +616,6 @@ curl -sS -X PATCH \
 
 ```bash
 curl -sS -X PATCH \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   "$PLATFORM_API_BASE/api/routing-orders/<order_id>/fail" \
   -d '{"reason": "no routable worker has required GPU"}'
@@ -501,11 +635,9 @@ curl -sS -X PATCH \
 
 ```bash
 curl -sS \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   "$PLATFORM_API_BASE/api/routing-resource-events?event_type=release&unacked=true&limit=10"
 
 curl -sS -X POST \
-  -H "X-Service-Token: $PLATFORM_SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   "$PLATFORM_API_BASE/api/routing-resource-events/ack" \
   -d '{"ids": [<event_id>]}'
@@ -544,6 +676,9 @@ curl -sS -X POST \
 3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_node_name，不要改。
 4. GPU 任务必须独占 GPU，同一 worker_host + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
+6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
+7. POST /result 后必须读取响应里的 network_bindings，并按其中 dst_ip/dst_port/traffic_class/priority 下发网络规则。
+8. 网络规则下发完成后必须调用 POST /api/routing-orders/{order_id}/network-ready。
 
 需要实现：
 1. 调 GET /api/routing-resource-events?event_type=release&unacked=true 读取释放事件，把 GPU 加回自己的资源表，再调 POST /api/routing-resource-events/ack。
@@ -551,9 +686,13 @@ curl -sS -X POST \
 3. 对每个工单调 PATCH /api/routing-orders/{order_id}/claim，409 表示别人抢到了，跳过。
 4. 解析 routing_input_dag，读取 nodes 和 node_baselines，选择 compute 的 worker_host/gpu_device。
 5. 成功时调 POST /api/routing-orders/{order_id}/result，placements 只需要回写 compute。
-6. 临时资源不足调 PATCH /api/routing-orders/{order_id}/requeue。
-7. 确定无法路由调 PATCH /api/routing-orders/{order_id}/fail。
-8. 日志至少记录 order_id、claim 结果、选中节点/GPU、回写结果、失败原因。
+6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
+7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。
+8. 根据 network_bindings 下发流表或业务优先级规则。
+9. 下发完成后调 POST /api/routing-orders/{order_id}/network-ready。
+10. 临时资源不足调 PATCH /api/routing-orders/{order_id}/requeue。
+11. 确定无法路由调 PATCH /api/routing-orders/{order_id}/fail。
+12. 日志至少记录 order_id、claim 结果、选中节点/GPU、network_bindings、network-ready 结果、失败原因。
 
 先跑通 3 个工单，再跑 30 个正式测评工单。
 ```
@@ -632,18 +771,21 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 目前平台侧已经具备对接条件：
 
 - `task_orders` 保存了 `routing_input_dag`。
-- 平台提供 pending 查询、claim、requeue、fail、result 回写接口。
+- 平台提供 pending 查询、claim、requeue、fail、result 回写、network-ready 确认接口，且这些演示接口不需要 token。
 - 平台接收路由结果后会校验 GPU 冲突。
+- 平台会在 result 回写后返回实际 `network_bindings`，供路由系统下发流表/QoS。
+- 平台会等待 `network-ready` 后才启动外部路由模式的任务。
 - 平台可支持 `source -> sink`、`source -> compute`、`source -> compute -> sink`。
 - 平台会在任务停止、删除、清理实例时写入 `routing_resource_events`。
 - 工单详情可展示路由结果、节点/GPU 分配和业务指标。
 
 建议联调节奏：
 
-1. 管理节点部署路由服务，确认数据库连接和平台 HTTP token。
+1. 管理节点部署路由服务，确认数据库连接和平台 HTTP 地址。
 2. 平台创建 3 个外部路由模式 benchmark 工单。
-3. 路由系统 claim 并回写结果。
-4. 前端确认工单变为已路由，能看到 compute/GPU。
-5. 平台启动任务并完成业务指标评估。
-6. 清理实例，确认路由系统能处理 release 事件。
-7. 扩展到 30 个工单的正式业务目标成功率测评。
+3. 路由系统 claim 并回写结果，拿到 `network_bindings`。
+4. 路由系统下发网络规则后调用 `network-ready`。
+5. 前端确认工单变为已路由，能看到 compute/GPU。
+6. 平台启动任务并完成业务指标评估。
+7. 清理实例，确认路由系统能处理 release 事件。
+8. 扩展到 30 个工单的正式业务目标成功率测评。

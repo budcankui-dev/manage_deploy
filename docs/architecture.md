@@ -114,6 +114,9 @@ source / compute / sink 使用同一个镜像，通过不同 `command` 启动。
 - `POST /api/conversations/{id}/confirm-intent`
 - `POST /api/routing-requests`
 - `POST /api/routing-results/{id}`
+- `GET /api/routing-orders?status=pending`
+- `POST /api/routing-orders/{id}/result`
+- `POST /api/routing-orders/{id}/network-ready`
 - `POST /api/conversations/{id}/submit`
 
 ## 数据表分组

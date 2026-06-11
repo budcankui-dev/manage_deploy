@@ -115,7 +115,8 @@ docker compose -f docker-compose.agents.yml up -d
 - `POST /api/conversations/{id}/messages` - 发送消息并解析意图
 - `POST /api/conversations/{id}/confirm-intent` - 确认意图草稿
 - `POST /api/routing-requests` - 请求外部路由
-- `POST /api/routing-results/{id}` - 外部路由回调（需 `X-Service-Token`）
+- `POST /api/routing-orders/{id}/result` - 外部路由回写 placements，返回 `network_bindings`（演示接口不加 token）
+- `POST /api/routing-orders/{id}/network-ready` - 外部路由下发流表/QoS 后确认网络就绪
 - `POST /api/conversations/{id}/submit` - 确认提交到部署系统
 
 ### 系统边界

@@ -5,7 +5,6 @@ from sqlalchemy import select
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
-from config import settings
 from enums import OrderStatus, RoutingStatus, UserRole
 from models import BusinessObjectiveEvaluation, RoutingResourceEvent, TaskInstance, TaskInstanceNode, TaskOrder, User
 
@@ -51,6 +50,7 @@ async def _seed_business_fixture(client):
                     "name": "source",
                     "image": "busybox:latest",
                     "command": "sleep 3600",
+                    "port_defs": [{"name": "source", "label": "source HTTP", "default": 18801, "auto": True, "range": [18800, 18899]}],
                     "node_id": node_ids[0],
                 },
                 {
@@ -58,6 +58,7 @@ async def _seed_business_fixture(client):
                     "name": "compute",
                     "image": "busybox:latest",
                     "command": "sleep 3600",
+                    "port_defs": [{"name": "compute", "label": "compute HTTP", "default": 18802, "auto": True, "range": [18800, 18899]}],
                     "node_id": node_ids[1],
                 },
                 {
@@ -65,6 +66,7 @@ async def _seed_business_fixture(client):
                     "name": "sink",
                     "image": "busybox:latest",
                     "command": "sleep 3600",
+                    "port_defs": [{"name": "sink", "label": "sink HTTP", "default": 18803, "auto": True, "range": [18800, 18899]}],
                     "node_id": node_ids[2],
                 },
             ],
@@ -565,10 +567,14 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["nodes"][2]["fixed_node_name"] == "benchmark-video-sink"
     assert dag["nodes"][2]["fixed_node_role"] == "destination"
     assert all("exec" not in node for node in dag["nodes"])
-    assert dag["edges"] == [
-        {"from": "source", "to": "compute", "data_mb": 2, "bandwidth_mbps": 20},
-        {"from": "compute", "to": "sink", "data_mb": 2, "bandwidth_mbps": 20},
+    edge_pairs = [(edge["from"], edge["to"], edge["data_mb"], edge["bandwidth_mbps"]) for edge in dag["edges"]]
+    assert edge_pairs == [
+        ("source", "compute", 2, 20),
+        ("compute", "sink", 2, 20),
     ]
+    assert dag["edges"][0]["flow"]["traffic_class"] == "low_latency"
+    assert dag["edges"][0]["flow"]["priority"] == 90
+    assert dag["edges"][0]["flow"]["dst_port_ref"] == "compute.compute"
 
 
 @pytest.mark.asyncio
@@ -615,7 +621,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one()
-    assert order.routing_status == RoutingStatus.COMPLETED.value
+    assert order.routing_status == RoutingStatus.NETWORK_BINDING_READY.value
     routing_result = order.runtime_config["routing_result"]
     assert routing_result["selected_strategy"] == "GPU_EXCLUSIVE_LOW_RENT"
     assert routing_result["external_routing_id"] == "route-meta-001"
@@ -624,7 +630,20 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     assert routing_result["metadata"]["decision_trace_id"] == "trace-meta-001"
 
     duplicate = await client.post(f"/api/orders/{order_id}/routing-result", json=payload)
-    assert duplicate.status_code == 409
+    assert duplicate.status_code == 200
+    assert duplicate.json()["idempotent"] is True
+
+    ready_response = await client.post(
+        f"/api/routing-orders/{order_id}/network-ready",
+        json={"metadata": {"flow_rules": "installed"}, "auto_start": False},
+    )
+    assert ready_response.status_code == 200, ready_response.text
+    assert ready_response.json()["routing_status"] == "completed"
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    assert order.routing_status == RoutingStatus.COMPLETED.value
+    assert order.runtime_config["routing_result"]["network_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -860,10 +879,9 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
 
 
 @pytest.mark.asyncio
-async def test_service_token_routing_order_http_flow(client, db_session):
+async def test_routing_order_http_flow_without_service_token(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-order-http-user")
-    service_headers = {"X-Service-Token": settings.service_api_token}
 
     create_response = await client.post(
         "/api/orders/batch-benchmark",
@@ -879,7 +897,6 @@ async def test_service_token_routing_order_http_flow(client, db_session):
 
     list_response = await client.get(
         "/api/routing-orders",
-        headers=service_headers,
         params={
             "status": "pending",
             "benchmark_run_id": "routing-http-run",
@@ -891,13 +908,12 @@ async def test_service_token_routing_order_http_flow(client, db_session):
     assert [item["order_id"] for item in pending_orders] == [order_id]
     assert pending_orders[0]["routing_input_dag"]["job_id"] == order_id
 
-    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
     assert claim_response.status_code == 200
     assert claim_response.json()["routing_status"] == "computing"
 
     result_response = await client.post(
         f"/api/routing-orders/{order_id}/result",
-        headers=service_headers,
         json={
             "strategy": "resource_guarantee",
             "placements": [
@@ -912,19 +928,41 @@ async def test_service_token_routing_order_http_flow(client, db_session):
         },
     )
     assert result_response.status_code == 200, result_response.text
-    assert result_response.json()["routing_status"] == "completed"
+    result_body = result_response.json()
+    assert result_body["routing_status"] == "network_binding_ready"
+    assert result_body["network_ready_required"] is True
+    assert result_body["network_ready"] is False
+    assert "network_bindings" in result_body
+    assert len(result_body["network_bindings"]) == 2
+    compute_binding = next(item for item in result_body["network_bindings"] if item["to"] == "compute")
+    sink_binding = next(item for item in result_body["network_bindings"] if item["to"] == "sink")
+    assert compute_binding["dst_host"] == "worker-b"
+    assert isinstance(compute_binding["dst_port"], int)
+    assert sink_binding["dst_host"] == "worker-c"
+
+    start_blocked = await client.post(f"/api/instances/{result_body['instance_id']}/start")
+    assert start_blocked.status_code == 409
+    assert "network-ready" in start_blocked.json()["detail"]
+
+    ready_response = await client.post(
+        f"/api/routing-orders/{order_id}/network-ready",
+        json={"metadata": {"flow_rules": "installed"}, "auto_start": False},
+    )
+    assert ready_response.status_code == 200, ready_response.text
+    assert ready_response.json()["routing_status"] == "completed"
 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one()
     assert order.materialized_instance_id
+    assert order.routing_status == RoutingStatus.COMPLETED.value
     assert order.runtime_config["routing_result"]["metadata"]["algorithm_version"] == "router-http-test"
+    assert order.runtime_config["routing_result"]["network_ready"] is True
 
 
 @pytest.mark.asyncio
-async def test_service_token_can_requeue_and_fail_routing_order(client, db_session):
+async def test_router_can_requeue_and_fail_routing_order_without_service_token(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-status-user")
-    service_headers = {"X-Service-Token": settings.service_api_token}
 
     create_response = await client.post(
         "/api/orders/batch-benchmark",
@@ -938,24 +976,22 @@ async def test_service_token_can_requeue_and_fail_routing_order(client, db_sessi
     assert create_response.status_code == 200
     order_id = create_response.json()["order_ids"][0]
 
-    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
     assert claim_response.status_code == 200
     assert claim_response.json()["routing_status"] == "computing"
 
     requeue_response = await client.patch(
         f"/api/routing-orders/{order_id}/requeue",
-        headers=service_headers,
         json={"reason": "GPU slots temporarily full"},
     )
     assert requeue_response.status_code == 200
     assert requeue_response.json()["routing_status"] == "pending"
 
-    claim_again = await client.patch(f"/api/routing-orders/{order_id}/claim", headers=service_headers)
+    claim_again = await client.patch(f"/api/routing-orders/{order_id}/claim")
     assert claim_again.status_code == 200
 
     fail_response = await client.patch(
         f"/api/routing-orders/{order_id}/fail",
-        headers=service_headers,
         json={"reason": "No feasible placement"},
     )
     assert fail_response.status_code == 200
@@ -970,7 +1006,6 @@ async def test_service_token_can_requeue_and_fail_routing_order(client, db_sessi
 async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-conflict-user")
-    service_headers = {"X-Service-Token": settings.service_api_token}
 
     create_response = await client.post(
         "/api/orders/batch-benchmark",
@@ -992,10 +1027,11 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
             {"node_id": "sink", "worker_host": "worker-c"},
         ],
     }
-    first = await client.post(f"/api/routing-orders/{first_id}/result", headers=service_headers, json=payload)
+    first = await client.post(f"/api/routing-orders/{first_id}/result", json=payload)
     assert first.status_code == 200, first.text
+    assert first.json()["routing_status"] == "network_binding_ready"
 
-    second = await client.post(f"/api/routing-orders/{second_id}/result", headers=service_headers, json=payload)
+    second = await client.post(f"/api/routing-orders/{second_id}/result", json=payload)
     assert second.status_code == 409
     assert "GPU slot conflict" in second.json()["detail"]
 
@@ -1004,7 +1040,6 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
 async def test_delete_order_emits_and_acks_routing_resource_release_event(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-release-user")
-    service_headers = {"X-Service-Token": settings.service_api_token}
 
     create_response = await client.post(
         "/api/orders/batch-benchmark",
@@ -1020,7 +1055,6 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
 
     result_response = await client.post(
         f"/api/routing-orders/{order_id}/result",
-        headers=service_headers,
         json={
             "strategy": "resource_guarantee",
             "placements": [
@@ -1039,7 +1073,6 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
 
     events_response = await client.get(
         "/api/routing-resource-events",
-        headers=service_headers,
         params={"benchmark_run_id": "routing-release-run"},
     )
     assert events_response.status_code == 200
@@ -1054,7 +1087,6 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
 
     ack_response = await client.post(
         "/api/routing-resource-events/ack",
-        headers=service_headers,
         json={"ids": [events[0]["id"]]},
     )
     assert ack_response.status_code == 200

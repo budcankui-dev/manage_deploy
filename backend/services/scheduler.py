@@ -49,10 +49,25 @@ class TaskScheduler:
         async def _run_start():
             from database import async_session_maker
             from services.dag_executor import DAGExecutor
+            from services.routing_network import instance_waiting_for_network_ready
 
             async with async_session_maker() as db:
+                waiting_order = await instance_waiting_for_network_ready(db, instance_id)
+                if waiting_order:
+                    logger.info(
+                        "Skip scheduled start for %s: order %s waits for network-ready",
+                        instance_id,
+                        waiting_order.id,
+                    )
+                    return
                 executor = DAGExecutor(db)
-                await executor.execute_dag_start(instance_id)
+                success, error = await executor.execute_dag_start(instance_id)
+                if not success:
+                    logger.warning(
+                        "Scheduled start failed for %s: %s",
+                        instance_id,
+                        error or "unknown error",
+                    )
 
         scheduler.add_job(
             _run_start,
