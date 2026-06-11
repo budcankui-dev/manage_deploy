@@ -38,7 +38,7 @@ from services.intent_batch_eval import (
     submit_llm_batch_evaluation,
     score_parsed_result,
 )
-from services.intent_parser import parse_intent
+from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -319,8 +319,11 @@ async def parse_one(
     utterance = payload.get("utterance", "")
     context = payload.get("context")
     expected = payload.get("expected")
-    result = parse_intent(utterance, context, valid_nodes=VALID_NODES)
+    result, trace = await run_intent_workflow(utterance, context, valid_nodes=VALID_NODES)
     response = _parse_result_payload(result)
+    response["trace"] = trace
+    response["engine"] = trace.get("engine")
+    response["model"] = trace.get("model")
     response["routing_dag"] = _routing_dag_preview(result)
     if isinstance(expected, dict):
         response["expected_result"] = expected

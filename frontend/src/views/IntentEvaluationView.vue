@@ -219,7 +219,7 @@
     <el-card class="panel-card">
       <template #header>
         <div class="card-header">
-          <span>单条解析检测</span>
+          <span>单条意图解析检测</span>
           <el-tag v-if="parserResult" size="small" :type="parseStatusType(parserResult.parse_status)">
             {{ parseStatusLabel(parserResult.parse_status) }}
           </el-tag>
@@ -249,10 +249,18 @@
         />
         <div class="parser-actions">
           <el-button type="primary" :loading="parserLoading" @click="testParse">解析这一条</el-button>
+          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用规则兜底。</small>
         </div>
       </div>
       <div v-if="parserResult" class="parser-result">
         <el-descriptions :column="2" size="small" border>
+          <el-descriptions-item label="解析流程">
+            {{ parserEngineLabel(parserResult.engine) }}
+            <small class="raw-value">{{ parserResult.engine || '-' }}</small>
+          </el-descriptions-item>
+          <el-descriptions-item label="大模型">
+            {{ parserResult.model || '未使用大模型或已规则兜底' }}
+          </el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('task_type')">
             {{ taskTypeLabel(parserResult.task_type) }}
             <small class="raw-value">{{ parserResult.task_type || '-' }}</small>
@@ -351,6 +359,10 @@
           <section v-if="parserResult.routing_dag">
             <h3>路由 DAG JSON</h3>
             <pre class="details-json">{{ JSON.stringify(parserResult.routing_dag || {}, null, 2) }}</pre>
+          </section>
+          <section v-if="parserResult.trace">
+            <h3>解析流程原始信息</h3>
+            <pre class="details-json">{{ JSON.stringify(parserResult.trace || {}, null, 2) }}</pre>
           </section>
         </div>
       </div>
@@ -679,6 +691,13 @@ function caseTypeLabel(value) {
 function parseStatusLabel(value) {
   if (!value) return '-'
   return PARSE_STATUS_LABELS[value] || value
+}
+
+function parserEngineLabel(value) {
+  return {
+    llm_qwen: '大模型/智能体解析',
+    rule_parser: '规则兜底解析',
+  }[value] || value || '-'
 }
 
 function fieldLabel(value, includeRaw = false) {
