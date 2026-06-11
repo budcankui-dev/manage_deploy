@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +21,7 @@ from config import settings
 from enums import DeploymentMode, OrderStatus
 from models import BusinessTemplateCatalog, Node as NodeModel, RoutingRequest, TaskOrder
 from schemas import TaskInstanceCreate, TaskInstanceNodeOverride
+from services.time_utils import business_now
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ async def materialize_after_routing(
         logger.exception("materialize_after_routing: build overrides failed")
         return None
 
-    now = datetime.utcnow()
+    now = business_now()
     hours = max(1, int(settings.default_scheduled_duration_hours or 2))
     end_time = order.scheduled_end_time or order.business_end_time or (now + timedelta(hours=hours))
     start_time = order.scheduled_start_time or order.business_start_time or now

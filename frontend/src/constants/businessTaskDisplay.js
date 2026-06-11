@@ -89,12 +89,19 @@ export function taskTypeSummary(taskType) {
   return TASK_TYPE_SUMMARIES[taskType] || '按业务目标指标验收任务是否达标。'
 }
 
+export function formatMetricValue(value, digits = 2) {
+  if (value === null || value === undefined || value === '') return '-'
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return String(value)
+  return numeric.toFixed(digits).replace(/\.?0+$/, '')
+}
+
 export function formatObjectiveSentence(objective) {
   if (!objective?.metric_key) return '-'
   const metric = METRIC_LABELS[objective.metric_key] || objective.metric_key
   const op = OPERATOR_LABELS[objective.operator] || objective.operator || '不超过'
   const unit = objective.unit ? ` ${objective.unit}` : ''
-  const target = objective.target_value ?? '-'
+  const target = formatMetricValue(objective.target_value)
   return `${metric} ${op} ${target}${unit}`
 }
 
@@ -232,8 +239,8 @@ export function buildMatmulVerdict(evaluation) {
     }
   }
   const unit = evaluation.unit || 'GFLOPS'
-  const actual = Number(evaluation.actual_value).toFixed(2)
-  const target = evaluation.target_value
+  const actual = formatMetricValue(evaluation.actual_value)
+  const target = formatMetricValue(evaluation.target_value)
   if (evaluation.business_success === null || evaluation.business_success === undefined) {
     return {
       title: '计算已完成，待评估',
@@ -319,16 +326,17 @@ export function buildVideoVerdict(evaluation) {
   }
   const actual = Number(evaluation.actual_value).toFixed(2)
   const unit = evaluation.unit || 'ms'
+  const target = formatMetricValue(evaluation.target_value)
   if (evaluation.business_success) {
     return {
       title: '视频推理已完成，时延达标',
-      subtitle: `实际 P90 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: evaluation.target_value, unit })}。`,
+      subtitle: `实际 P90 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: target, unit })}。`,
       statusClass: 'success',
     }
   }
   return {
     title: '视频推理已完成，时延未达标',
-    subtitle: evaluation.failure_reason || `实际 P90 ${actual} ${unit}，未达到目标 ${evaluation.target_value} ${unit}。`,
+    subtitle: evaluation.failure_reason || `实际 P90 ${actual} ${unit}，未达到目标 ${target} ${unit}。`,
     statusClass: 'danger',
   }
 }

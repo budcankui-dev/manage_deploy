@@ -161,7 +161,11 @@ def _extract_relative_duration_minutes(utterance: str | None) -> int | None:
 
 
 def _has_immediate_start(utterance: str | None) -> bool:
-    return bool(utterance and re.search(r"现在开始|立即|马上", utterance))
+    if not utterance:
+        return False
+    if re.search(r"(?:不要|别|不|暂不|先不).{0,8}(?:现在开始|立即|马上)", utterance):
+        return False
+    return bool(re.search(r"现在开始|立即|马上", utterance))
 
 
 async def call_qwen(messages: list[dict[str, str]]) -> dict[str, Any]:
@@ -468,7 +472,11 @@ def _raw_to_parse_result(
     raw_end = raw.get("end_time")
     duration = raw.get("duration_hours")
 
-    if raw_start == "now":
+    immediate_start = _has_immediate_start(utterance)
+
+    if immediate_start:
+        start_time = now
+    elif raw_start == "now":
         start_time = now
     elif raw_start:
         try:

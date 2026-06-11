@@ -22,6 +22,9 @@ class FakeDb:
     def add(self, obj):
         self.added.append(obj)
 
+    async def execute(self, *_args, **_kwargs):
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
     async def commit(self):
         self.commit_calls += 1
 

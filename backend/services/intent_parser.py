@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
 
@@ -94,7 +95,7 @@ def _extract_source_destination(text: str) -> tuple[str | None, str | None]:
 
 def _extract_time(text: str) -> tuple[datetime | None, datetime | None]:
     """从文本中提取业务开始和结束时间。"""
-    now = datetime.utcnow()
+    now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     start_time = None
     end_time = None
 

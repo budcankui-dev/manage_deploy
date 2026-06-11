@@ -64,6 +64,7 @@ from services.routing_network import (
     mark_network_binding_ready,
 )
 from services.scheduler import TaskScheduler
+from services.time_utils import business_now
 
 from .instances import _create_instance_from_template
 
@@ -471,6 +472,7 @@ async def get_order(
         order,
         instance_exists=instance_exists,
         deployment_status=deployment_status,
+        evaluation=evaluation,
     )
     detail = TaskOrderDetailResponse.model_validate(base.model_dump())
     detail.business_task = business_task if isinstance(business_task, dict) else None
@@ -1233,7 +1235,7 @@ async def receive_routing_result(
         }
 
     # Create instance
-    start_time = order.business_start_time or order.scheduled_start_time or datetime.utcnow()
+    start_time = order.business_start_time or order.scheduled_start_time or business_now()
     end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
         template_id=order.template_id,
@@ -1311,7 +1313,7 @@ async def create_batch_benchmark(
     data_profile = _merged_benchmark_profile(payload.task_type, payload.data_profile)
     business_objective = dict(benchmark_config["business_objective"])
     order_ids = []
-    business_start_time = datetime.utcnow()
+    business_start_time = business_now()
     business_end_time = business_start_time + timedelta(hours=1)
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     for i in range(payload.count):
@@ -1760,7 +1762,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     flag_modified(order, "runtime_config")
     order.routing_status = RoutingStatus.COMPLETED.value
 
-    start_time = order.business_start_time or order.scheduled_start_time or datetime.utcnow()
+    start_time = order.business_start_time or order.scheduled_start_time or business_now()
     end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
         template_id=order.template_id,

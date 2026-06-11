@@ -17,6 +17,7 @@ from services.dag_executor import DAGExecutor
 from services.order_materialize import materialize_after_routing
 from services.routing_network import mark_network_ready, network_ready_required
 from services.scheduler import TaskScheduler
+from services.time_utils import business_now
 
 router = APIRouter(prefix="/api", tags=["routing"])
 
@@ -257,7 +258,7 @@ async def confirm_routing_order_network_ready(
             await db.execute(select(TaskInstance).where(TaskInstance.id == order.materialized_instance_id))
         ).scalar_one_or_none()
 
-    now = datetime.utcnow()
+    now = business_now()
     start_time = order.business_start_time or order.scheduled_start_time
     end_time = order.business_end_time or order.scheduled_end_time
     start_action = "none"

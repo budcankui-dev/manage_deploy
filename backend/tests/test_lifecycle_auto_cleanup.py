@@ -227,6 +227,45 @@ async def test_restore_pending_jobs_registers_future_end_jobs(db_session, seeded
 
 
 @pytest.mark.asyncio
+async def test_schedule_task_start_treats_naive_time_as_configured_timezone():
+    run_time = datetime.now() + timedelta(minutes=5)
+    instance_id = "tz-naive-demo"
+    job_id = f"start_{instance_id}"
+    if ap_scheduler.get_job(job_id):
+        ap_scheduler.remove_job(job_id)
+
+    task_scheduler = TaskScheduler()
+    await task_scheduler.schedule_task_start(instance_id, run_time)
+
+    job = ap_scheduler.get_job(job_id)
+    assert job is not None
+    assert str(job.trigger.run_date.tzinfo) == "Asia/Shanghai"
+    assert job.trigger.run_date.hour == run_time.hour
+    assert job.trigger.run_date.minute == run_time.minute
+
+    ap_scheduler.remove_job(job_id)
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_start_reschedules_due_time_to_near_future():
+    run_time = datetime.now() - timedelta(seconds=2)
+    instance_id = "tz-due-demo"
+    job_id = f"start_{instance_id}"
+    if ap_scheduler.get_job(job_id):
+        ap_scheduler.remove_job(job_id)
+
+    task_scheduler = TaskScheduler()
+    await task_scheduler.schedule_task_start(instance_id, run_time)
+
+    job = ap_scheduler.get_job(job_id)
+    assert job is not None
+    assert str(job.trigger.run_date.tzinfo) == "Asia/Shanghai"
+    assert job.trigger.run_date.replace(tzinfo=None) > run_time
+
+    ap_scheduler.remove_job(job_id)
+
+
+@pytest.mark.asyncio
 async def test_restore_pending_jobs_registers_overdue_running_end_jobs(db_session, seeded_instance):
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -33,6 +33,7 @@ from schemas import (
     TaskInstanceNodeOverride,
     TaskResultObjectResponse,
 )
+from services.time_utils import business_now
 from services.business_evaluator import evaluate_business_objective
 from services.business_task_query import (
     BusinessTaskListFilters,
@@ -117,7 +118,7 @@ async def build_instance_create_from_business_task(
 
     # 业务任务一律 SCHEDULED + 强制 end_time（未传则取 now + default_scheduled_duration_hours）。
     # scheduled_start_time = now() 既保留"立即跑"的体验，又借用现成的 schedule_task_start。
-    now = datetime.utcnow()
+    now = business_now()
     hours = max(1, int(settings.default_scheduled_duration_hours or 2))
     end_time = payload.scheduled_end_time or (now + timedelta(hours=hours))
 

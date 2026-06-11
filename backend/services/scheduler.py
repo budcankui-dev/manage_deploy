@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from config import settings
+from services.time_utils import business_now, business_timezone, next_business_time
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +72,13 @@ class TaskScheduler:
 
         scheduler.add_job(
             _run_start,
-            trigger=DateTrigger(run_date=run_time),
+            trigger=DateTrigger(
+                run_date=next_business_time(run_time),
+                timezone=business_timezone(),
+            ),
             id=job_id,
             replace_existing=True,
+            misfire_grace_time=300,
         )
         logger.info(f"Scheduled task start for {instance_id} at {run_time}")
         return True
@@ -128,9 +133,13 @@ class TaskScheduler:
 
         scheduler.add_job(
             _run_stop,
-            trigger=DateTrigger(run_date=end_time),
+            trigger=DateTrigger(
+                run_date=next_business_time(end_time),
+                timezone=business_timezone(),
+            ),
             id=job_id,
             replace_existing=True,
+            misfire_grace_time=300,
         )
         logger.info(f"Scheduled task end for {instance_id} at {end_time}")
         return True
@@ -164,7 +173,7 @@ async def restore_pending_jobs(session_maker=None) -> None:
     from models import TaskInstance
     from sqlalchemy import select
 
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = business_now()
     scheduler_inst = TaskScheduler()
     restored_starts = 0
     restored_ends = 0
@@ -206,7 +215,7 @@ async def restore_pending_jobs(session_maker=None) -> None:
                     delay_seconds = 1 + restored_overdue_ends * 3
                     await scheduler_inst.schedule_task_end(
                         inst.id,
-                        datetime.now(UTC) + timedelta(seconds=delay_seconds),
+                        business_now() + timedelta(seconds=delay_seconds),
                     )
                     restored_overdue_ends += 1
             except Exception:

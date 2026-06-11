@@ -143,7 +143,7 @@
           </el-table-column>
           <el-table-column label="业务指标" min-width="140">
             <template #default="{ row }">
-              {{ row.actual_value ?? '-' }} / {{ row.target_value ?? '-' }} {{ row.unit || '' }}
+              {{ formatMetricValue(row.actual_value) }} / {{ formatMetricValue(row.target_value) }} {{ row.unit || '' }}
             </template>
           </el-table-column>
           <el-table-column label="达标" width="90">
@@ -476,7 +476,9 @@
               </div>
               <el-descriptions :column="1" border size="small">
                 <el-descriptions-item label="指标">{{ detailEvaluation.metric_key || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="目标 / 实际">{{ detailEvaluation.target_value }} / {{ detailEvaluation.actual_value }} {{ detailEvaluation.unit }}</el-descriptions-item>
+                <el-descriptions-item label="目标 / 实际">
+                  {{ formatMetricValue(detailEvaluation.target_value) }} / {{ formatMetricValue(detailEvaluation.actual_value) }} {{ detailEvaluation.unit }}
+                </el-descriptions-item>
               </el-descriptions>
             </template>
             <el-empty v-else description="任务尚未跑完或未上报业务指标" :image-size="60" />
@@ -605,7 +607,7 @@ import {
   buildMatmulParamConsistency, buildMatmulVerdict,
   buildVideoInputRows, buildVideoOutputRows, buildVideoVerdict,
   videoDetectionBoxStyle, videoDetections, videoPreviewEvidenceRows, videoPreviewNeedsOverlay, videoPreviewDataUrl,
-  MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS,
+  MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS, formatMetricValue,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
@@ -1009,9 +1011,10 @@ async function openOrderDetail(order) {
   try {
     const { data } = await ordersApi.get(id)
     selectedOrderDetail.value = data
-    if (data.instance?.id) {
+    const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
+    if (evidenceInstanceId) {
       try {
-        const { data: objs } = await businessApi.results(data.instance.id)
+        const { data: objs } = await businessApi.results(evidenceInstanceId)
         orderResultObjects.value = objs || []
       } catch { /* ignore */ }
     }

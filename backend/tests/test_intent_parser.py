@@ -46,8 +46,8 @@ def test_llm_parse_result_normalizes_relative_duration_from_utterance():
         "task_type": "high_throughput_matmul",
         "source_name": "compute-1",
         "destination_name": "compute-2",
-        "start_time": "now",
-        "end_time": "2026-06-03T12:20:00",
+        "start_time": "2099-06-03T21:30:00",
+        "end_time": "2099-06-03T23:30:00",
         "matrix_size": 512,
         "batch_count": 20,
         "routing_strategy": "resource_guarantee",
@@ -58,3 +58,21 @@ def test_llm_parse_result_normalizes_relative_duration_from_utterance():
     assert result.business_start_time is not None
     assert result.business_end_time is not None
     assert (result.business_end_time - result.business_start_time).total_seconds() == 2 * 60 * 60
+
+
+def test_llm_parse_result_keeps_explicit_future_time_when_immediate_is_negated():
+    raw = {
+        "task_type": "high_throughput_matmul",
+        "source_name": "compute-1",
+        "destination_name": "compute-2",
+        "start_time": "2099-06-03T21:30:00",
+        "end_time": "2099-06-03T23:30:00",
+        "matrix_size": 512,
+        "batch_count": 20,
+        "routing_strategy": "resource_guarantee",
+    }
+
+    result = _raw_to_parse_result(raw, None, utterance="不要立即开始，改成明天9点跑2小时")
+
+    assert result.business_start_time.isoformat() == "2099-06-03T21:30:00"
+    assert result.business_end_time.isoformat() == "2099-06-03T23:30:00"
