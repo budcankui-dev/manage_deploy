@@ -14,11 +14,21 @@ from typing import Any, Optional
 from api.auth import get_current_user
 from config import settings
 from database import get_db
-from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
+from enums import (
+    ConversationStatus,
+    DeploymentMode,
+    OrderStatus,
+    RoutingRequestStatus,
+    RoutingStatus,
+    TaskStatus,
+    UserRole,
+)
 from models import (
     BusinessObjectiveEvaluation,
     BusinessTemplateCatalog,
+    Conversation,
     Node as NodeModel,
+    RoutingRequest,
     TaskInstance,
     TaskInstanceNode,
     TaskOrder,
@@ -864,6 +874,108 @@ def _compute_gpu_slots_from_placements(
     return slots
 
 
+def _routing_request_placement_map(
+    placements: list[RoutingPlacement],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for placement in placements:
+        role = str(placement.node_id or "").lower()
+        if not role:
+            continue
+        value: dict[str, Any] = {
+            "worker_host": placement.worker_host,
+        }
+        if placement.node_type:
+            value["node_type"] = placement.node_type
+        if placement.gpu_device is not None:
+            value["gpu_device"] = placement.gpu_device
+            value["gpu_indices"] = [placement.gpu_device]
+        result[role] = value
+    return result
+
+
+def _routing_placements_from_runtime(value: Any) -> list[RoutingPlacement]:
+    if not isinstance(value, list):
+        return []
+    placements: list[RoutingPlacement] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        node_id = item.get("node_id") or item.get("role")
+        worker_host = item.get("worker_host") or item.get("hostname") or item.get("node_name")
+        if not node_id or not worker_host:
+            continue
+        placements.append(
+            RoutingPlacement(
+                node_id=str(node_id),
+                worker_host=str(worker_host),
+                gpu_device=str(item["gpu_device"]) if item.get("gpu_device") is not None else None,
+                node_type=item.get("node_type"),
+                deployable=item.get("deployable"),
+            )
+        )
+    return placements
+
+
+async def _sync_conversation_after_order_routing(
+    db: AsyncSession,
+    order: TaskOrder,
+    payload: RoutingResultPayload,
+    placements: list[RoutingPlacement],
+    network_bindings: list[dict[str, Any]],
+    require_network_ready: bool,
+) -> None:
+    """Keep the user conversation view aligned with order-id based routing."""
+    routing: RoutingRequest | None = None
+    if order.routing_request_id:
+        routing = (
+            await db.execute(select(RoutingRequest).where(RoutingRequest.id == order.routing_request_id))
+        ).scalar_one_or_none()
+    if routing is None and order.conversation_id:
+        routing = (
+            await db.execute(
+                select(RoutingRequest)
+                .where(RoutingRequest.order_id == order.id)
+                .order_by(RoutingRequest.created_at.desc())
+            )
+        ).scalars().first()
+
+    placement_map = _routing_request_placement_map(placements)
+    if routing is not None:
+        routing.status = RoutingRequestStatus.COMPLETED
+        routing.strategy = payload.strategy or routing.strategy
+        if payload.selected_strategy:
+            routing.selected_strategy = payload.selected_strategy
+        elif payload.strategy:
+            routing.selected_strategy = payload.strategy
+        routing.placements = placement_map
+        routing.estimated_metric = payload.estimated_metric or routing.estimated_metric
+        routing.external_routing_id = payload.external_routing_id or routing.external_routing_id
+        result_payload = dict(payload.result_payload or {})
+        if payload.metadata:
+            result_payload["metadata"] = payload.metadata
+        result_payload["network_bindings"] = network_bindings
+        result_payload["network_ready_required"] = require_network_ready
+        routing.result_payload = result_payload
+        routing.error_message = None
+        routing.completed_at = datetime.utcnow()
+
+    conversation: Conversation | None = None
+    if order.conversation_id:
+        conversation = (
+            await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
+        ).scalar_one_or_none()
+    elif routing is not None:
+        conversation = (
+            await db.execute(select(Conversation).where(Conversation.id == routing.conversation_id))
+        ).scalar_one_or_none()
+
+    if conversation is not None:
+        conversation.materialized_order_id = order.id
+        conversation.status = ConversationStatus.SUBMITTED
+        conversation.updated_at = datetime.utcnow()
+
+
 def _order_compute_gpu_slots(order: TaskOrder) -> set[tuple[str, str]]:
     config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
     routing_result = config.get("routing_result")
@@ -964,6 +1076,16 @@ async def receive_routing_result(
     if order.materialized_instance_id:
         rc = order.runtime_config or {}
         routing_result = rc.get("routing_result") if isinstance(rc.get("routing_result"), dict) else {}
+        existing_placements = _routing_placements_from_runtime(routing_result.get("placements"))
+        await _sync_conversation_after_order_routing(
+            db,
+            order,
+            payload,
+            existing_placements or payload.placements,
+            routing_result.get("network_bindings") or [],
+            bool(routing_result.get("network_ready_required", False)),
+        )
+        await db.commit()
         return {
             "status": "ok",
             "order_id": order_id,
@@ -1090,6 +1212,14 @@ async def receive_routing_result(
         }
         order.runtime_config = rc
         flag_modified(order, "runtime_config")
+        await _sync_conversation_after_order_routing(
+            db,
+            order,
+            payload,
+            effective_placements,
+            [],
+            False,
+        )
         await db.commit()
         return {
             "status": "ok",
@@ -1134,6 +1264,14 @@ async def receive_routing_result(
         RoutingStatus.NETWORK_BINDING_READY.value
         if require_network_ready
         else RoutingStatus.COMPLETED.value
+    )
+    await _sync_conversation_after_order_routing(
+        db,
+        order,
+        payload,
+        effective_placements,
+        network_bindings,
+        require_network_ready,
     )
 
     await db.commit()

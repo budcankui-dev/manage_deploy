@@ -109,6 +109,72 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
 
 
 @pytest.mark.asyncio
+async def test_video_conversation_demo_route_materializes_same_order(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session)
+    _node_ids, _template_id = await _seed_business_fixture(client)
+
+    create_response = await client.post("/api/conversations", json={"title": "视频推理任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    body = message_response.json()
+    assert body["latest_draft"]["task_type"] == "low_latency_video_pipeline"
+    assert body["latest_draft"]["parse_status"] == "valid"
+    assert body["latest_draft"]["data_profile"]["resolution"] == "720p"
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["materialized_order_id"] == conversation_id
+    assert confirm_response.json()["status"] == "awaiting_routing"
+
+    route_response = await client.post(
+        f"/api/conversations/{conversation_id}/demo-route",
+        headers=headers,
+    )
+    assert route_response.status_code == 200
+    route_body = route_response.json()
+    assert route_body["status"] == "submitted"
+    assert route_body["materialized_order_id"] == conversation_id
+    assert route_body["latest_routing_request"]["status"] == "completed"
+    assert route_body["latest_routing_request"]["placements"]["compute"]["worker_host"] == "worker-b"
+    assert route_body["latest_routing_request"]["placements"]["compute"]["gpu_device"] == "0"
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    assert order.status == "materialized"
+    assert order.routing_status == "completed"
+    assert order.materialized_instance_id
+    assert order.runtime_config["business_task"]["task_type"] == "low_latency_video_pipeline"
+
+    route_placements = order.runtime_config["routing_result"]["placements"]
+    compute_route = next(item for item in route_placements if item["node_id"] == "compute")
+    assert compute_route["worker_host"] == "worker-b"
+    assert compute_route["gpu_device"] == "0"
+
+    inst_nodes = (
+        await db_session.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == order.materialized_instance_id)
+        )
+    ).scalars().all()
+    by_role = {node.env["TASK_ROLE"]: node for node in inst_nodes}
+    assert by_role["compute"].env["TASK_TYPE"] == "low_latency_video_pipeline"
+    assert by_role["compute"].env["USE_GPU"] == "true"
+    assert by_role["compute"].env["GPU_DEVICE"] == "0"
+    assert by_role["compute"].gpu_id == "0"
+
+
+@pytest.mark.asyncio
 async def test_conversation_rejects_unreasonable_video_latency(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session)

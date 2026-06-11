@@ -232,7 +232,7 @@
                 <p v-if="draft?.modality"><span class="param-label">所属模态：</span>{{ modalityLabel(draft.modality) }}</p>
                 <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ draft.source_name || '-' }} → {{ draft.destination_name || '-' }}</p>
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
-                <p v-if="draft?.data_profile?.matrix_size"><span class="param-label">规模：</span>{{ draft.data_profile.matrix_size }}×{{ draft.data_profile.matrix_size }} 矩阵 × {{ draft.data_profile.batch_count || 1 }} 批</p>
+                <p v-for="row in draftDataProfileRows" :key="row.label"><span class="param-label">{{ row.label }}：</span>{{ row.value }}</p>
               </div>
             </div>
             <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
@@ -243,6 +243,7 @@
               <strong>任务已提交</strong>
               <p>{{ conversationStatusLabel }}</p>
             </div>
+            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">随机路由并部署</el-button>
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
@@ -510,8 +511,7 @@
           <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
-          <el-descriptions-item label="矩阵规模">{{ draft.data_profile?.matrix_size || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="批次数">{{ draft.data_profile?.batch_count || '-' }}</el-descriptions-item>
+          <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
           <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
@@ -559,7 +559,7 @@
         <div v-if="routing" class="routing-summary">
           <el-descriptions :column="1" border size="small">
             <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="节点分配">{{ routing.placements ? `${routing.placements.source} → ${routing.placements.compute} → ${routing.placements.sink}` : '-' }}</el-descriptions-item>
+            <el-descriptions-item label="节点分配">{{ formatRoutingPlacements(routing.placements) }}</el-descriptions-item>
           </el-descriptions>
           <el-collapse v-if="routing.input_payload" class="raw-collapse">
             <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input">
@@ -573,6 +573,7 @@
         </div>
         <div class="actions">
           <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
+          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">随机路由并部署</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
           <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待路由</el-tag>
@@ -617,6 +618,7 @@ const utterance = ref('')
 const loading = ref(false)
 const isStreaming = ref(false)
 const isConfirming = ref(false)
+const isDemoRouting = ref(false)
 const messagesRef = ref(null)
 const editableTarget = ref(null)
 const uploadedFiles = ref([])
@@ -702,12 +704,15 @@ function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
   '矩阵乘法任务，从 compute-1 到 compute-3，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
+  '视频AI推理任务，从 compute-1 到 compute-3，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
   '从 compute-2 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
+  '从 compute-2 到 compute-1 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 compute-1 目的节点 compute-2，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
+const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
 const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id)
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 const conversationStatusLabel = computed(() => {
@@ -718,6 +723,9 @@ const canCancelOrder = computed(() => {
   const s = conversation.value?.status
   return s === 'awaiting_routing' || s === 'ready_to_submit'
 })
+const canDemoRoute = computed(() =>
+  conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
+)
 
 const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
 const uploadHeaders = computed(() => {
@@ -740,6 +748,31 @@ function formatBubbleTime(value) {
 function pretty(value) {
   if (!value) return '{}'
   return JSON.stringify(value, null, 2)
+}
+
+function placementName(value) {
+  if (!value) return '-'
+  if (typeof value === 'string') return value
+  const host = value.worker_host || value.hostname || value.node_name || value.node_id || '-'
+  const gpu = value.gpu_device ?? (Array.isArray(value.gpu_indices) ? value.gpu_indices[0] : null)
+  return gpu !== null && gpu !== undefined ? `${host} (GPU ${gpu})` : host
+}
+
+function formatRoutingPlacements(placements) {
+  if (!placements) return '-'
+  if (Array.isArray(placements)) {
+    return placements.map(item => `${item.node_id || item.role || 'node'}=${placementName(item)}`).join('，')
+  }
+  if (typeof placements === 'object') {
+    const source = placementName(placements.source)
+    const compute = placementName(placements.compute || placements.worker)
+    const sink = placementName(placements.sink)
+    if (source !== '-' || compute !== '-' || sink !== '-') {
+      return `${source} → ${compute} → ${sink}`
+    }
+    return Object.entries(placements).map(([role, value]) => `${role}=${placementName(value)}`).join('，')
+  }
+  return String(placements)
 }
 
 function parseStatusType(status) {
@@ -1152,6 +1185,22 @@ async function cancelOrder() {
     if (showOrders.value) loadOrders()
   } catch (err) {
     ElMessage.error(err.response?.data?.detail || '取消失败')
+  }
+}
+
+async function demoRoute() {
+  if (!conversation.value?.id || isDemoRouting.value) return
+  isDemoRouting.value = true
+  try {
+    const { data } = await conversationApi.demoRoute(conversation.value.id)
+    conversation.value = data
+    await refreshList()
+    if (showOrders.value) await loadOrders()
+    ElMessage.success('已使用随机路由策略完成部署')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.detail || '随机路由失败')
+  } finally {
+    isDemoRouting.value = false
   }
 }
 
@@ -1741,10 +1790,15 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 .confirm-icon {
   font-size: 24px;
   color: #22c55e;
+}
+.confirm-text {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 .confirm-text p {
   margin: 4px 0 0;

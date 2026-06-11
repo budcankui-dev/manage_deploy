@@ -270,12 +270,21 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
   if (meta.model_name) rows.push({ label: '检测模型', value: String(meta.model_name) })
   if (meta.video_asset) rows.push({ label: '测试视频', value: String(meta.video_asset) })
   if (meta.detector_backend) rows.push({ label: '推理后端', value: String(meta.detector_backend) })
+  if (meta.actual_backend) rows.push({ label: '实际执行后端', value: String(meta.actual_backend) })
+  if (meta.device) rows.push({ label: '运行设备', value: String(meta.device) })
   if (meta.gpu_device !== undefined && meta.gpu_device !== null && String(meta.gpu_device) !== '') {
     rows.push({ label: 'GPU 设备', value: String(meta.gpu_device) })
+  }
+  if (meta.gpu_requested !== undefined) {
+    rows.push({ label: '请求 GPU', value: meta.gpu_requested ? '是' : '否' })
+  }
+  if (meta.gpu_available !== undefined) {
+    rows.push({ label: 'GPU 可用', value: meta.gpu_available ? '是' : '否' })
   }
   if (meta.gpu_assigned !== undefined) {
     rows.push({ label: 'GPU 分配', value: meta.gpu_assigned ? '已分配' : '未检测到 GPU 分配' })
   }
+  if (meta.gpu_error) rows.push({ label: 'GPU 诊断', value: String(meta.gpu_error) })
   if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
   if (meta.annotated_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.annotated_frame_index) })
   if (meta.annotated_frame_latency_ms != null) {

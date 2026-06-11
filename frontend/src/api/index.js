@@ -151,6 +151,7 @@ export const conversationApi = {
   sendMessage: (id, data) => api.post(`/conversations/${id}/messages`, data),
   updateDraft: (id, data) => api.patch(`/conversations/${id}/draft`, data),
   confirmIntent: (id) => api.post(`/conversations/${id}/confirm-intent`),
+  demoRoute: (id) => api.post(`/conversations/${id}/demo-route`, null, withTimeout(BENCHMARK_FLOW_TIMEOUT)),
   cancel: (id) => api.post(`/conversations/${id}/cancel`),
   submit: (id, params = {}) =>
     api.post(`/conversations/${id}/submit`, null, {

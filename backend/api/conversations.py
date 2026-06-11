@@ -452,6 +452,77 @@ async def cancel_conversation(
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 
+@router.post("/{conversation_id}/demo-route", response_model=ConversationResponse)
+async def demo_route_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Use the built-in random routing strategy for a single user order demo."""
+    conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
+    if conversation.status not in {ConversationStatus.AWAITING_ROUTING, ConversationStatus.READY_TO_SUBMIT}:
+        raise HTTPException(status_code=400, detail=f"当前状态不可演示路由：{conversation.status}")
+    if not conversation.materialized_order_id:
+        raise HTTPException(status_code=400, detail="请先确认意图并创建工单")
+
+    order = (
+        await db.execute(
+            select(TaskOrder).where(
+                TaskOrder.id == conversation.materialized_order_id,
+                TaskOrder.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if order.materialized_instance_id:
+        conversation.status = ConversationStatus.SUBMITTED
+        conversation.updated_at = datetime.utcnow()
+        await db.commit()
+        return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+    nodes = (
+        await db.execute(
+            select(Node)
+            .where(Node.is_schedulable == True, Node.deleted_at.is_(None))
+            .order_by(Node.hostname.asc())
+        )
+    ).scalars().all()
+    if not nodes:
+        raise HTTPException(status_code=400, detail="没有可调度节点，无法执行演示随机路由")
+
+    source_destination = {order.source_name, order.destination_name}
+    compute_candidates = [node for node in nodes if node.hostname not in source_destination]
+    compute_node = compute_candidates[0] if compute_candidates else nodes[0]
+
+    # Import lazily to avoid coupling the conversation module to order router setup.
+    from api.orders import RoutingPlacement, RoutingResultPayload, receive_routing_result as receive_order_routing_result
+
+    await receive_order_routing_result(
+        order_id=order.id,
+        payload=RoutingResultPayload(
+            strategy="random_demo",
+            selected_strategy="随机路由策略",
+            external_routing_id=f"demo-route-{conversation.id[:8]}",
+            placements=[
+                RoutingPlacement(
+                    node_id="compute",
+                    worker_host=compute_node.hostname,
+                    gpu_device="0",
+                    node_type="compute",
+                )
+            ],
+            metadata={
+                "mode": "frontend_demo_random_route",
+                "description": "用户端演示兜底：随机选择一个可调度计算节点并复用正式工单路由回写逻辑。",
+            },
+            require_network_ready=False,
+        ),
+        db=db,
+    )
+    return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+
 @router.delete("/{conversation_id}", status_code=204)
 async def delete_conversation(
     conversation_id: str,

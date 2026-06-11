@@ -93,6 +93,18 @@ async function prepareMatmulCatalog(request) {
   })
   expect(catalogResponse.ok()).toBeTruthy()
 
+  const videoCatalogResponse = await request.put('/api/business-template-catalog/low_latency_video_pipeline', {
+    data: {
+      task_type: 'low_latency_video_pipeline',
+      modality: 'low_latency_forwarding',
+      template_id: template.id,
+      source_node_name: 'source',
+      compute_node_name: 'compute',
+      sink_node_name: 'sink',
+    },
+  })
+  expect(videoCatalogResponse.ok()).toBeTruthy()
+
   return {
     source: nodes[0].hostname,
     destination: nodes[2].hostname,
@@ -136,11 +148,14 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
 
   await expect(page.getByText('参数完整')).toBeVisible({ timeout: 20_000 })
   const panel = page.locator('.intent-panel')
+  await expect(panel.getByRole('cell', { name: '矩阵乘法计算任务' })).toBeVisible()
+  await expect(panel.getByRole('cell', { name: '高通量计算模态' })).toBeVisible()
   await expect(panel.getByRole('cell', { name: source })).toBeVisible()
   await expect(panel.getByRole('cell', { name: destination })).toBeVisible()
   await expect(panel.getByRole('cell', { name: '1024' })).toBeVisible()
   await expect(panel.getByRole('cell', { name: '50' })).toBeVisible()
   await expect(panel.getByRole('cell', { name: '资源保障', exact: true })).toBeVisible()
+  await expect(panel.getByText('路由 DAG JSON 预览')).toBeVisible()
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-parsed.png'),
@@ -153,6 +168,51 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-submitted.png'),
+    fullPage: true,
+  })
+})
+
+test('intent chat parses video task and demo-routes deployment', async ({ page, request }, testInfo) => {
+  const auth = await loginByApi(request)
+  const { source, destination } = await prepareMatmulCatalog(request)
+  const conversation = await createConversation(request, auth.access_token)
+
+  await page.addInitScript(({ token, role, username, conversationId }) => {
+    window.localStorage.setItem('access_token', token)
+    window.localStorage.setItem('role', role)
+    window.localStorage.setItem('username', username)
+    window.localStorage.setItem('lastConversationId', conversationId)
+  }, {
+    token: auth.access_token,
+    role: auth.role,
+    username,
+    conversationId: conversation.id,
+  })
+
+  await page.goto('/intent-chat')
+  await expect(page.getByPlaceholder(/描述您的计算任务需求/)).toBeVisible()
+
+  const utterance = `视频AI推理任务，从 ${source} 到 ${destination}，720p视频，100帧，30fps，现在开始跑2小时，低时延策略`
+  await page.getByPlaceholder(/描述您的计算任务需求/).fill(utterance)
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByText('参数完整')).toBeVisible({ timeout: 20_000 })
+  const panel = page.locator('.intent-panel')
+  await expect(panel.getByRole('cell', { name: '视频AI推理任务' })).toBeVisible()
+  await expect(panel.getByRole('cell', { name: '低时延转发模态' })).toBeVisible()
+  await expect(panel.getByRole('cell', { name: '720p' })).toBeVisible()
+  await expect(panel.getByRole('cell', { name: '100' })).toBeVisible()
+  await expect(panel.getByText('路由 DAG JSON 预览')).toBeVisible()
+
+  await page.getByRole('button', { name: '确认提交任务' }).first().click()
+  await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: '随机路由并部署' }).first()).toBeVisible()
+
+  await page.getByRole('button', { name: '随机路由并部署' }).first().click()
+  await expect(page.locator('.confirm-card').getByText('已部署')).toBeVisible({ timeout: 20_000 })
+
+  await page.screenshot({
+    path: testInfo.outputPath('intent-chat-video-demo-routed.png'),
     fullPage: true,
   })
 })
