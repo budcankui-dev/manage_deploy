@@ -111,9 +111,7 @@
           {{ node.hostname }}（{{ excludedNodeReason(node) }}）
         </span>
       </div>
-      <p class="status-note">
-        视频业务先预热 3 轮，再统计 5 轮取中位数。若重测值与历史基线差距明显，应优先核对 CPU/GPU 运行口径、worker 镜像版本和同 GPU 并发占用情况。
-      </p>
+      <p v-if="baselineHintText" class="status-note">{{ baselineHintText }}</p>
     </el-card>
 
     <el-card class="step-card">
@@ -546,6 +544,16 @@ const currentTaskConfig = computed(() =>
   taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
 )
 
+const baselineHintText = computed(() => {
+  if (taskType.value === 'low_latency_video_pipeline') {
+    return '视频业务先预热 3 轮，再统计 5 轮取中位数。若重测值与历史基线差距明显，应优先核对 GPU 推理后端、worker 镜像版本和同 GPU 并发占用情况。'
+  }
+  if (taskType.value === 'high_throughput_matmul') {
+    return '矩阵业务先完成预热，再按固定矩阵规模和批次统计计算速率。若重测值与历史基线差距明显，应优先核对 GPU 运行后端、worker 镜像版本和同 GPU 并发占用情况。'
+  }
+  return ''
+})
+
 const baselineRunCount = computed(() => (
   taskType.value === 'low_latency_video_pipeline' ? 5 : 3
 ))
@@ -885,19 +893,21 @@ function summarizePlacements(placements) {
   if (Array.isArray(placements)) {
     return placements.map(p => {
       const gpu = p.gpu_device != null ? ` GPU ${p.gpu_device}` : ''
-      return `${p.task_node_id || p.role}:${p.topology_node_id || p.hostname || p.node_name || '—'}${gpu}`
+      const role = p.task_node_id || p.node_id || p.role || p.task_role || '子任务'
+      const node = p.topology_node_id || p.worker_host || p.hostname || p.node_name || p.node_id || '—'
+      return `${role} -> ${node}${gpu}`
     }).join(' / ')
   }
   if (typeof placements === 'object') {
     return Object.entries(placements).map(([role, placement]) => {
-      if (typeof placement === 'string') return `${role}:${placement}`
-      const node = placement?.topology_node_id || placement?.node_name || placement?.worker_host || placement?.node_id || '—'
+      if (typeof placement === 'string') return `${role} -> ${placement}`
+      const node = placement?.topology_node_id || placement?.worker_host || placement?.node_name || placement?.hostname || placement?.node_id || '—'
       const gpu = placement?.gpu_device != null
         ? ` GPU ${placement.gpu_device}`
         : Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length
         ? ` GPU ${placement.gpu_indices.join(',')}`
         : ''
-      return `${role}:${node}${gpu}`
+      return `${role} -> ${node}${gpu}`
     }).join(' / ')
   }
   return String(placements)
@@ -927,9 +937,10 @@ function formatBaselineGpu(row) {
 }
 
 function formatBaselineRuntime(row) {
-  const driver = row.driver_version || '驱动未填'
-  const cuda = row.cuda_version || 'CUDA 未填'
-  return `${driver} / ${cuda}`
+  if (row.driver_version && row.cuda_version) return `${row.driver_version} / CUDA ${row.cuda_version}`
+  if (row.driver_version) return row.driver_version
+  if (row.cuda_version) return `CUDA ${row.cuda_version}`
+  return '运行环境未同步'
 }
 
 function formatDiagnosticBackends(diagnostics) {
