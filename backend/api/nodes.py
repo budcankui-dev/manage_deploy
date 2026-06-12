@@ -141,22 +141,28 @@ async def sync_node_resources(
             detail=result.get("error") or "Failed to query node resources",
         )
 
-    for field in (
-        "gpu_count",
-        "gpu_model",
-        "gpu_memory_mb",
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    gpu_probe_unavailable = bool(diagnostics.get("nvidia_smi_error")) and int(result.get("gpu_count") or 0) == 0
+    fields = [
         "cpu_model",
         "cpu_cores",
         "memory_mb",
-        "driver_version",
-        "cuda_version",
-    ):
+    ]
+    if not gpu_probe_unavailable:
+        fields.extend([
+            "gpu_count",
+            "gpu_model",
+            "gpu_memory_mb",
+            "driver_version",
+            "cuda_version",
+        ])
+
+    for field in fields:
         if field in result:
             setattr(node, field, result[field])
 
-    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
-    if diagnostics.get("nvidia_smi_error") and not result.get("cuda_version"):
-        node.resource_note = "节点资源已同步；未检测到 CUDA 版本，请确认 nvidia-smi 或 NVIDIA 驱动环境。"
+    if gpu_probe_unavailable:
+        node.resource_note = "CPU/内存已同步；GPU 信息保留原配置，Node Agent 容器内未检测到 nvidia-smi。"
     elif not node.resource_note or "未检测到 CUDA" in node.resource_note:
         node.resource_note = None
 

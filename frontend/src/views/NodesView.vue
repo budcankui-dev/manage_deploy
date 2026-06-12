@@ -365,9 +365,10 @@ function formatMemory(value) {
 }
 
 function formatRuntime(node) {
-  const driver = node.driver_version || '驱动未同步'
-  const cuda = node.cuda_version || 'CUDA 未同步'
-  return `${driver} / ${cuda}`
+  if (node.driver_version && node.cuda_version) return `${node.driver_version} / CUDA ${node.cuda_version}`
+  if (node.driver_version) return node.driver_version
+  if (node.cuda_version) return `CUDA ${node.cuda_version}`
+  return '未同步'
 }
 
 async function syncResources(node) {

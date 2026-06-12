@@ -183,3 +183,43 @@ async def test_sync_node_resources_updates_hardware_fields(monkeypatch):
     assert result.cuda_version == "12.2"
     assert result.gpu_model == "NVIDIA TITAN Xp"
     assert db.committed is True
+
+
+@pytest.mark.asyncio
+async def test_sync_node_resources_preserves_gpu_when_probe_unavailable(monkeypatch):
+    node = Node(
+        hostname="worker-a",
+        agent_address="http://10.0.0.1:8001",
+        management_ip="10.0.0.1",
+        business_ip="10.0.1.10",
+        gpu_count=1,
+        gpu_model="NVIDIA TITAN Xp",
+        gpu_memory_mb=12288,
+        driver_version="535.171.04",
+    )
+    node.id = "node-1"
+    db = FakeSession(node)
+    db.values = [node]
+
+    async def fake_get_resources(self, _endpoint):
+        return True, {
+            "cpu_model": "Intel Xeon",
+            "cpu_cores": 24,
+            "memory_mb": 64000,
+            "gpu_count": 0,
+            "gpu_model": None,
+            "gpu_memory_mb": None,
+            "driver_version": None,
+            "cuda_version": None,
+            "diagnostics": {"nvidia_smi_error": "not found"},
+        }
+
+    monkeypatch.setattr("api.nodes.AgentClient.get_resources", fake_get_resources)
+
+    result = await sync_node_resources("node-1", db)
+
+    assert result.cpu_cores == 24
+    assert result.gpu_count == 1
+    assert result.gpu_model == "NVIDIA TITAN Xp"
+    assert result.driver_version == "535.171.04"
+    assert "GPU 信息保留原配置" in result.resource_note
