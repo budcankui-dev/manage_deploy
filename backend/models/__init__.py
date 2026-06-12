@@ -25,6 +25,15 @@ class Node(Base):
     business_ipv6: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     node_kind: Mapped[str] = mapped_column(String(50), default=NodeKind.WORKER)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    gpu_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gpu_memory_mb: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cpu_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cpu_cores: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    memory_mb: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    driver_version: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    cuda_version: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    resource_note: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     is_schedulable: Mapped[bool] = mapped_column(default=True, server_default="1")
     is_routable: Mapped[bool] = mapped_column(default=True, server_default="1")
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -514,6 +523,7 @@ class NodeBaseline(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     run_count: Mapped[int] = mapped_column(default=3)
     raw_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    diagnostics: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, onupdate=func.now(), nullable=True

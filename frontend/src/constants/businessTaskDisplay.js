@@ -174,6 +174,29 @@ export function buildMatmulInputRows(dataProfile) {
   return describeDataProfile('high_throughput_matmul', dataProfile || {})
 }
 
+export function buildMatmulPreview(profile, dimension = 4) {
+  const dataProfile = profile || {}
+  const seed = Number(dataProfile.seed ?? 42)
+  const size = Number(dataProfile.matrix_size ?? 1024)
+  const rows = []
+  let state = Number.isFinite(seed) ? Math.abs(Math.trunc(seed)) || 1 : 42
+  const next = () => {
+    state = (state * 1664525 + 1013904223) % 4294967296
+    return ((state / 4294967296) * 2 - 1).toFixed(3)
+  }
+  for (let i = 0; i < dimension; i += 1) {
+    rows.push(Array.from({ length: dimension }, () => next()))
+  }
+  return {
+    size,
+    dimension,
+    seed: dataProfile.seed ?? 42,
+    batchCount: dataProfile.batch_count ?? 1,
+    rows,
+    caption: `输入矩阵示意：展示 ${dimension}×${dimension} 局部样例，实际运行规模为 ${size}×${size}。`,
+  }
+}
+
 export function buildMatmulOutputRows(resultMetadata, evaluation) {
   const rows = []
   const meta = resultMetadata || {}
@@ -270,6 +293,12 @@ export function buildVideoInputRows(dataProfile) {
   if (profile.model_name) rows.push({ label: '检测模型', value: profile.model_name })
   if (profile.inference_mode) rows.push({ label: '推理模式', value: profile.inference_mode })
   return rows
+}
+
+export function videoInputVideoUrl(dataProfile) {
+  const asset = dataProfile?.video_asset
+  if (!asset || typeof asset !== 'string') return ''
+  return `/api/demo-assets/video/${encodeURIComponent(asset)}`
 }
 
 export function buildVideoOutputRows(resultMetadata, evaluation) {

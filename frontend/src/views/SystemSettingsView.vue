@@ -68,8 +68,11 @@
             <el-checkbox v-model="form.show_internal_controls">
               显示内部调试信息
             </el-checkbox>
+            <el-checkbox v-model="form.show_routing_dag_json">
+              显示路由 DAG 调试信息
+            </el-checkbox>
             <p class="form-hint">
-              建议正式验收时开启正式展示视图并关闭内部调试信息，让页面聚焦业务目标成功率和工单证据。
+              建议正式验收时开启正式展示视图，并关闭内部调试信息和 DAG JSON，让页面聚焦业务目标成功率、参数解析和工单证据。
             </p>
           </el-card>
         </div>
@@ -174,6 +177,7 @@ const form = reactive({
   benchmark_routing_mode: 'internal_auto',
   expert_mode: true,
   show_internal_controls: false,
+  show_routing_dag_json: false,
   modality_priority_map: { ...DEFAULT_MODALITY_PRIORITY_MAP },
   notes: '',
 })
@@ -204,6 +208,7 @@ function applySettings(data) {
     benchmark_routing_mode: data?.benchmark_routing_mode || 'internal_auto',
     expert_mode: data?.expert_mode ?? true,
     show_internal_controls: data?.show_internal_controls ?? false,
+    show_routing_dag_json: data?.show_routing_dag_json ?? false,
     modality_priority_map: normalizePriorityMap(data?.modality_priority_map),
     notes: data?.notes || '',
   })

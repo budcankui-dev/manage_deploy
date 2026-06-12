@@ -29,7 +29,7 @@
           <span class="step-num">1</span>
           <div>
             <div class="step-title">基线</div>
-            <div class="step-desc">直接列出所有可调度节点，未测试节点标红。</div>
+            <div class="step-desc">直接列出所有可调度节点；不稳定节点保留展示，但不纳入本轮自动路由。</div>
           </div>
           <el-button
             class="header-action"
@@ -50,6 +50,14 @@
         :row-class-name="baselineRowClass"
       >
         <el-table-column prop="hostname" label="节点" min-width="150" />
+        <el-table-column label="资源属性" min-width="220">
+          <template #default="{ row }">
+            <div class="baseline-resource">
+              <strong>{{ formatBaselineGpu(row) }}</strong>
+              <small>{{ formatBaselineRuntime(row) }}</small>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="基线值" min-width="180">
           <template #default="{ row }">
             <span v-if="row.baseline_value != null" class="baseline-value">
@@ -63,6 +71,21 @@
             <el-tag v-if="row.stable === true" type="success" size="small">稳定</el-tag>
             <el-tag v-else-if="row.stable === false" type="warning" size="small">波动大</el-tag>
             <span v-else class="muted">未测试</span>
+            <div v-if="row.std_dev != null" class="baseline-subline">
+              σ={{ row.std_dev.toFixed(2) }}
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="样本/后端" min-width="260">
+          <template #default="{ row }">
+            <div v-if="row.raw_values?.length" class="baseline-diagnostics">
+              <div>样本：{{ formatRawValues(row.raw_values, row.unit) }}</div>
+              <div>后端：{{ formatDiagnosticBackends(row.diagnostics) }}</div>
+              <div v-if="formatDiagnosticGpuError(row.diagnostics)" class="danger-text">
+                {{ formatDiagnosticGpuError(row.diagnostics) }}
+              </div>
+            </div>
+            <span v-else class="muted">暂无诊断</span>
           </template>
         </el-table-column>
         <el-table-column label="上次更新" min-width="150">
@@ -89,7 +112,7 @@
         </span>
       </div>
       <p class="status-note">
-        若重测值与历史基线差距明显，应优先核对 CPU/GPU 运行口径、worker 镜像版本和同 GPU 并发占用情况；正式验收前建议按当前固定 profile 重新建立稳定基线。
+        视频业务先预热 3 轮，再统计 5 轮取中位数。若重测值与历史基线差距明显，应优先核对 CPU/GPU 运行口径、worker 镜像版本和同 GPU 并发占用情况。
       </p>
     </el-card>
 
@@ -392,6 +415,7 @@
         v-model:active-tab="detailTab"
         :detail="selectedOrderDetail"
         :result-objects="selectedOrderResultObjects"
+        :show-routing-dag-json="showRoutingDagJson"
       />
     </el-drawer>
   </div>
@@ -500,10 +524,12 @@ const settingsForm = reactive({
   benchmark_routing_mode: 'internal_auto',
   expert_mode: true,
   show_internal_controls: false,
+  show_routing_dag_json: false,
 })
 
 const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'internal_auto')
 const showInternalControls = computed(() => Boolean(settingsForm.show_internal_controls))
+const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_json))
 
 const routeModeLabel = computed(() =>
   routeMode.value === 'external' ? '外部路由系统' : '自动路由'
@@ -520,6 +546,10 @@ const currentTaskConfig = computed(() =>
   taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
 )
 
+const baselineRunCount = computed(() => (
+  taskType.value === 'low_latency_video_pipeline' ? 5 : 3
+))
+
 const nodeBaselineRows = computed(() =>
   nodes.value.filter(n => n.is_schedulable).map(n => {
     const bl = baselines.value.find(b => b.node_id === n.id)
@@ -529,7 +559,15 @@ const nodeBaselineRows = computed(() =>
       baseline_value: bl?.baseline_value ?? null,
       unit: bl?.unit || currentTaskConfig.value.unit,
       stable: bl?.stable ?? null,
+      std_dev: bl?.std_dev ?? null,
+      raw_values: bl?.raw_values || [],
+      diagnostics: bl?.diagnostics || null,
       updated_at: bl?.updated_at ?? bl?.created_at ?? null,
+      gpu_count: n.gpu_count || 0,
+      gpu_model: n.gpu_model || '',
+      gpu_memory_mb: n.gpu_memory_mb || null,
+      driver_version: n.driver_version || '',
+      cuda_version: n.cuda_version || '',
     }
   })
 )
@@ -540,6 +578,10 @@ const excludedNodeRows = computed(() =>
 
 const missingBaselineCount = computed(() =>
   nodeBaselineRows.value.filter(row => row.baseline_value == null || row.stable === false).length
+)
+
+const stableBaselineCount = computed(() =>
+  nodeBaselineRows.value.filter(row => row.baseline_value != null && row.stable === true).length
 )
 
 const orderStats = computed(() => {
@@ -872,6 +914,37 @@ function baselineRowClass({ row }) {
   return ''
 }
 
+function formatRawValues(values, unit) {
+  return values.map(v => Number(v).toFixed(2)).join(' / ') + (unit ? ` ${unit}` : '')
+}
+
+function formatBaselineGpu(row) {
+  const count = Number(row.gpu_count || 0)
+  if (!count) return '无 GPU 属性'
+  const model = row.gpu_model || 'GPU 型号未填'
+  const memory = row.gpu_memory_mb ? ` / ${(row.gpu_memory_mb / 1024).toFixed(row.gpu_memory_mb % 1024 === 0 ? 0 : 1)}GB` : ''
+  return `${count} × ${model}${memory}`
+}
+
+function formatBaselineRuntime(row) {
+  const driver = row.driver_version || '驱动未填'
+  const cuda = row.cuda_version || 'CUDA 未填'
+  return `${driver} / ${cuda}`
+}
+
+function formatDiagnosticBackends(diagnostics) {
+  if (!diagnostics) return '暂无'
+  const backends = diagnostics.actual_backends?.length ? diagnostics.actual_backends.join(', ') : '未记录'
+  const devices = diagnostics.devices?.length ? diagnostics.devices.join(', ') : '未记录设备'
+  return `${backends} · ${devices}`
+}
+
+function formatDiagnosticGpuError(diagnostics) {
+  const errors = diagnostics?.gpu_errors || []
+  if (!errors.length) return ''
+  return `GPU 诊断：${errors[0]}`
+}
+
 function excludedNodeReason(node) {
   if (node.node_kind === 'admin') return '管理节点不参与业务调度'
   if (node.is_schedulable === false) return '不可调度或 Node Agent 不可达'
@@ -917,6 +990,7 @@ async function loadSystemSettings() {
     settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'internal_auto'
     settingsForm.expert_mode = data?.expert_mode ?? true
     settingsForm.show_internal_controls = data?.show_internal_controls ?? false
+    settingsForm.show_routing_dag_json = data?.show_routing_dag_json ?? false
   } finally {
     settingsLoading.value = false
   }
@@ -1019,7 +1093,7 @@ async function loadAll() {
 async function runSingleBaseline(row) {
   testingNodes.value = new Map(testingNodes.value.set(row.node_id, true))
   try {
-    const { data } = await baselinesApi.run({ node_id: row.node_id, task_type: taskType.value, runs: 3 })
+    const { data } = await baselinesApi.run({ node_id: row.node_id, task_type: taskType.value, runs: baselineRunCount.value })
     ElMessage.success(`基线测试完成：${data.baseline_value?.toFixed(2)} ${data.unit || ''}`)
     await loadBaselines()
   } finally {
@@ -1030,7 +1104,7 @@ async function runSingleBaseline(row) {
 async function runBatchBaseline() {
   batchBaselineLoading.value = true
   try {
-    const { data } = await baselinesApi.batchRun({ task_type: taskType.value, runs: 3 })
+    const { data } = await baselinesApi.batchRun({ task_type: taskType.value, runs: baselineRunCount.value })
     ElMessage.success(`批量基线测试完成：${data.succeeded} 个节点成功${data.failed ? `，${data.failed} 个失败` : ''}`)
     await loadBaselines()
   } finally {
@@ -1242,9 +1316,12 @@ async function doStartAll() {
 
 async function startFullFlow() {
   await loadAll()
-  if (missingBaselineCount.value > 0) {
-    ElMessage.warning(`还有 ${missingBaselineCount.value} 个节点缺少稳定基线，请先完成 Step 1。`)
+  if (stableBaselineCount.value <= 0) {
+    ElMessage.warning('当前任务类型没有可用于路由的稳定基线节点，请先完成 Step 1。')
     return
+  }
+  if (missingBaselineCount.value > 0) {
+    ElMessage.info(`有 ${missingBaselineCount.value} 个节点缺少稳定基线，本轮将只使用稳定基线节点。`)
   }
   fullFlowLoading.value = true
   try {
@@ -1414,6 +1491,29 @@ onMounted(loadAll)
 .baseline-value {
   font-weight: 700;
   color: #303133;
+}
+
+.baseline-resource,
+.baseline-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.baseline-resource small,
+.baseline-subline,
+.baseline-diagnostics {
+  color: #606266;
+  font-size: 12px;
+}
+
+.danger-text {
+  color: #b42318;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :deep(.baseline-missing-row) {

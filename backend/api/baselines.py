@@ -24,6 +24,7 @@ class BaselineCreate(BaseModel):
     unit: Optional[str] = None
     run_count: int = 3
     raw_values: Optional[list[float]] = None
+    diagnostics: Optional[dict[str, Any]] = None
 
 
 class BaselineResponse(BaseModel):
@@ -37,6 +38,7 @@ class BaselineResponse(BaseModel):
     unit: Optional[str] = None
     run_count: int
     raw_values: Optional[list[float]] = None
+    diagnostics: Optional[dict[str, Any]] = None
     std_dev: Optional[float] = None
     stable: Optional[bool] = None
     created_at: Any
@@ -49,6 +51,7 @@ class BaselineUpdate(BaseModel):
     unit: Optional[str] = None
     run_count: Optional[int] = None
     raw_values: Optional[list[float]] = None
+    diagnostics: Optional[dict[str, Any]] = None
 
 
 class BaselineRunRequest(BaseModel):
@@ -66,6 +69,7 @@ class BaselineRunResponse(BaseModel):
     unit: Optional[str] = None
     std_dev: Optional[float] = None
     stable: Optional[bool] = None
+    diagnostics: Optional[dict[str, Any]] = None
 
 
 @router.post("/run", response_model=BaselineRunResponse)
@@ -108,6 +112,7 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
         existing.baseline_value = result["baseline_value"]
         existing.raw_values = result["raw_values"]
         existing.run_count = result["run_count"]
+        existing.diagnostics = result.get("diagnostics")
         await db.commit()
         await db.refresh(existing)
         baseline_id = existing.id
@@ -121,6 +126,7 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
             unit=result["unit"],
             run_count=result["run_count"],
             raw_values=result["raw_values"],
+            diagnostics=result.get("diagnostics"),
         )
         db.add(row)
         await db.commit()
@@ -135,6 +141,7 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
         unit=result["unit"],
         std_dev=result.get("std_dev"),
         stable=result.get("stable"),
+        diagnostics=result.get("diagnostics"),
     )
 
 
@@ -180,12 +187,14 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
                 existing.baseline_value = result["baseline_value"]
                 existing.raw_values = result["raw_values"]
                 existing.run_count = result["run_count"]
+                existing.diagnostics = result.get("diagnostics")
             else:
                 db.add(NodeBaseline(
                     node_id=node.id, task_type=payload.task_type,
                     metric_key=result["metric_key"], baseline_value=result["baseline_value"],
                     operator=result["operator"], unit=result["unit"],
                     run_count=result["run_count"], raw_values=result["raw_values"],
+                    diagnostics=result.get("diagnostics"),
                 ))
             await db.commit()
             succeeded.append(node.hostname)
@@ -237,6 +246,7 @@ async def list_baselines(
             unit=b.unit,
             run_count=b.run_count,
             raw_values=b.raw_values,
+            diagnostics=b.diagnostics,
             std_dev=std_dev,
             stable=stable,
             created_at=b.created_at,
@@ -272,6 +282,7 @@ async def create_baseline(payload: BaselineCreate, db: AsyncSession = Depends(ge
         unit=payload.unit,
         run_count=payload.run_count,
         raw_values=payload.raw_values,
+        diagnostics=payload.diagnostics,
     )
     db.add(row)
     await db.commit()
@@ -287,6 +298,7 @@ async def create_baseline(payload: BaselineCreate, db: AsyncSession = Depends(ge
         unit=row.unit,
         run_count=row.run_count,
         raw_values=row.raw_values,
+        diagnostics=row.diagnostics,
         std_dev=_baseline_stats(row.raw_values)[0],
         stable=_baseline_stats(row.raw_values)[1],
         created_at=row.created_at,
@@ -323,6 +335,7 @@ async def update_baseline(
         unit=row.unit,
         run_count=row.run_count,
         raw_values=row.raw_values,
+        diagnostics=row.diagnostics,
         std_dev=_baseline_stats(row.raw_values)[0],
         stable=_baseline_stats(row.raw_values)[1],
         created_at=row.created_at,

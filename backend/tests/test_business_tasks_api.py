@@ -8,6 +8,7 @@ from api.business_tasks import _extract_result_metadata
 from enums import OrderStatus, RoutingStatus, UserRole
 from models import (
     BusinessObjectiveEvaluation,
+    NodeBaseline,
     RoutingResourceEvent,
     SystemSetting,
     TaskInstance,
@@ -100,6 +101,29 @@ async def _seed_business_fixture(client):
     )
     assert catalog_response.status_code == 200
     return node_ids, template_id
+
+
+async def _seed_stable_baselines(db_session, node_ids, task_type: str = "high_throughput_matmul"):
+    metric_key = "frame_latency_p90_ms" if task_type == "low_latency_video_pipeline" else "effective_gflops"
+    operator = "<=" if task_type == "low_latency_video_pipeline" else ">="
+    unit = "ms" if task_type == "low_latency_video_pipeline" else "GFLOPS"
+    value = 120.0 if task_type == "low_latency_video_pipeline" else 240.0
+    db_session.add_all(
+        [
+            NodeBaseline(
+                node_id=node_id,
+                task_type=task_type,
+                metric_key=metric_key,
+                baseline_value=value,
+                operator=operator,
+                unit=unit,
+                run_count=3,
+                raw_values=[value - 1, value, value + 1],
+            )
+            for node_id in node_ids
+        ]
+    )
+    await db_session.flush()
 
 
 @pytest.mark.asyncio
@@ -1208,7 +1232,8 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
 
 @pytest.mark.asyncio
 async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
-    _node_ids, template_id = await _seed_business_fixture(client)
+    node_ids, template_id = await _seed_business_fixture(client)
+    await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
     headers, _user = await _auth_headers(client, db_session, username="benchmark-scope-user")
     catalog_response = await client.post(
         "/api/business-template-catalog",
@@ -1289,6 +1314,61 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
     placements = {item["role"]: item for item in detail_response.json()["node_placements"]}
     assert placements["compute"]["gpu_id"] == "0"
     assert placements["compute"]["gpu_device"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_skips_non_routable_nodes(client, db_session):
+    node_ids, template_id = await _seed_business_fixture(client)
+    await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-routable-user")
+
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    nodes = (await db_session.execute(select(TaskInstanceNode))).scalars().all()
+    assert nodes == []
+
+    node_rows = await client.get("/api/nodes")
+    assert node_rows.status_code == 200
+    worker_b = next(node for node in node_rows.json() if node["hostname"] == "worker-b")
+    update_response = await client.put(f"/api/nodes/{worker_b['id']}", json={"is_routable": False})
+    assert update_response.status_code == 200
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 6,
+            "benchmark_run_id": "routable-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_ids = create_response.json()["order_ids"]
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "routable-run"},
+    )
+    assert route_response.status_code == 200
+    assert route_response.json()["routed"] == 6
+
+    for order_id in order_ids:
+        detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+        assert detail_response.status_code == 200
+        placements = detail_response.json()["routing_result"]["placements"]
+        assert all(item["topology_node_id"] != "worker-b" for item in placements)
 
 
 @pytest.mark.asyncio

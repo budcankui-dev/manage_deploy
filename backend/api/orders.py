@@ -1,5 +1,6 @@
 import asyncio
 import random
+import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -28,6 +29,7 @@ from models import (
     BusinessTemplateCatalog,
     Conversation,
     Node as NodeModel,
+    NodeBaseline,
     RoutingRequest,
     TaskInstance,
     TaskInstanceNode,
@@ -1440,18 +1442,24 @@ async def batch_auto_route(
         _benchmark_config(task_type)
         orders = [order for order in orders if _benchmark_task_type(order) == task_type]
 
-    schedulable_rows = await db.execute(
-        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
-    )
-    schedulable = schedulable_rows.scalars().all()
-    if not schedulable:
-        raise HTTPException(status_code=400, detail="No schedulable nodes available")
+    pools_by_task_type: dict[str, dict[str, list[NodeModel]]] = {}
+    required_task_types = {t for t in (_benchmark_task_type(order) for order in orders) if t}
+    if task_type:
+        required_task_types.add(task_type)
+    for required_type in required_task_types:
+        pools_by_task_type[required_type] = await _benchmark_routing_pool(db, required_type)
 
     routed = 0
     failed = []
     for order in orders:
         try:
-            picked = {role: random.choice(schedulable) for role in ("source", "compute", "sink")}
+            order_task_type = _benchmark_task_type(order)
+            if not order_task_type:
+                raise RuntimeError("Benchmark order missing task_type")
+            routing_pool = pools_by_task_type.get(order_task_type)
+            if not routing_pool or not routing_pool["compute"]:
+                raise RuntimeError(f"No stable baseline compute nodes available for {order_task_type}")
+            picked = _pick_benchmark_nodes(routing_pool)
             await _do_auto_route(db, order, picked)
             routed += 1
         except Exception as exc:
@@ -1829,6 +1837,57 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     order.status = OrderStatus.MATERIALIZED
 
 
+def _baseline_is_stable(raw_values: list[float] | None) -> bool:
+    if not raw_values:
+        return False
+    if len(raw_values) == 1:
+        return True
+    median = statistics.median(raw_values)
+    if median <= 0:
+        return True
+    return statistics.stdev(raw_values) < median * 0.10
+
+
+async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> dict[str, list[NodeModel]]:
+    schedulable_rows = await db.execute(
+        select(NodeModel).where(
+            NodeModel.is_schedulable == True,
+            NodeModel.is_routable == True,
+            NodeModel.deleted_at.is_(None),
+        )
+    )
+    schedulable = schedulable_rows.scalars().all()
+    if not schedulable:
+        raise HTTPException(status_code=400, detail="No schedulable nodes available")
+
+    stable_compute: list[NodeModel] = []
+    if task_type:
+        baselines = (
+            await db.execute(select(NodeBaseline).where(NodeBaseline.task_type == task_type))
+        ).scalars().all()
+        stable_node_ids = {b.node_id for b in baselines if _baseline_is_stable(b.raw_values)}
+        stable_compute = [
+            node
+            for node in schedulable
+            if node.id in stable_node_ids and node.node_kind in ("worker", "both", None)
+        ]
+
+    terminal_nodes = [
+        node for node in schedulable if node.node_kind in ("terminal", "both", "worker", None)
+    ] or schedulable
+    return {"terminal": terminal_nodes, "compute": stable_compute}
+
+
+def _pick_benchmark_nodes(pool: dict[str, list[NodeModel]]) -> dict[str, NodeModel]:
+    compute = random.choice(pool["compute"])
+    terminal = pool["terminal"] or pool["compute"]
+    return {
+        "source": random.choice(terminal),
+        "compute": compute,
+        "sink": random.choice(terminal),
+    }
+
+
 @router.post("/{order_id}/auto-route")
 async def auto_route_order(
     order_id: str,
@@ -1847,14 +1906,12 @@ async def auto_route_order(
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=400, detail=f"Order routing_status is '{order.routing_status}', expected 'pending'")
 
-    schedulable_rows = await db.execute(
-        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
-    )
-    schedulable = schedulable_rows.scalars().all()
-    if not schedulable:
-        raise HTTPException(status_code=400, detail="No schedulable nodes available")
+    task_type = _benchmark_task_type(order)
+    routing_pool = await _benchmark_routing_pool(db, task_type)
+    if not routing_pool["compute"]:
+        raise HTTPException(status_code=400, detail="No stable baseline compute nodes available")
 
-    picked = {role: random.choice(schedulable) for role in ("source", "compute", "sink")}
+    picked = _pick_benchmark_nodes(routing_pool)
     await _do_auto_route(db, order, picked)
     await db.commit()
     return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

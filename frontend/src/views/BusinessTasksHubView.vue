@@ -249,6 +249,7 @@
         v-model:active-tab="detailTab"
         :detail="orderDetail"
         :result-objects="resultObjects"
+        :show-routing-dag-json="showRoutingDagJson"
       >
         <template #deployment-actions="{ instance }">
           <el-button v-if="canStart(instance?.status)" type="primary" @click="startInstance(instance.id)">启动</el-button>
@@ -347,6 +348,7 @@ const selectedOrderIds = ref([])
 
 const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
 const showInternalControls = ref(false)
+const showRoutingDagJson = ref(false)
 
 const filters = reactive({
   q: '',
@@ -630,6 +632,7 @@ async function loadSystemSettings() {
   try {
     const { data } = await adminApi.getSystemSettings()
     showInternalControls.value = Boolean(data?.show_internal_controls)
+    showRoutingDagJson.value = Boolean(data?.show_routing_dag_json)
   } finally {
     settingsLoading.value = false
   }

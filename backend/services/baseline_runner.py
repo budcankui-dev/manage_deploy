@@ -76,10 +76,33 @@ BENCHMARK_PROFILES = {
         },
         "gpu_id": "0",
         "profile_id": "video_industrial_inspection_720p",
+        "warmup_runs": 3,
     },
 }
 
 STABILITY_THRESHOLD = 0.10  # 标准差 < 中位数 × 10%
+
+DIAGNOSTIC_KEYS = (
+    "backend",
+    "actual_backend",
+    "detector_backend",
+    "device",
+    "model_name",
+    "gpu_device",
+    "gpu_requested",
+    "gpu_available",
+    "gpu_assigned",
+    "gpu_error",
+    "frame_latency_avg_ms",
+    "frame_latency_min_ms",
+    "frame_latency_max_ms",
+    "measured_frames",
+    "annotated_frame_index",
+    "effective_gflops",
+    "matrix_size",
+    "batch_count",
+    "backend_note",
+)
 
 
 async def run_baseline_on_node(
@@ -101,12 +124,14 @@ async def run_baseline_on_node(
     command = profile.get("command")
     env = dict(profile["env"])
     gpu_id = profile.get("gpu_id")
+    warmup_runs = int(profile.get("warmup_runs", 0) or 0)
     values: list[float] = []
+    run_diagnostics: list[dict[str, Any]] = []
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        for i in range(runs):
-            container_name = f"baseline-{task_type}-run{i}-{int(time.time())}"
-            metric_value = await _run_single_benchmark(
+        for i in range(warmup_runs):
+            container_name = f"baseline-{task_type}-warmup{i}-{int(time.time())}"
+            await _run_single_benchmark(
                 client,
                 agent_address,
                 image,
@@ -116,7 +141,24 @@ async def run_baseline_on_node(
                 command,
                 gpu_id,
             )
+            logger.info("Baseline warmup run %s/%s completed", i + 1, warmup_runs)
+        for i in range(runs):
+            container_name = f"baseline-{task_type}-run{i}-{int(time.time())}"
+            result_payload = await _run_single_benchmark(
+                client,
+                agent_address,
+                image,
+                env,
+                container_name,
+                profile["metric_key"],
+                command,
+                gpu_id,
+            )
+            metric_value = float(result_payload[profile["metric_key"]])
             values.append(metric_value)
+            run_diagnostics.append(
+                _summarize_run_diagnostics(i + 1, result_payload, profile["metric_key"])
+            )
             logger.info(
                 "Baseline run %s/%s: %.4f %s",
                 i + 1,
@@ -139,6 +181,15 @@ async def run_baseline_on_node(
         "std_dev": round(std_dev, 4),
         "stable": stable,
         "profile_id": profile["profile_id"],
+        "diagnostics": _build_diagnostics(
+            task_type=task_type,
+            profile=profile,
+            image=image,
+            command=command,
+            gpu_id=gpu_id,
+            env=env,
+            run_diagnostics=run_diagnostics,
+        ),
     }
 
 
@@ -151,7 +202,7 @@ async def _run_single_benchmark(
     metric_key: str,
     command: str | None = None,
     gpu_id: str | None = None,
-) -> float:
+) -> dict[str, Any]:
     """启动一个临时容器执行基准测试并收集结果。"""
     base_url = agent_address.rstrip("/")
     task_id = str(uuid.uuid4())
@@ -198,7 +249,11 @@ async def _run_single_benchmark(
     await client.delete(f"{base_url}/containers/{task_id}/{node_id}")
 
     # 5. 解析结果
-    return _parse_benchmark_result(logs_text, metric_key)
+    result = _parse_benchmark_payload(logs_text)
+    if result is None:
+        raise RuntimeError("无法从容器日志解析基准测试结果")
+    _validate_benchmark_result(result, metric_key)
+    return result
 
 
 def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> float:
@@ -208,6 +263,75 @@ def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> 
         raise RuntimeError(f"无法从容器日志解析基准测试结果")
     _validate_benchmark_result(result, metric_key)
     return float(result[metric_key])
+
+
+def _summarize_run_diagnostics(
+    run_index: int,
+    result: dict[str, Any],
+    metric_key: str,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "run_index": run_index,
+        "metric_key": metric_key,
+        "metric_value": float(result[metric_key]),
+    }
+    for key in DIAGNOSTIC_KEYS:
+        if key in result:
+            summary[key] = result.get(key)
+    return summary
+
+
+def _build_diagnostics(
+    *,
+    task_type: str,
+    profile: dict[str, Any],
+    image: str,
+    command: str | None,
+    gpu_id: str | None,
+    env: dict[str, str],
+    run_diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    backends = sorted(
+        {
+            str(run.get("actual_backend") or run.get("backend") or run.get("detector_backend"))
+            for run in run_diagnostics
+            if run.get("actual_backend") or run.get("backend") or run.get("detector_backend")
+        }
+    )
+    devices = sorted({str(run.get("device")) for run in run_diagnostics if run.get("device")})
+    gpu_errors = [str(run.get("gpu_error")) for run in run_diagnostics if run.get("gpu_error")]
+    profile_env_keys = (
+        "MATRIX_SIZE",
+        "BATCH_COUNT",
+        "OBSERVATION_DURATION_SEC",
+        "SAMPLE_BATCH_COUNT",
+        "FRAME_COUNT",
+        "FRAME_STRIDE",
+        "WARMUP_FRAMES",
+        "MEASURED_FRAMES",
+        "VIDEO_INFERENCE_MODE",
+        "VIDEO_MODEL_NAME",
+        "VIDEO_MODEL_PATH",
+        "VIDEO_ASSET",
+        "USE_GPU",
+    )
+    return {
+        "task_type": task_type,
+        "profile_id": profile["profile_id"],
+        "metric_key": profile["metric_key"],
+        "operator": profile["operator"],
+        "unit": profile["unit"],
+        "image": image,
+        "command": command,
+        "gpu_id": gpu_id,
+        "warmup_runs": int(profile.get("warmup_runs", 0) or 0),
+        "stability_threshold": STABILITY_THRESHOLD,
+        "profile_env": {key: env.get(key) for key in profile_env_keys if key in env},
+        "actual_backends": backends,
+        "devices": devices,
+        "gpu_errors": gpu_errors,
+        "runs": run_diagnostics,
+    }
 
 
 def _parse_benchmark_payload(logs: str) -> dict[str, Any] | None:

@@ -296,207 +296,12 @@
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>加载中...</span>
       </div>
-      <div v-else-if="selectedOrderDetail" class="orders-detail-content">
-        <el-tabs v-model="orderDetailTab" size="small">
-          <!-- Tab 1: 基本信息 -->
-          <el-tab-pane label="基本信息" name="basic">
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="工单 ID"><code>{{ selectedOrderDetail.id }}</code></el-descriptions-item>
-              <el-descriptions-item label="工单状态">
-                <el-tag :type="orderStatusType(selectedOrderDetail.status)" size="small">{{ formatOrderStatus(selectedOrderDetail.status) }}</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="任务名称">{{ selectedOrderDetail.name || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="任务类型">{{ taskTypeLabel(selectedOrderDetail.business_task?.task_type) || selectedOrderDetail.business_task?.task_type || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="所属模态">{{ modalityLabel(selectedOrderDetail.business_task?.modality) }}</el-descriptions-item>
-              <el-descriptions-item label="路由策略">{{ routingPolicyLabel(selectedOrderDetail.business_task?.runtime_plan?.routing_strategy) || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="源节点">{{ selectedOrderDetail.source_name || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="目的节点">{{ selectedOrderDetail.destination_name || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="开始时间">{{ selectedOrderDetail.business_start_time ? formatTime(selectedOrderDetail.business_start_time) : '-' }}</el-descriptions-item>
-              <el-descriptions-item label="结束时间">{{ selectedOrderDetail.business_end_time ? formatTime(selectedOrderDetail.business_end_time) : '-' }}</el-descriptions-item>
-              <el-descriptions-item label="创建时间">{{ selectedOrderDetail.created_at ? formatTime(selectedOrderDetail.created_at) : '-' }}</el-descriptions-item>
-            </el-descriptions>
-            <template v-if="orderDataProfileRows.length">
-              <div style="margin-top:12px;font-weight:500;font-size:13px;margin-bottom:6px">数据画像</div>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item v-for="row in orderDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
-              </el-descriptions>
-            </template>
-          </el-tab-pane>
-
-          <!-- Tab 2: 路由结果 -->
-          <el-tab-pane label="路由结果" name="routing">
-            <el-collapse v-if="selectedOrderDetail.routing_input_dag" class="raw-collapse" style="margin-bottom:12px">
-              <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input-dag">
-                <pre class="json-block">{{ pretty(selectedOrderDetail.routing_input_dag) }}</pre>
-              </el-collapse-item>
-            </el-collapse>
-            <div v-if="orderPlacementRows.length">
-              <el-table :data="orderPlacementRows" size="small" border>
-                <el-table-column label="子任务" prop="task_node_id" width="100" />
-                <el-table-column label="拓扑节点" prop="topology_node_id" />
-                <el-table-column label="GPU" prop="gpu_device" width="80">
-                  <template #default="{ row }">{{ row.gpu_device ?? '-' }}</template>
-                </el-table-column>
-              </el-table>
-            </div>
-            <el-empty v-else description="暂无路由结果" :image-size="60" />
-          </el-tab-pane>
-
-          <!-- Tab 3: 部署状态 -->
-          <el-tab-pane label="部署状态" name="deployment">
-            <template v-if="selectedOrderDetail.instance">
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="实例 ID"><code>{{ selectedOrderDetail.instance.id }}</code></el-descriptions-item>
-                <el-descriptions-item label="状态">
-                  <el-tag :type="deploymentStatusTag(selectedOrderDetail.instance.status)" size="small">
-                    {{ DEPLOYMENT_STATUS_LABELS[selectedOrderDetail.instance.status] || selectedOrderDetail.instance.status }}
-                  </el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="节点数">{{ selectedOrderDetail.instance.node_count }}</el-descriptions-item>
-                <el-descriptions-item v-if="selectedOrderDetail.instance.error_message" label="错误">{{ selectedOrderDetail.instance.error_message }}</el-descriptions-item>
-              </el-descriptions>
-            </template>
-            <el-empty v-else description="暂未部署" :image-size="60" />
-          </el-tab-pane>
-
-          <!-- Tab 4: 结果 -->
-          <el-tab-pane label="结果" name="result">
-            <template v-if="isMatmulDetail && detailEvaluation">
-              <p style="color:var(--el-text-color-secondary);font-size:13px;margin-bottom:12px">
-                {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
-              </p>
-              <div style="margin-bottom:12px">
-                <div v-for="(step, i) in MATMUL_PIPELINE_STEPS" :key="step.role || i"
-                     style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
-                  <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
-                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
-                </div>
-              </div>
-              <div v-if="detailMatmulInputRows.length" style="margin-bottom:12px">
-                <div style="font-weight:500;font-size:13px;margin-bottom:6px">输入参数</div>
-                <el-descriptions :column="1" border size="small">
-                  <el-descriptions-item v-for="r in detailMatmulInputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
-                </el-descriptions>
-              </div>
-              <div v-if="detailMatmulOutputRows.length" style="margin-bottom:12px">
-                <div style="font-weight:500;font-size:13px;margin-bottom:6px">计算输出</div>
-                <el-descriptions :column="1" border size="small">
-                  <el-descriptions-item v-for="r in detailMatmulOutputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
-                </el-descriptions>
-              </div>
-              <div v-if="detailMatmulConsistency" style="margin-bottom:12px">
-                <el-tag :type="detailMatmulConsistency.ok ? 'success' : 'warning'" size="small">
-                  {{ detailMatmulConsistency.label }}
-                </el-tag>
-                <span v-if="detailMatmulConsistency.detail" style="font-size:12px;color:var(--el-text-color-secondary);margin-left:8px">{{ detailMatmulConsistency.detail }}</span>
-              </div>
-              <div v-if="detailMatmulVerdict" :class="['verdict-block', detailMatmulVerdict.statusClass]" style="padding:12px;border-radius:6px;margin-bottom:12px">
-                <div style="font-weight:600;font-size:14px">{{ detailMatmulVerdict.title }}</div>
-                <div style="font-size:12px;margin-top:4px">{{ detailMatmulVerdict.subtitle }}</div>
-              </div>
-            </template>
-            <template v-else-if="isVideoDetail && detailEvaluation">
-              <p style="color:var(--el-text-color-secondary);font-size:13px;margin-bottom:12px">
-                {{ taskTypeSummary(selectedOrderDetail.business_task?.task_type) }}
-              </p>
-              <div style="margin-bottom:12px">
-                <div v-for="(step, i) in VIDEO_PIPELINE_STEPS" :key="step.role || i"
-                     style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px">
-                  <el-tag size="small" type="info">{{ i + 1 }}</el-tag>
-                  <span><strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}</span>
-                </div>
-              </div>
-
-              <div class="video-result-card">
-                <div class="video-preview">
-                  <template v-if="detailVideoPreview">
-                    <div class="video-proof-frame">
-                      <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
-                      <div v-if="detailVideoNeedsOverlay" class="video-proof-overlay">
-                        <div v-if="detailVideoEvidenceRows.length" class="video-proof-badge">
-                          <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
-                        </div>
-                        <div
-                          v-for="row in detailVideoDetections"
-                          :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
-                          class="video-proof-box"
-                          :style="detailVideoBoxStyle(row)"
-                        >
-                          <span>{{ row.label_zh || row.display_label || row.label }}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </template>
-                  <el-empty v-else description="等待带框预览图" :image-size="80" />
-                </div>
-                <div class="video-result-side">
-                  <div v-if="detailVideoInputRows.length" style="margin-bottom:12px">
-                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">输入参数</div>
-                    <el-descriptions :column="1" border size="small">
-                      <el-descriptions-item v-for="r in detailVideoInputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
-                    </el-descriptions>
-                  </div>
-                  <div v-if="detailVideoOutputRows.length" style="margin-bottom:12px">
-                    <div style="font-weight:500;font-size:13px;margin-bottom:6px">推理输出</div>
-                    <el-descriptions :column="1" border size="small">
-                      <el-descriptions-item v-for="r in detailVideoOutputRows" :key="r.label" :label="r.label">{{ r.value }}</el-descriptions-item>
-                    </el-descriptions>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="detailVideoDetections.length" style="font-weight:500;font-size:13px;margin:12px 0 6px">分类检测结果</div>
-              <el-table v-if="detailVideoDetections.length" :data="detailVideoDetections" size="small" border style="margin-bottom:12px">
-                <el-table-column label="类别" min-width="140">
-                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="置信度" width="100">
-                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
-                </el-table-column>
-                <el-table-column label="画框坐标" min-width="180">
-                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
-                </el-table-column>
-                <el-table-column label="来源" width="110">
-                  <template #default="{ row }">
-                    <el-tag :type="row.fallback ? 'info' : 'success'" size="small">{{ row.fallback ? '检测结果' : '模型输出' }}</el-tag>
-                  </template>
-                </el-table-column>
-              </el-table>
-
-              <div v-if="detailVideoVerdict" :class="['verdict-block', detailVideoVerdict.statusClass]" style="padding:12px;border-radius:6px;margin-bottom:12px">
-                <div style="font-weight:600;font-size:14px">{{ detailVideoVerdict.title }}</div>
-                <div style="font-size:12px;margin-top:4px">{{ detailVideoVerdict.subtitle }}</div>
-              </div>
-            </template>
-            <template v-else-if="detailEvaluation">
-              <div :class="['verdict-block', detailEvaluation.business_success ? 'success' : 'danger']"
-                   style="padding:12px;border-radius:6px;margin-bottom:12px">
-                <div style="font-weight:600">{{ detailEvaluation.business_success ? '业务目标达成' : '业务目标未达成' }}</div>
-                <div v-if="detailEvaluation.failure_reason" style="font-size:12px;margin-top:4px">{{ detailEvaluation.failure_reason }}</div>
-              </div>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="指标">{{ detailEvaluation.metric_key || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="目标 / 实际">
-                  {{ formatMetricValue(detailEvaluation.target_value) }} / {{ formatMetricValue(detailEvaluation.actual_value) }} {{ detailEvaluation.unit }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </template>
-            <el-empty v-else description="任务尚未跑完或未上报业务指标" :image-size="60" />
-            <el-collapse v-if="detailEvaluation?.result_metadata" class="raw-collapse" style="margin-top:12px">
-              <el-collapse-item title="原始结果 JSON" name="result_metadata">
-                <pre class="json-block">{{ pretty(detailEvaluation.result_metadata) }}</pre>
-              </el-collapse-item>
-            </el-collapse>
-            <template v-if="orderResultObjects.length">
-              <div style="font-weight:500;font-size:13px;margin:12px 0 6px">结果文件</div>
-              <el-table :data="orderResultObjects" size="small" border>
-                <el-table-column label="名称" prop="name" />
-                <el-table-column label="URI" prop="uri" show-overflow-tooltip />
-              </el-table>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
+      <OrderDetailPanel
+        v-else-if="selectedOrderDetail"
+        v-model:active-tab="orderDetailTab"
+        :detail="selectedOrderDetail"
+        :result-objects="orderResultObjects"
+      />
     </el-drawer>
 
     <aside class="intent-panel" v-show="!showOrders" :style="showOrders ? 'overflow: hidden; padding: 0;' : ''">
@@ -520,7 +325,7 @@
         <div v-if="draft?.validation_errors?.length" class="errors">
           <el-alert v-for="(item, index) in draft.validation_errors" :key="index" :title="item" type="warning" show-icon :closable="false" />
         </div>
-        <el-collapse v-if="draft?.routing_dag_preview" class="raw-collapse">
+        <el-collapse v-if="showRoutingDagJson && draft?.routing_dag_preview" class="raw-collapse">
           <el-collapse-item title="路由 DAG JSON 预览" name="draft-dag">
             <pre class="json-block">{{ pretty(draft.routing_dag_preview) }}</pre>
           </el-collapse-item>
@@ -563,7 +368,7 @@
             <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
             <el-descriptions-item label="节点分配">{{ formatRoutingPlacements(routing.placements) }}</el-descriptions-item>
           </el-descriptions>
-          <el-collapse v-if="routing.input_payload" class="raw-collapse">
+          <el-collapse v-if="showRoutingDagJson && routing.input_payload" class="raw-collapse">
             <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input">
               <pre class="json-block">{{ pretty(routing.input_payload) }}</pre>
             </el-collapse-item>
@@ -599,15 +404,14 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled } from '@element-plus/icons-vue'
-import { conversationApi, ordersApi, businessApi } from '@/api'
+import { adminApi, conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
-  modalityLabel, taskTypeLabel, describeDataProfile, taskTypeSummary,
-  buildMatmulInputRows, buildMatmulOutputRows,
-  buildMatmulParamConsistency, buildMatmulVerdict,
-  buildVideoInputRows, buildVideoOutputRows, buildVideoVerdict,
-  videoDetectionBoxStyle, videoDetections, videoPreviewEvidenceRows, videoPreviewNeedsOverlay, videoPreviewDataUrl,
-  MATMUL_PIPELINE_STEPS, VIDEO_PIPELINE_STEPS, formatMetricValue,
+  modalityLabel,
+  taskTypeLabel,
+  describeDataProfile,
+  formatMetricValue,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
@@ -632,38 +436,9 @@ const selectedOrderId = ref(null)
 const selectedOrderDetail = ref(null)
 const orderDetailLoading = ref(false)
 const orderStatusFilter = ref('')
-const orderDetailTab = ref('basic')
+const orderDetailTab = ref('business')
 const orderResultObjects = ref([])
-
-const isMatmulDetail = computed(() =>
-  selectedOrderDetail.value?.business_task?.task_type === 'high_throughput_matmul'
-)
-const isVideoDetail = computed(() =>
-  selectedOrderDetail.value?.business_task?.task_type === 'low_latency_video_pipeline'
-)
-const detailEvaluation = computed(() => selectedOrderDetail.value?.evaluation)
-const detailDataProfile = computed(() => selectedOrderDetail.value?.business_task?.data_profile)
-const detailMatmulInputRows = computed(() => buildMatmulInputRows(detailDataProfile.value))
-const detailMatmulOutputRows = computed(() =>
-  buildMatmulOutputRows(detailEvaluation.value?.result_metadata, detailEvaluation.value)
-)
-const detailMatmulConsistency = computed(() =>
-  buildMatmulParamConsistency(detailDataProfile.value, detailEvaluation.value?.result_metadata)
-)
-const detailMatmulVerdict = computed(() => buildMatmulVerdict(detailEvaluation.value))
-const detailVideoInputRows = computed(() => buildVideoInputRows(detailDataProfile.value))
-const detailVideoOutputRows = computed(() =>
-  buildVideoOutputRows(detailEvaluation.value?.result_metadata, detailEvaluation.value)
-)
-const detailVideoVerdict = computed(() => buildVideoVerdict(detailEvaluation.value))
-const detailVideoPreview = computed(() => videoPreviewDataUrl(detailEvaluation.value?.result_metadata))
-const detailVideoDetections = computed(() => videoDetections(detailEvaluation.value?.result_metadata))
-const detailVideoEvidenceRows = computed(() => videoPreviewEvidenceRows(detailEvaluation.value?.result_metadata))
-const detailVideoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(detailEvaluation.value?.result_metadata))
-
-function detailVideoBoxStyle(row) {
-  return videoDetectionBoxStyle(row, detailEvaluation.value?.result_metadata)
-}
+const showRoutingDagJson = ref(false)
 
 let routingTimer = null
 let abortController = null
@@ -672,30 +447,6 @@ const filteredOrders = computed(() => {
   if (!orderStatusFilter.value) return myOrders.value
   return myOrders.value.filter(o => o.order_status === orderStatusFilter.value)
 })
-
-const orderPlacementRows = computed(() => {
-  const p = selectedOrderDetail.value?.routing_result?.placements
-  if (!p) return []
-  const normalize = (role, placement) => {
-    if (!placement) return { task_node_id: role, topology_node_id: '未部署', gpu_device: null }
-    if (typeof placement === 'string') return { task_node_id: role, topology_node_id: placement, gpu_device: null }
-    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
-    return {
-      task_node_id: placement.task_node_id || placement.node_id || role,
-      topology_node_id: placement.topology_node_id || placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
-      gpu_device: gpu,
-    }
-  }
-  if (Array.isArray(p)) return p.map(item => normalize(item.task_node_id || item.node_id || item.role || 'node', item))
-  return Object.entries(p).map(([role, placement]) => normalize(role, placement))
-})
-
-const orderDataProfileRows = computed(() =>
-  describeDataProfile(
-    selectedOrderDetail.value?.business_task?.task_type,
-    selectedOrderDetail.value?.business_task?.data_profile
-  ) || []
-)
 
 const displayMessages = computed(() => {
   const backendMsgs = conversation.value?.messages || []
@@ -996,6 +747,19 @@ async function loadOrders() {
   }
 }
 
+async function loadSystemSettings() {
+  if (!auth.isAdmin) {
+    showRoutingDagJson.value = false
+    return
+  }
+  try {
+    const { data } = await adminApi.getSystemSettings()
+    showRoutingDagJson.value = Boolean(data?.show_routing_dag_json)
+  } catch {
+    showRoutingDagJson.value = false
+  }
+}
+
 watch(showOrders, (val) => {
   if (val) loadOrders()
 })
@@ -1004,7 +768,7 @@ async function openOrderDetail(order) {
   const id = order.order_id || order.id
   selectedOrderId.value = id
   selectedOrderDetail.value = null
-  orderDetailTab.value = 'basic'
+  orderDetailTab.value = 'business'
   orderResultObjects.value = []
   orderDrawerVisible.value = true
   orderDetailLoading.value = true
@@ -1240,6 +1004,7 @@ function logout() {
 }
 
 onMounted(async () => {
+  await loadSystemSettings()
   await refreshList()
   if (conversations.value.length) {
     const lastId = localStorage.getItem('lastConversationId')

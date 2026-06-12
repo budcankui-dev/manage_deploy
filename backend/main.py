@@ -11,6 +11,7 @@ from api import (
     baselines_router,
     business_tasks_router,
     conversations_router,
+    demo_assets_router,
     instances_router,
     nodes_router,
     orders_router,
@@ -69,6 +70,7 @@ app.include_router(routing_router)
 app.include_router(admin_router)
 app.include_router(uploads_router)
 app.include_router(baselines_router)
+app.include_router(demo_assets_router)
 
 
 @app.get("/health")

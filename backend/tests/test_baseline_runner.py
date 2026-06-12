@@ -1,6 +1,6 @@
 import pytest
 
-from services.baseline_runner import _parse_benchmark_result, run_benchmark
+from services.baseline_runner import _build_diagnostics, _parse_benchmark_result, _summarize_run_diagnostics, run_benchmark
 
 
 def test_parse_benchmark_result_accepts_plain_json_line():
@@ -71,3 +71,34 @@ def test_video_baseline_metadata_is_lower_is_better():
     assert profile["metric_key"] == "frame_latency_p90_ms"
     assert profile["operator"] == "<="
     assert profile["unit"] == "ms"
+
+
+def test_baseline_diagnostics_capture_backend_and_gpu_error():
+    from services.baseline_runner import BENCHMARK_PROFILES
+
+    profile = BENCHMARK_PROFILES["low_latency_video_pipeline"]
+    result = {
+        "frame_latency_p90_ms": 160.5,
+        "actual_backend": "opencv_dnn_cpu",
+        "device": "cpu",
+        "model_name": "yolov5n",
+        "gpu_requested": True,
+        "gpu_available": False,
+        "gpu_error": "GPU was requested but no CUDA/NVIDIA device was visible in the container",
+    }
+
+    run = _summarize_run_diagnostics(1, result, profile["metric_key"])
+    diagnostics = _build_diagnostics(
+        task_type="low_latency_video_pipeline",
+        profile=profile,
+        image=profile["image"],
+        command=profile["command"],
+        gpu_id=profile["gpu_id"],
+        env=profile["env"],
+        run_diagnostics=[run],
+    )
+
+    assert diagnostics["actual_backends"] == ["opencv_dnn_cpu"]
+    assert diagnostics["devices"] == ["cpu"]
+    assert diagnostics["gpu_errors"][0].startswith("GPU was requested")
+    assert diagnostics["profile_env"]["VIDEO_MODEL_NAME"] == "yolov5n"

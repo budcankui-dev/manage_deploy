@@ -41,6 +41,34 @@
               {{ row.value }}
             </el-descriptions-item>
           </el-descriptions>
+          <div v-if="isVideoTask && videoInputUrl" class="data-evidence-card">
+            <div class="evidence-card-header">
+              <strong>原始输入视频</strong>
+              <span>固定验收视频，可直接播放核对输入数据</span>
+            </div>
+            <video class="input-video-player" controls muted preload="metadata" :src="videoInputUrl">
+              当前浏览器不支持视频播放。
+            </video>
+          </div>
+          <div v-else-if="isMatmulTask" class="data-evidence-card">
+            <div class="evidence-card-header">
+              <strong>输入矩阵示意</strong>
+              <span>{{ matmulPreview.caption }}</span>
+            </div>
+            <div class="matrix-preview">
+              <table>
+                <tbody>
+                  <tr v-for="(row, rowIndex) in matmulPreview.rows" :key="rowIndex">
+                    <td v-for="(value, colIndex) in row" :key="`${rowIndex}-${colIndex}`">{{ value }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p>
+                seed={{ matmulPreview.seed }}，批次数={{ matmulPreview.batchCount }}；
+                页面仅展示局部样例，实际容器按固定参数生成完整矩阵并上报结果。
+              </p>
+            </div>
+          </div>
 
           <h3 class="section-title">业务目标</h3>
           <div class="objective-card">
@@ -117,7 +145,7 @@
             </el-table-column>
           </el-table>
 
-          <el-collapse v-if="detail.routing_input_dag || routingResult" class="raw-collapse">
+          <el-collapse v-if="showRoutingDagJson && (detail.routing_input_dag || routingResult)" class="raw-collapse">
             <el-collapse-item v-if="detail.routing_input_dag" title="提交给路由系统的 DAG JSON" name="routing-input">
               <pre class="json-block">{{ prettyJson(detail.routing_input_dag) }}</pre>
             </el-collapse-item>
@@ -301,6 +329,7 @@ import {
   buildMatmulInputRows,
   buildMatmulOutputRows,
   buildMatmulParamConsistency,
+  buildMatmulPreview,
   buildMatmulVerdict,
   buildVideoInputRows,
   buildVideoOutputRows,
@@ -314,6 +343,7 @@ import {
   taskTypeSummary,
   videoDetectionBoxStyle,
   videoDetections,
+  videoInputVideoUrl,
   videoPreviewDataUrl,
   videoPreviewEvidenceRows,
   videoPreviewNeedsOverlay,
@@ -324,6 +354,7 @@ const props = defineProps({
   detail: { type: Object, default: null },
   resultObjects: { type: Array, default: () => [] },
   activeTab: { type: String, default: 'business' },
+  showRoutingDagJson: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:activeTab'])
@@ -345,6 +376,8 @@ const isVideoTask = computed(() => taskType.value === 'low_latency_video_pipelin
 const taskSummary = computed(() => taskTypeSummary(taskType.value))
 const dataProfileRows = computed(() => describeDataProfile(taskType.value, businessTask.value?.data_profile))
 const runtimePlanRows = computed(() => describeRuntimePlan(taskType.value, businessTask.value?.runtime_plan))
+const matmulPreview = computed(() => buildMatmulPreview(businessTask.value?.data_profile))
+const videoInputUrl = computed(() => videoInputVideoUrl(businessTask.value?.data_profile))
 const objectiveForDisplay = computed(() => {
   const objective = { ...(businessTask.value?.business_objective || {}) }
   if (objective.target_value == null && evaluation.value?.target_value != null) objective.target_value = evaluation.value.target_value
@@ -693,6 +726,72 @@ function nodeStatusLabel(value) {
 
 .detail-desc {
   margin-bottom: 8px;
+}
+
+.data-evidence-card {
+  margin: 12px 0 8px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.96)),
+    var(--bg-tertiary, #f8fafc);
+}
+
+.evidence-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.evidence-card-header strong {
+  color: var(--text-primary, #1f2937);
+  font-size: 14px;
+}
+
+.evidence-card-header span {
+  color: var(--text-secondary, #607085);
+  font-size: 12px;
+}
+
+.input-video-player {
+  display: block;
+  width: min(100%, 720px);
+  max-height: 360px;
+  border-radius: 12px;
+  background: #0f172a;
+}
+
+.matrix-preview {
+  overflow-x: auto;
+}
+
+.matrix-preview table {
+  border-collapse: collapse;
+  min-width: 360px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.matrix-preview td {
+  padding: 9px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #0f172a;
+  background: #fff;
+  text-align: right;
+}
+
+.matrix-preview tr:first-child td {
+  background: #f0f9ff;
+}
+
+.matrix-preview p {
+  margin: 10px 0 0;
+  color: var(--text-secondary, #607085);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .objective-card,

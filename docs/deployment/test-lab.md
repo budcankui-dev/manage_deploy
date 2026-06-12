@@ -80,8 +80,10 @@ admin-server 后端代码路径：
 
 ```bash
 cd /home/bupt/manage_deploy/backend
-nohup /home/bupt/miniconda3/envs/manage_deploy/bin/uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &
+nohup /home/bupt/miniconda3/bin/python3.13 -m uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &
 ```
+
+注意：admin-server 上的 `/home/bupt/manage_deploy/backend/venv` 是历史同步遗留目录，内部 Python 链接指向本机 macOS Homebrew 路径，不能作为远端启动环境。管理节点后端当前使用 `/home/bupt/miniconda3/bin/python3.13` 启动；若重装环境，至少需要安装 `backend/pyproject.toml` 中的运行依赖，并额外确认 `minio`、`pillow` 可导入。
 
 ## 管理面 .env
 
@@ -136,7 +138,7 @@ rsync -az frontend/dist/ manage-admin:/home/bupt/manage_deploy/frontend/dist/
 rsync -az workers/low-latency-video/ manage-admin:/home/bupt/manage_deploy/workers/low-latency-video/
 
 # 重启后端。避免 pkill -f 匹配到当前 SSH 命令本身。
-ssh manage-admin "pids=\$(pgrep -f '[u]vicorn main:app.*8181' || true); [ -n \"\$pids\" ] && kill \$pids || true; sleep 1; cd /home/bupt/manage_deploy/backend && nohup /home/bupt/miniconda3/envs/manage_deploy/bin/uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
+ssh manage-admin "pids=\$(pgrep -f '[u]vicorn main:app.*8181' || true); [ -n \"\$pids\" ] && kill \$pids || true; sleep 1; cd /home/bupt/manage_deploy/backend && nohup /home/bupt/miniconda3/bin/python3.13 -m uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
 
 # 刷新前端静态文件
 ssh manage-admin "docker cp /home/bupt/manage_deploy/frontend/dist/. idn-frontend:/usr/share/nginx/html/"

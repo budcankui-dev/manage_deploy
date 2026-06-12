@@ -346,11 +346,11 @@
             </el-table>
             <pre class="details-json">{{ JSON.stringify(parserResult.business_objective || {}, null, 2) }}</pre>
           </section>
-          <section v-if="parserResult.routing_dag">
+          <section v-if="showRoutingDagJson && parserResult.routing_dag">
             <h3>路由 DAG JSON</h3>
             <pre class="details-json">{{ JSON.stringify(parserResult.routing_dag || {}, null, 2) }}</pre>
           </section>
-          <section v-if="parserResult.trace">
+          <section v-if="showRoutingDagJson && parserResult.trace">
             <h3>解析流程原始信息</h3>
             <pre class="details-json">{{ JSON.stringify(parserResult.trace || {}, null, 2) }}</pre>
           </section>
@@ -493,6 +493,7 @@ const parserLoading = ref(false)
 const selectedModel = ref('')
 const selectedSampleId = ref('')
 const autoRefreshTimer = ref(null)
+const showRoutingDagJson = ref(false)
 
 const dataset = computed(() => latest.value?.dataset || {})
 const config = computed(() => latest.value?.config || {})
@@ -889,6 +890,15 @@ async function loadLatest() {
   }
 }
 
+async function loadSystemSettings() {
+  try {
+    const { data } = await adminApi.getSystemSettings()
+    showRoutingDagJson.value = Boolean(data?.show_routing_dag_json)
+  } catch {
+    showRoutingDagJson.value = false
+  }
+}
+
 async function runOfficialEvaluation() {
   if (dashscopeConfigured.value) {
     await submitBatch()
@@ -1020,7 +1030,7 @@ watch(isBatchActive, active => {
 })
 
 onMounted(async () => {
-  await loadLatest()
+  await Promise.all([loadLatest(), loadSystemSettings()])
   startAutoRefresh()
 })
 

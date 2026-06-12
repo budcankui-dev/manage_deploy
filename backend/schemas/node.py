@@ -9,11 +9,21 @@ class NodeBase(BaseModel):
     management_ip: str
     business_ip: str
     business_ipv6: Optional[str] = None
+    gpu_count: int = Field(default=0, ge=0)
+    gpu_model: Optional[str] = None
+    gpu_memory_mb: Optional[int] = Field(default=None, ge=0)
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = Field(default=None, ge=0)
+    memory_mb: Optional[int] = Field(default=None, ge=0)
+    driver_version: Optional[str] = None
+    cuda_version: Optional[str] = None
+    resource_note: Optional[str] = None
 
 
 class NodeCreate(NodeBase):
     node_kind: Optional[str] = None
     is_schedulable: bool = True
+    is_routable: bool = True
 
 
 class NodeUpdate(BaseModel):
@@ -22,8 +32,18 @@ class NodeUpdate(BaseModel):
     management_ip: Optional[str] = None
     business_ip: Optional[str] = None
     business_ipv6: Optional[str] = None
+    gpu_count: Optional[int] = Field(default=None, ge=0)
+    gpu_model: Optional[str] = None
+    gpu_memory_mb: Optional[int] = Field(default=None, ge=0)
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = Field(default=None, ge=0)
+    memory_mb: Optional[int] = Field(default=None, ge=0)
+    driver_version: Optional[str] = None
+    cuda_version: Optional[str] = None
+    resource_note: Optional[str] = None
     node_kind: Optional[str] = None
     is_schedulable: Optional[bool] = None
+    is_routable: Optional[bool] = None
 
 
 class NodeResponse(NodeBase):
@@ -32,6 +52,7 @@ class NodeResponse(NodeBase):
     id: str
     node_kind: Optional[str] = None
     is_schedulable: bool = True
+    is_routable: bool = True
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -45,8 +66,18 @@ class NodeSimple(BaseModel):
     management_ip: str
     business_ip: str
     business_ipv6: Optional[str] = None
+    gpu_count: int = 0
+    gpu_model: Optional[str] = None
+    gpu_memory_mb: Optional[int] = None
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    memory_mb: Optional[int] = None
+    driver_version: Optional[str] = None
+    cuda_version: Optional[str] = None
+    resource_note: Optional[str] = None
     node_kind: Optional[str] = None
     is_schedulable: bool = True
+    is_routable: bool = True
 
 
 class OrphanContainerResponse(BaseModel):

@@ -23,6 +23,7 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "benchmark_routing_mode": "internal_auto",
     "expert_mode": True,
     "show_internal_controls": False,
+    "show_routing_dag_json": False,
     "modality_priority_map": normalize_modality_priority_map(),
     "notes": "真实环境用于专家验收和外部路由联调；开发环境用于本地验证和调试。",
 }
@@ -68,6 +69,7 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
     merged["intent_rule_fallback_enabled"] = bool(merged.get("intent_rule_fallback_enabled", True))
     merged["expert_mode"] = bool(merged.get("expert_mode", True))
     merged["show_internal_controls"] = bool(merged.get("show_internal_controls", False))
+    merged["show_routing_dag_json"] = bool(merged.get("show_routing_dag_json", False))
     merged["modality_priority_map"] = normalize_modality_priority_map(
         merged.get("modality_priority_map")
     )

@@ -9,6 +9,7 @@ from .routing import router as routing_router
 from .admin import router as admin_router
 from .uploads import router as uploads_router
 from .baselines import router as baselines_router
+from .demo_assets import router as demo_assets_router
 
 __all__ = [
     "nodes_router",
@@ -22,4 +23,5 @@ __all__ = [
     "admin_router",
     "uploads_router",
     "baselines_router",
+    "demo_assets_router",
 ]
