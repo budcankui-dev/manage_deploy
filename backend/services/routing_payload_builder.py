@@ -52,6 +52,7 @@ def build_routing_payload(
         "order_id": order_id,
         "job_name": job_name,
         "order_name": order_name,
+        "task_type": task_type,
         "source_name": source_name,
         "destination_name": destination_name,
         "modal": modal,

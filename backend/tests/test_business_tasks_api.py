@@ -664,6 +664,7 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["job_id"] == order.id
     assert dag["order_id"] == order.id
     assert dag["job_name"] == "视频AI推理"
+    assert dag["task_type"] == "low_latency_video_pipeline"
     assert dag["priority"] == 1
     assert "constraints" not in dag
     assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
@@ -1015,6 +1016,7 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
     pending_orders = list_response.json()
     assert [item["order_id"] for item in pending_orders] == [order_id]
     assert pending_orders[0]["routing_input_dag"]["job_id"] == order_id
+    assert pending_orders[0]["routing_input_dag"]["task_type"] == "low_latency_video_pipeline"
 
     claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
     assert claim_response.status_code == 200
