@@ -93,8 +93,8 @@
                 <el-table-column prop="role" label="角色" width="120" />
                 <el-table-column label="部署节点" min-width="220">
                   <template #default="{ row }">
-                    <span v-if="row.worker_host === '未部署'" style="color: #909399">未部署容器</span>
-                    <span v-else>{{ row.worker_host }}</span>
+                    <span v-if="row.topology_node_id === '未部署'" style="color: #909399">未部署容器</span>
+                    <span v-else>{{ row.topology_node_id }}</span>
                   </template>
                 </el-table-column>
                 <el-table-column label="GPU" width="120">
@@ -104,7 +104,7 @@
                     </span>
                   </template>
                 </el-table-column>
-                <el-table-column prop="node_id" label="路由角色" width="110" />
+                <el-table-column prop="task_node_id" label="子任务" width="110" />
               </el-table>
             </template>
             <el-empty v-else description="无路由结果" />
@@ -325,8 +325,8 @@ const placementRows = computed(() => {
     if (!placement) {
       return {
         role: roleName,
-        node_id: role,
-        worker_host: '未部署',
+        task_node_id: role,
+        topology_node_id: '未部署',
         gpu_device: null,
         gpu_display: requiresGpu ? '未记录' : '不需要',
         requires_gpu: requiresGpu,
@@ -335,8 +335,8 @@ const placementRows = computed(() => {
     if (typeof placement === 'string') {
       return {
         role: roleName,
-        node_id: role,
-        worker_host: placement,
+        task_node_id: role,
+        topology_node_id: placement,
         gpu_device: null,
         gpu_display: requiresGpu ? '未记录' : '不需要',
         requires_gpu: requiresGpu,
@@ -345,8 +345,8 @@ const placementRows = computed(() => {
     const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
     return {
       role: roleName,
-      node_id: placement.node_id || role,
-      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      task_node_id: placement.task_node_id || placement.node_id || role,
+      topology_node_id: placement.topology_node_id || placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
       gpu_device: gpu,
       gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
       requires_gpu: requiresGpu,
@@ -354,7 +354,7 @@ const placementRows = computed(() => {
   }
   if (Array.isArray(placements)) {
     const map = {}
-    placements.forEach(p => { map[p.node_id] = p })
+    placements.forEach(p => { map[p.task_node_id || p.node_id] = p })
     return [
       rowFor('source', map.source),
       rowFor('compute', map.compute || map.worker),

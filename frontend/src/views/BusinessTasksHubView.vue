@@ -263,19 +263,19 @@
       <p style="margin-bottom:12px">为任务 <strong>{{ manualRoutingOrder?.name || '未命名' }}</strong> 分配计算节点</p>
       <el-form label-width="100px" size="small">
         <el-form-item label="数据源节点">
-          <el-select v-model="manualPlacements.source.worker_host" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">
+          <el-select v-model="manualPlacements.source.topology_node_id" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
           <el-checkbox v-model="manualPlacements.source.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
         </el-form-item>
         <el-form-item label="计算节点">
-          <el-select v-model="manualPlacements.worker.worker_host" placeholder="选择节点" style="width:200px">
+          <el-select v-model="manualPlacements.compute.topology_node_id" placeholder="选择节点" style="width:200px">
             <el-option v-for="n in schedulableNodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
-          <el-input v-model="manualPlacements.worker.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
+          <el-input v-model="manualPlacements.compute.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
         </el-form-item>
         <el-form-item label="汇总节点">
-          <el-select v-model="manualPlacements.sink.worker_host" placeholder="选择节点" :disabled="manualPlacements.sink.skip_deploy" clearable style="width:200px">
+          <el-select v-model="manualPlacements.sink.topology_node_id" placeholder="选择节点" :disabled="manualPlacements.sink.skip_deploy" clearable style="width:200px">
             <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
           </el-select>
           <el-checkbox v-model="manualPlacements.sink.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
@@ -375,9 +375,9 @@ const manualRoutingVisible = ref(false)
 const manualRoutingOrder = ref(null)
 const manualRoutingLoading = ref(false)
 const manualPlacements = ref({
-  source: { worker_host: '', gpu_device: null, skip_deploy: false },
-  worker: { worker_host: '', gpu_device: '0', skip_deploy: false },
-  sink: { worker_host: '', gpu_device: null, skip_deploy: false },
+  source: { topology_node_id: '', gpu_device: null, skip_deploy: false },
+  compute: { topology_node_id: '', gpu_device: '0', skip_deploy: false },
+  sink: { topology_node_id: '', gpu_device: null, skip_deploy: false },
 })
 
 
@@ -390,8 +390,8 @@ const placementRows = computed(() => {
     if (!placement) {
       return {
         role: roleName,
-        node_id: role,
-        worker_host: '未部署',
+        task_node_id: role,
+        topology_node_id: '未部署',
         gpu_device: null,
         gpu_display: requiresGpu ? '未记录' : '不需要',
         requires_gpu: requiresGpu,
@@ -400,8 +400,8 @@ const placementRows = computed(() => {
     if (typeof placement === 'string') {
       return {
         role: roleName,
-        node_id: role,
-        worker_host: placement,
+        task_node_id: role,
+        topology_node_id: placement,
         gpu_device: null,
         gpu_display: requiresGpu ? '未记录' : '不需要',
         requires_gpu: requiresGpu,
@@ -410,8 +410,8 @@ const placementRows = computed(() => {
     const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
     return {
       role: roleName,
-      node_id: placement.node_id || role,
-      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      task_node_id: placement.task_node_id || placement.node_id || role,
+      topology_node_id: placement.topology_node_id || placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
       gpu_device: gpu,
       gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
       requires_gpu: requiresGpu,
@@ -419,7 +419,7 @@ const placementRows = computed(() => {
   }
   if (Array.isArray(placements)) {
     const map = {}
-    placements.forEach(p => { map[p.node_id] = p })
+    placements.forEach(p => { map[p.task_node_id || p.node_id] = p })
     return [
       rowFor('source', map.source),
       rowFor('compute', map.compute || map.worker),
@@ -860,25 +860,25 @@ async function deleteCurrentBenchmarkRun() {
 function openManualRouting(row) {
   manualRoutingOrder.value = row
   manualPlacements.value = {
-    source: { worker_host: '', gpu_device: null, skip_deploy: false },
-    worker: { worker_host: '', gpu_device: '0', skip_deploy: false },
-    sink: { worker_host: '', gpu_device: null, skip_deploy: false },
+    source: { topology_node_id: '', gpu_device: null, skip_deploy: false },
+    compute: { topology_node_id: '', gpu_device: '0', skip_deploy: false },
+    sink: { topology_node_id: '', gpu_device: null, skip_deploy: false },
   }
   manualRoutingVisible.value = true
 }
 
 async function submitManualRouting() {
-  if (!manualPlacements.value.worker.worker_host) {
-    ElMessage.warning('Worker 节点必须选择')
+  if (!manualPlacements.value.compute.topology_node_id) {
+    ElMessage.warning('计算节点必须选择')
     return
   }
   manualRoutingLoading.value = true
   try {
-    const placements = ['source', 'worker', 'sink']
-      .filter(role => !manualPlacements.value[role].skip_deploy && manualPlacements.value[role].worker_host)
+    const placements = ['source', 'compute', 'sink']
+      .filter(role => !manualPlacements.value[role].skip_deploy && manualPlacements.value[role].topology_node_id)
       .map(role => ({
-        node_id: role,
-        worker_host: manualPlacements.value[role].worker_host,
+        task_node_id: role,
+        topology_node_id: manualPlacements.value[role].topology_node_id,
         gpu_device: manualPlacements.value[role].gpu_device || null,
       }))
     await ordersApi.submitRoutingResult(manualRoutingOrder.value.order_id, { placements })

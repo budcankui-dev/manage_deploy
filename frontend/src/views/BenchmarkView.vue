@@ -843,13 +843,13 @@ function summarizePlacements(placements) {
   if (Array.isArray(placements)) {
     return placements.map(p => {
       const gpu = p.gpu_device != null ? ` GPU ${p.gpu_device}` : ''
-      return `${p.node_id || p.role}:${p.worker_host || p.node_name || p.node_id}${gpu}`
+      return `${p.task_node_id || p.role}:${p.topology_node_id || p.hostname || p.node_name || '—'}${gpu}`
     }).join(' / ')
   }
   if (typeof placements === 'object') {
     return Object.entries(placements).map(([role, placement]) => {
       if (typeof placement === 'string') return `${role}:${placement}`
-      const node = placement?.node_name || placement?.worker_host || placement?.node_id || '—'
+      const node = placement?.topology_node_id || placement?.node_name || placement?.worker_host || placement?.node_id || '—'
       const gpu = placement?.gpu_device != null
         ? ` GPU ${placement.gpu_device}`
         : Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length

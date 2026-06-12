@@ -41,10 +41,10 @@ def _placements(order: TaskOrder) -> list[dict[str, Any]]:
         for role, value in placements.items():
             if isinstance(value, dict):
                 row = dict(value)
-                row.setdefault("node_id", role)
+                row.setdefault("task_node_id", role)
                 rows.append(row)
             elif value:
-                rows.append({"node_id": role, "worker_host": str(value)})
+                rows.append({"task_node_id": role, "topology_node_id": str(value)})
         return rows
     return []
 
@@ -61,7 +61,7 @@ def _gpu_ids(placement: dict[str, Any]) -> list[str]:
 
 
 def _worker_host(placement: dict[str, Any]) -> str | None:
-    value = placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
+    value = placement.get("topology_node_id") or placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
     return str(value) if value else None
 
 
@@ -100,7 +100,7 @@ async def emit_release_events_for_order(
     emitted = 0
 
     for placement in _placements(order):
-        role = str(placement.get("node_id") or placement.get("role") or "").lower()
+        role = str(placement.get("task_node_id") or placement.get("node_id") or placement.get("role") or "").lower()
         if role not in {"compute", "worker", "infer", "train"}:
             continue
         node_hostname = _worker_host(placement)

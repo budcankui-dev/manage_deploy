@@ -332,8 +332,8 @@
             </el-collapse>
             <div v-if="orderPlacementRows.length">
               <el-table :data="orderPlacementRows" size="small" border>
-                <el-table-column label="逻辑节点" prop="node_id" width="100" />
-                <el-table-column label="物理节点" prop="worker_host" />
+                <el-table-column label="子任务" prop="task_node_id" width="100" />
+                <el-table-column label="拓扑节点" prop="topology_node_id" />
                 <el-table-column label="GPU" prop="gpu_device" width="80">
                   <template #default="{ row }">{{ row.gpu_device ?? '-' }}</template>
                 </el-table-column>
@@ -677,16 +677,16 @@ const orderPlacementRows = computed(() => {
   const p = selectedOrderDetail.value?.routing_result?.placements
   if (!p) return []
   const normalize = (role, placement) => {
-    if (!placement) return { node_id: role, worker_host: '未部署', gpu_device: null }
-    if (typeof placement === 'string') return { node_id: role, worker_host: placement, gpu_device: null }
+    if (!placement) return { task_node_id: role, topology_node_id: '未部署', gpu_device: null }
+    if (typeof placement === 'string') return { task_node_id: role, topology_node_id: placement, gpu_device: null }
     const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
     return {
-      node_id: placement.node_id || role,
-      worker_host: placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
+      task_node_id: placement.task_node_id || placement.node_id || role,
+      topology_node_id: placement.topology_node_id || placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
       gpu_device: gpu,
     }
   }
-  if (Array.isArray(p)) return p.map(item => normalize(item.node_id || item.role || 'node', item))
+  if (Array.isArray(p)) return p.map(item => normalize(item.task_node_id || item.node_id || item.role || 'node', item))
   return Object.entries(p).map(([role, placement]) => normalize(role, placement))
 })
 
@@ -755,7 +755,7 @@ function pretty(value) {
 function placementName(value) {
   if (!value) return '-'
   if (typeof value === 'string') return value
-  const host = value.worker_host || value.hostname || value.node_name || value.node_id || '-'
+  const host = value.topology_node_id || value.worker_host || value.hostname || value.node_name || value.node_id || '-'
   const gpu = value.gpu_device ?? (Array.isArray(value.gpu_indices) ? value.gpu_indices[0] : null)
   return gpu !== null && gpu !== undefined ? `${host} (GPU ${gpu})` : host
 }
@@ -763,7 +763,7 @@ function placementName(value) {
 function formatRoutingPlacements(placements) {
   if (!placements) return '-'
   if (Array.isArray(placements)) {
-    return placements.map(item => `${item.node_id || item.role || 'node'}=${placementName(item)}`).join('，')
+    return placements.map(item => `${item.task_node_id || item.node_id || item.role || 'node'}=${placementName(item)}`).join('，')
   }
   if (typeof placements === 'object') {
     const source = placementName(placements.source)

@@ -97,12 +97,12 @@ def _build_dag_nodes(
     if template_nodes:
         nodes = []
         for i, n in enumerate(template_nodes):
-            node_id = n.get("name", f"node_{i}")
-            node_type = n.get("node_type") or _infer_node_type(node_id)
+            task_node_id = n.get("name", f"node_{i}")
+            task_node_type = n.get("node_type") or _infer_node_type(task_node_id)
             node = {
-                "node_id": node_id,
-                "role": _infer_role(node_id),
-                "node_type": node_type,
+                "task_node_id": task_node_id,
+                "task_role": _infer_role(task_node_id),
+                "task_node_type": task_node_type,
                 "resources": {
                     "cpu_units": n.get("cpu_units", 10),
                     "mem_mb": n.get("mem_mb", 1024),
@@ -110,16 +110,17 @@ def _build_dag_nodes(
                     "gpu_units": n.get("gpu_units", 0),
                 },
             }
-            node["network"] = _network_requirements_for_role(node_id, n.get("port_defs"))
-            node.update(_endpoint_identity(node_id, source_name, destination_name))
+            node["network"] = _network_requirements_for_role(task_node_id, n.get("port_defs"))
+            node.update(_endpoint_identity(task_node_id, source_name, destination_name))
             nodes.append(node)
         return nodes
 
     defaults = _default_nodes_for_task_type(task_type, resource_requirement, data_profile)
     for node in defaults:
-        node.setdefault("role", _infer_role(node["node_id"]))
-        node.setdefault("network", _network_requirements_for_role(node["node_id"]))
-        node.update(_endpoint_identity(node["node_id"], source_name, destination_name))
+        task_node_id = node["task_node_id"]
+        node.setdefault("task_role", _infer_role(task_node_id))
+        node.setdefault("network", _network_requirements_for_role(task_node_id))
+        node.update(_endpoint_identity(task_node_id, source_name, destination_name))
     return defaults
 
 
@@ -141,9 +142,9 @@ def _default_nodes_for_task_type(
                     merged[key] = res_override[key]
 
         nodes.append({
-            "node_id": role,
-            "role": _infer_role(role),
-            "node_type": _infer_node_type(role),
+            "task_node_id": role,
+            "task_role": _infer_role(role),
+            "task_node_type": _infer_node_type(role),
             "resources": {
                 "cpu_units": merged["cpu_units"],
                 "mem_mb": merged["cpu_mem_mb"],
@@ -155,12 +156,12 @@ def _default_nodes_for_task_type(
 
 
 def _infer_node_type(role: Any) -> str:
-    """DAG node category for external routing, not the physical topology node kind."""
+    """DAG subtask category, not the physical topology node kind."""
     text = str(role or "").lower()
     if text in {"compute", "worker", "infer", "train"}:
-        return "compute"
+        return "worker"
     if text in {"source", "sink", "video", "input", "output"}:
-        return "endpoint"
+        return "terminal"
     return "unknown"
 
 
@@ -180,12 +181,12 @@ def _endpoint_identity(
     source_name: str | None,
     destination_name: str | None,
 ) -> dict[str, str]:
-    """Expose user-selected topology endpoints while keeping node_id as the DAG role."""
+    """Expose user-selected topology endpoints while keeping task_node_id as the DAG role."""
     text = str(role or "").lower()
     if text in {"source", "video", "input"} and source_name:
-        return {"fixed_node_name": source_name, "fixed_node_role": "source"}
+        return {"fixed_topology_node_id": source_name}
     if text in {"sink", "output"} and destination_name:
-        return {"fixed_node_name": destination_name, "fixed_node_role": "destination"}
+        return {"fixed_topology_node_id": destination_name}
     return {}
 
 
@@ -237,8 +238,8 @@ def _build_dag_edges(
 
     edges = []
     for i in range(len(nodes) - 1):
-        src = nodes[i]["node_id"]
-        dst = nodes[i + 1]["node_id"]
+        src = nodes[i]["task_node_id"]
+        dst = nodes[i + 1]["task_node_id"]
         edges.append({
             "from": src,
             "to": dst,

@@ -376,7 +376,7 @@ const routingPlacementRows = computed(() => {
   if (!placements) return []
   const rows = []
   if (Array.isArray(placements)) {
-    placements.forEach((placement) => rows.push(normalizePlacementRow(placement.node_id || placement.role, placement)))
+    placements.forEach((placement) => rows.push(normalizePlacementRow(placement.task_node_id || placement.role, placement)))
     return rows
   }
   if (typeof placements === 'object') {
@@ -483,7 +483,7 @@ const businessPriorityText = computed(() => {
 
 function normalizePlacementRow(role, placement) {
   const roleKey = String(role || '').toLowerCase() || 'unknown'
-  const item = typeof placement === 'string' ? { worker_host: placement } : (placement || {})
+  const item = typeof placement === 'string' ? { topology_node_id: placement } : (placement || {})
   const gpu = item.gpu_device ?? item.gpu_id ?? (Array.isArray(item.gpu_indices) ? item.gpu_indices[0] : null)
   const portValues = item.port_values || {}
   const portAccessUrls = item.port_access_urls || {}
@@ -491,7 +491,7 @@ function normalizePlacementRow(role, placement) {
     roleKey,
     roleLabel: roleLabel(roleKey),
     instance_node_name: item.instance_node_name || item.node_name || item.template_node_name || roleKey,
-    hostname: item.hostname || item.worker_host || item.node_name || item.node_id || '未部署',
+    hostname: item.topology_node_id || item.hostname || item.worker_host || item.node_name || item.node_id || '未部署',
     business_address: item.business_address || item.business_ip || item.business_ipv6 || '',
     gpu,
     requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline'].includes(taskType.value),

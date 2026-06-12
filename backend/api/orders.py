@@ -235,7 +235,7 @@ def _benchmark_compute_slot(order: TaskOrder) -> str:
     placement = None
     if isinstance(placements, list):
         for item in placements:
-            if isinstance(item, dict) and item.get("node_id") in ("compute", "worker"):
+            if isinstance(item, dict) and _placement_role(item) in ("compute", "worker"):
                 placement = item
                 break
     elif isinstance(placements, dict):
@@ -245,10 +245,10 @@ def _benchmark_compute_slot(order: TaskOrder) -> str:
     gpu = _default_compute_gpu_for_order(order) or "none"
     if isinstance(placement, dict):
         host = (
-            placement.get("worker_host")
+            placement.get("topology_node_id")
+            or placement.get("worker_host")
             or placement.get("hostname")
             or placement.get("node_name")
-            or placement.get("node_id")
             or host
         )
         gpu = (
@@ -278,7 +278,7 @@ def _gpu_from_routing_result(routing_result: dict | None, role: str) -> str | No
         for placement in placements:
             if not isinstance(placement, dict):
                 continue
-            if placement.get("node_id") != role:
+            if _placement_role(placement) != role:
                 continue
             gpu_device = placement.get("gpu_device")
             if gpu_device is not None:
@@ -754,11 +754,9 @@ async def materialize_pending_orders(db: AsyncSession = Depends(get_db)):
 
 
 class RoutingPlacement(BaseModel):
-    node_id: str
-    worker_host: str
+    task_node_id: str
+    topology_node_id: str
     gpu_device: Optional[str] = None
-    node_type: Optional[str] = None
-    deployable: Optional[bool] = None
 
 
 class RoutingResultPayload(BaseModel):
@@ -775,8 +773,8 @@ class RoutingResultPayload(BaseModel):
 
 def _placement_role(placement: RoutingPlacement | dict[str, Any]) -> str:
     if isinstance(placement, RoutingPlacement):
-        return str(placement.node_id or "").lower()
-    return str(placement.get("node_id") or placement.get("role") or "").lower()
+        return str(placement.task_node_id or "").lower()
+    return str(placement.get("task_node_id") or placement.get("node_id") or placement.get("role") or "").lower()
 
 
 def _routing_dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
@@ -789,7 +787,7 @@ def _routing_dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        for key in (node.get("node_id"), node.get("role")):
+        for key in (node.get("task_node_id"), node.get("task_role")):
             if key:
                 result[str(key).lower()] = node
     return result
@@ -826,19 +824,15 @@ def _placement_is_deployable(
 ) -> bool:
     """Return whether this logical DAG node should be materialized as a container.
 
-    Backward compatibility matters: existing source/sink endpoint containers omit
-    deployable, so the default remains True. New integrations should not ask the
+    Deployment is a platform-owned policy. New integrations should not ask the
     router to decide this; use runtime_config.platform_deployment instead.
     """
-    role = str(placement.node_id or "").lower()
+    role = str(placement.task_node_id or "").lower()
     deployable_roles, non_deployable_roles = _platform_deployment_policy(order)
     if deployable_roles is not None:
         return role in deployable_roles
     if non_deployable_roles is not None:
         return role not in non_deployable_roles
-
-    if placement.deployable is not None:
-        return bool(placement.deployable)
 
     dag_nodes_by_role = dag_nodes_by_role or _routing_dag_nodes_by_role(order)
     dag_node = dag_nodes_by_role.get(role)
@@ -860,7 +854,7 @@ def _complete_platform_fixed_endpoint_placements(
     user/DAG, so the platform can add them before materialization.
     """
     completed = list(placements)
-    existing_roles = {str(item.node_id or "").lower() for item in completed}
+    existing_roles = {str(item.task_node_id or "").lower() for item in completed}
 
     for role in ("source", "sink"):
         if role in existing_roles:
@@ -868,15 +862,14 @@ def _complete_platform_fixed_endpoint_placements(
         dag_node = dag_nodes_by_role.get(role)
         if not dag_node:
             continue
-        worker_host = dag_node.get("fixed_node_name")
-        if not worker_host:
-            worker_host = order.source_name if role == "source" else order.destination_name
-        if not worker_host:
+        topology_node_id = dag_node.get("fixed_topology_node_id")
+        if not topology_node_id:
+            topology_node_id = order.source_name if role == "source" else order.destination_name
+        if not topology_node_id:
             continue
         candidate = RoutingPlacement(
-            node_id=role,
-            worker_host=str(worker_host),
-            node_type=dag_node.get("node_type"),
+            task_node_id=role,
+            topology_node_id=str(topology_node_id),
         )
         if _placement_is_deployable(order, candidate, dag_nodes_by_role):
             completed.append(candidate)
@@ -886,8 +879,8 @@ def _complete_platform_fixed_endpoint_placements(
 
 def _placement_worker_host(placement: RoutingPlacement | dict[str, Any]) -> str | None:
     if isinstance(placement, RoutingPlacement):
-        return placement.worker_host
-    value = placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
+        return placement.topology_node_id
+    value = placement.get("topology_node_id") or placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
     return str(value) if value else None
 
 
@@ -924,14 +917,12 @@ def _routing_request_placement_map(
 ) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for placement in placements:
-        role = str(placement.node_id or "").lower()
+        role = str(placement.task_node_id or "").lower()
         if not role:
             continue
         value: dict[str, Any] = {
-            "worker_host": placement.worker_host,
+            "topology_node_id": placement.topology_node_id,
         }
-        if placement.node_type:
-            value["node_type"] = placement.node_type
         if placement.gpu_device is not None:
             value["gpu_device"] = placement.gpu_device
             value["gpu_indices"] = [placement.gpu_device]
@@ -946,17 +937,15 @@ def _routing_placements_from_runtime(value: Any) -> list[RoutingPlacement]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        node_id = item.get("node_id") or item.get("role")
-        worker_host = item.get("worker_host") or item.get("hostname") or item.get("node_name")
-        if not node_id or not worker_host:
+        task_node_id = item.get("task_node_id") or item.get("node_id") or item.get("role")
+        topology_node_id = item.get("topology_node_id") or item.get("worker_host") or item.get("hostname") or item.get("node_name")
+        if not task_node_id or not topology_node_id:
             continue
         placements.append(
             RoutingPlacement(
-                node_id=str(node_id),
-                worker_host=str(worker_host),
+                task_node_id=str(task_node_id),
+                topology_node_id=str(topology_node_id),
                 gpu_device=str(item["gpu_device"]) if item.get("gpu_device") is not None else None,
-                node_type=item.get("node_type"),
-                deployable=item.get("deployable"),
             )
         )
     return placements
@@ -1034,7 +1023,7 @@ def _order_compute_gpu_slots(order: TaskOrder) -> set[tuple[str, str]]:
         for role, value in placements.items():
             if isinstance(value, dict):
                 row = dict(value)
-                row.setdefault("node_id", role)
+                row.setdefault("task_node_id", role)
                 rows.append(row)
         return _compute_gpu_slots_from_placements(rows)
     return set()
@@ -1197,7 +1186,7 @@ async def receive_routing_result(
     overrides: list[TaskInstanceNodeOverride] = []
     enabled_template_node_names: list[str] = []
     for placement in effective_placements:
-        role = placement.node_id  # node_id field carries the role name from router
+        role = placement.task_node_id
         template_node_name = role_node_names.get(role) if catalog else role
         if template_node_name is None:
             template_node_name = role
@@ -1206,7 +1195,7 @@ async def receive_routing_result(
             continue
 
         try:
-            resolved_node_id = await _resolve_node_id(db, placement.worker_host)
+            resolved_node_id = await _resolve_node_id(db, placement.topology_node_id)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         env: dict[str, str] = {
@@ -1791,8 +1780,8 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
 
     placements = [
         {
-            "node_id": role,
-            "worker_host": node.hostname,
+            "task_node_id": role,
+            "topology_node_id": node.hostname,
             **({"gpu_device": _default_compute_gpu_for_order(order)} if role == "compute" and _default_compute_gpu_for_order(order) is not None else {}),
         }
         for role, node in picked.items()

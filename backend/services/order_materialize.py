@@ -165,7 +165,7 @@ def _placement_node_name(placement: Any) -> str | None:
     if isinstance(placement, str):
         return placement
     if isinstance(placement, dict):
-        for key in ("node_id", "node_name", "worker_host", "hostname"):
+        for key in ("topology_node_id", "node_name", "worker_host", "hostname", "node_id"):
             value = placement.get(key)
             if isinstance(value, str) and value:
                 return value

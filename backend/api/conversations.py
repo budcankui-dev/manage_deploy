@@ -523,10 +523,9 @@ async def demo_route_conversation(
             external_routing_id=f"demo-route-{conversation.id[:8]}",
             placements=[
                 RoutingPlacement(
-                    node_id="compute",
-                    worker_host=compute_node.hostname,
+                    task_node_id="compute",
+                    topology_node_id=compute_node.hostname,
                     gpu_device="0",
-                    node_type="compute",
                 )
             ],
             metadata={

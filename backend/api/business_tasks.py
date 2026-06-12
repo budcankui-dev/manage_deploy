@@ -325,12 +325,12 @@ async def _lookup_baseline(
     if not task_type:
         return None
     placements = routing_result.get("placements") or []
-    # placements is a list of {"node_id": role, "worker_host": hostname}
     worker_host = None
     if isinstance(placements, list):
         for p in placements:
-            if p.get("node_id") in ("compute", "worker"):
-                worker_host = p.get("worker_host")
+            role = p.get("task_node_id") or p.get("node_id") or p.get("role")
+            if role in ("compute", "worker"):
+                worker_host = p.get("topology_node_id") or p.get("worker_host")
                 break
     elif isinstance(placements, dict):
         worker_host = _placement_node_name(placements.get("worker") or placements.get("compute"))
@@ -364,7 +364,7 @@ def _placement_node_name(placement: Any) -> str | None:
     if isinstance(placement, str):
         return placement
     if isinstance(placement, dict):
-        for key in ("node_id", "node_name", "worker_host", "hostname"):
+        for key in ("topology_node_id", "node_name", "worker_host", "hostname", "node_id"):
             value = placement.get(key)
             if isinstance(value, str) and value:
                 return value

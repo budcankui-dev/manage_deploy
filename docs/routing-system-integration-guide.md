@@ -39,12 +39,21 @@
 | 统一任务 ID | `task_orders.id = routing_input_dag.job_id = routing_input_dag.order_id = order_id` |
 | 输入 DAG | 从 `task_orders.routing_input_dag` 或 `GET /api/routing-orders` 响应中读取 |
 | 回写接口 | `POST /api/routing-orders/{order_id}/result` |
-| 逻辑节点 ID | `routing_input_dag.nodes[].node_id`，常见为 `source`、`compute`、`sink` |
-| 真实端点 | `source/sink` 的真实节点名看 `fixed_node_name` |
-| 算力选择 | 路由系统只需要回写 `compute.worker_host` 和可选 `compute.gpu_device` |
-| GPU 独占 | 同一 `worker_host + gpu_device` 同一时刻只能分配给一个未释放任务 |
+| 子任务节点 ID | `routing_input_dag.nodes[].task_node_id`，常见为 `source`、`compute`、`sink` |
+| 固定拓扑节点 | `routing_input_dag.nodes[].fixed_topology_node_id`，表示用户已指定源/目的真实节点 |
+| 算力选择 | 路由系统回写 `placements[].task_node_id=compute`、`topology_node_id=<nodes.hostname>`、可选 `gpu_device` |
+| GPU 独占 | 同一 `topology_node_id + gpu_device` 同一时刻只能分配给一个未释放任务 |
 | 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
 | 扩展信息 | 算法版本、路径、成本、租金、解释等统一放到 `metadata` 字典 |
+
+命名规则只保留两套概念：
+
+```text
+task_node_id      任务 DAG 内部子任务节点，例如 source / compute / sink
+topology_node_id  真实拓扑节点名，对应 nodes.hostname，例如 compute-1
+```
+
+不要把 `task_node_id` 当成物理机器，也不要把 `topology_node_id` 写进 DAG 的 `edges.from/to`。`edges.from/to` 永远引用 `task_node_id`。
 
 ## 3. 推荐部署方式
 
@@ -113,7 +122,9 @@ while True:
         claimed_order = claimed.json()
         order_id = claimed_order["order_id"]
         dag = claimed_order["routing_input_dag"]
-        placement = choose_compute_node_and_gpu(dag, nodes, node_baselines, router_resource_pool)
+        task_type = dag["task_type"]
+        baseline_map = load_node_baselines(task_type)
+        placement = choose_compute_node_and_gpu(dag, nodes, baseline_map, router_resource_pool)
 
         if placement.temporarily_unavailable:
             PATCH(f"/api/routing-orders/{order_id}/requeue", {"reason": "GPU slots temporarily full"})
@@ -123,10 +134,10 @@ while True:
             PATCH(f"/api/routing-orders/{order_id}/fail", {"reason": placement.reason})
             continue
 
-        router_resource_pool.reserve(placement.worker_host, "gpu", placement.gpu_device)
+        router_resource_pool.reserve(placement.topology_node_id, "gpu", placement.gpu_device)
         result = POST(f"/api/routing-orders/{order_id}/result", placement.to_payload())
         if result.status_code == 409:
-            router_resource_pool.release(placement.worker_host, "gpu", placement.gpu_device)
+            router_resource_pool.release(placement.topology_node_id, "gpu", placement.gpu_device)
             PATCH(f"/api/routing-orders/{order_id}/requeue", {"reason": result.text})
             continue
 
@@ -138,24 +149,77 @@ while True:
         )
 ```
 
-## 6. 需要读取的 MySQL 表
+## 6. MySQL 扫表和 HTTP 接口怎么配合
 
-第一阶段只需要这些表。平台对接只使用 MySQL。
+第一阶段平台只使用 MySQL。路由系统可以直接读 MySQL，但建议遵守下面的分工：
+
+| 动作 | 推荐方式 | 原因 |
+|------|----------|------|
+| 发现待路由工单 | MySQL 扫 `task_orders` 或 `GET /api/routing-orders` | 数据量小，两种都可以。 |
+| 领取工单 | 必须调用 `PATCH /api/routing-orders/{order_id}/claim` | 平台用行锁保证并发只成功一次，避免重复扣 GPU。 |
+| 读取节点和 baseline | MySQL 读 `nodes`、`node_baselines` | 算法侧查询方便，字段稳定。 |
+| 回写路由结果 | 必须调用 `POST /api/routing-orders/{order_id}/result` | 平台要校验 GPU 冲突、物化实例、分配端口。 |
+| 下发流表后确认 | 必须调用 `POST /api/routing-orders/{order_id}/network-ready` | 平台收到确认后才启动或注册调度。 |
+| 处理资源释放 | MySQL 或 HTTP 读 `routing_resource_events`，ack 走 HTTP | 资源加回后需要平台记录确认时间。 |
+
+不要让路由系统直接 `UPDATE task_orders.routing_status` 或直接写 `runtime_config.routing_result`。这些字段由平台接口维护，否则容易绕过 GPU 冲突校验、端口分配和网络就绪状态。
+
+路由系统第一阶段只需要读下面这些表。
 
 ### 6.1 `task_orders`
 
-工单表。推荐通过 HTTP 获取和 claim，直接读 MySQL 也可以辅助排查。
+工单表。直接扫表时只把它当作“候选队列”，真正处理前仍要调用 claim。
 
 | 字段 | 用途 |
 |------|------|
 | `id` | 统一工单 ID，也是 `job_id/order_id`。 |
-| `routing_status` | `pending`、`computing`、`network_binding_ready`、`completed`、`failed`。 |
-| `routing_input_dag` | 路由算法输入 DAG。 |
+| `routing_status` | 路由状态，路由系统主要处理 `pending`。完整状态见下表。 |
+| `routing_input_dag` | 路由算法输入 DAG。JSON 内使用 `task_node_id/topology_node_id` 语义。 |
 | `source_name` / `destination_name` | 用户输入的源节点和目的节点。 |
 | `business_start_time` / `business_end_time` | 业务时间窗口。 |
 | `runtime_config` | 业务类型、benchmark 轮次、路由结果等扩展信息。 |
 | `materialized_instance_id` | 平台物化后的任务实例 ID。 |
 | `deleted_at` | 非空表示已逻辑删除，必须跳过。 |
+
+`routing_status` 状态含义：
+
+| 状态 | 含义 | 路由系统动作 |
+|------|------|--------------|
+| `pending` | 待路由 | 可 claim。 |
+| `computing` | 已被某个路由进程领取 | 不要重复处理；超时恢复后续可再加。 |
+| `network_binding_ready` | 平台已物化实例并返回端口，等待网络就绪 | 下发流表/QoS 后调用 `network-ready`。 |
+| `completed` | 路由闭环完成 | 不再处理。 |
+| `failed` | 路由失败 | 不再处理，除非人工重置。 |
+| `cancelled` | 工单已取消 | 不再处理。 |
+
+如果直接扫表读取待路由工单，推荐 SQL：
+
+```sql
+SELECT id, name, routing_status, source_name, destination_name,
+       business_start_time, business_end_time, routing_input_dag, runtime_config
+FROM task_orders
+WHERE deleted_at IS NULL
+  AND routing_status = 'pending'
+ORDER BY created_at ASC
+LIMIT 100;
+```
+
+并发注意：扫表只负责发现候选工单，真正处理前必须调用 `PATCH /api/routing-orders/{order_id}/claim`。claim 成功才计算路由，claim 返回 `409` 表示别的进程已抢到，直接跳过。
+
+`routing_input_dag` 最少要读取这些字段：
+
+| JSON 字段 | 用途 |
+|-----------|------|
+| `job_id` / `order_id` | 与 `task_orders.id` 一致，用于日志和回写。 |
+| `task_type` | 查询对应业务 baseline。 |
+| `modal` / `priority` | 模态和业务优先级，可辅助路径/QoS 决策。 |
+| `nodes[].task_node_id` | 子任务角色名，例如 `source/compute/sink`。 |
+| `nodes[].task_node_type` | 子任务类型，例如 `terminal/worker`。 |
+| `nodes[].fixed_topology_node_id` | 用户输入并固定的真实拓扑节点，通常在 source/sink。 |
+| `nodes[].resources.gpu_units` | 判断该子任务是否需要 GPU。 |
+| `edges[].from/to` | 业务流两端，引用 `task_node_id`。 |
+| `edges[].bandwidth_mbps` | 带宽需求估计，供选路参考。 |
+| `edges[].flow.priority` | 业务流优先级，取值 `1-8`。 |
 
 ### 6.2 `nodes`
 
@@ -164,7 +228,7 @@ while True:
 | 字段 | 用途 |
 |------|------|
 | `id` | 平台内部节点 ID。 |
-| `hostname` | 回写 `worker_host` 时使用这个值。 |
+| `hostname` | 回写 `topology_node_id` 时使用这个值。 |
 | `display_name` | 展示名，可用于辅助匹配。 |
 | `business_ip` / `business_ipv6` | 数据面地址。 |
 | `node_kind` | `worker`、`terminal`、`both`、`admin` 等。 |
@@ -172,13 +236,30 @@ while True:
 | `is_routable` | 是否参与路由。 |
 | `deleted_at` | 非空必须跳过。 |
 
+推荐查询：
+
+```sql
+SELECT id, hostname, display_name, business_ip, business_ipv6, node_kind,
+       is_schedulable, is_routable
+FROM nodes
+WHERE deleted_at IS NULL
+  AND is_routable = 1;
+```
+
+节点筛选建议：
+
+- `node_kind in ('worker', 'both')` 且 `is_schedulable=1` 的节点可作为 `compute` 候选。
+- `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
+- 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统应按 `nodes.hostname` 匹配。
+- 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id`。
+
 ### 6.3 `node_baselines`
 
-节点基线表，存放不同业务在不同节点上的历史指标，供路由算法参考。
+节点基线表，存放不同业务在不同节点上的历史指标，供路由算法参考。正式测评前平台应先在业务测评页面完成基线测试；路由系统查询时如果缺少当前 `task_type` 对应基线，不要硬路由该节点。
 
 | 字段 | 用途 |
 |------|------|
-| `node_id` | 关联 `nodes.id`。 |
+| `node_id` | 关联 `nodes.id`，这是数据库内部外键，不是 DAG 的 `task_node_id`。 |
 | `task_type` | 业务类型，如 `high_throughput_matmul`、`low_latency_video_pipeline`。 |
 | `metric_key` | 指标名，如 `effective_gflops`、`frame_latency_p90_ms`。 |
 | `baseline_value` | 节点历史基准值。 |
@@ -191,6 +272,38 @@ while True:
 |------|-------------|----------|------|
 | 矩阵乘法计算 | `high_throughput_matmul` | `effective_gflops` | 越高越好 |
 | 视频 AI 推理 | `low_latency_video_pipeline` | `frame_latency_p90_ms` | 越低越好 |
+
+推荐查询：
+
+```sql
+SELECT n.hostname AS topology_node_id,
+       b.task_type,
+       b.metric_key,
+       b.baseline_value,
+       b.operator,
+       b.unit,
+       b.raw_values
+FROM node_baselines b
+JOIN nodes n ON n.id = b.node_id
+WHERE n.deleted_at IS NULL
+  AND b.task_type = '<routing_input_dag.task_type>';
+```
+
+如果要只取可作为 compute 的节点，可以加：
+
+```sql
+  AND n.is_schedulable = 1
+  AND n.is_routable = 1
+  AND n.node_kind IN ('worker', 'both')
+```
+
+baseline 准备规则：
+
+- 正式测评前，平台管理员在业务测评页面对参与节点执行一次批量基线测试。
+- 每个节点、每个 `task_type`、固定业务参数重复 3 次，取中位数写入 `node_baselines.baseline_value`。
+- 历史多次 baseline 只作参考；镜像、GPU/CPU 路径、业务参数或硬件拓扑变化后，应重新建立当前轮基线。
+- 如果某节点缺少当前 `task_type` 的 baseline，路由系统可以跳过该节点。
+- 如果所有可用节点都缺少 baseline，调用 `PATCH /api/routing-orders/{order_id}/requeue`，原因写“baseline not ready”，不要丢工单。
 
 ### 6.4 `routing_resource_events`
 
@@ -210,6 +323,119 @@ while True:
 | `reason` | `completed`、`cleanup_instance`、`delete_order`、`failed` 等。 |
 | `router_ack_at` | 路由系统确认处理时间。 |
 
+推荐查询未确认 release：
+
+```sql
+SELECT id, order_id, job_id, benchmark_run_id, task_type,
+       node_hostname, resource_kind, resource_id, amount, reason, metadata, created_at
+FROM routing_resource_events
+WHERE event_type = 'release'
+  AND router_ack_at IS NULL
+ORDER BY created_at ASC
+LIMIT 100;
+```
+
+处理规则：
+
+- 路由系统读取 release 后，把 `node_hostname + resource_id` 对应 GPU 加回自己的资源表。
+- 加回成功后调用 `POST /api/routing-resource-events/ack`，不要直接更新 `router_ack_at`。
+- 这张表有唯一约束，平台会避免同一个工单、同一节点、同一 GPU 重复发 release。
+- 如果 ack 请求失败，下一轮还会读到同一事件，路由系统应按事件 ID 做幂等处理。
+
+### 6.5 路由系统自己的资源占用表
+
+平台不限制路由系统内部怎么建表。最小版本建议维护一张本地表或内存持久化结构：
+
+| 字段 | 含义 |
+|------|------|
+| `topology_node_id` | 对应平台 `nodes.hostname`。 |
+| `resource_kind` | 第一阶段用 `gpu`。 |
+| `resource_id` | GPU 编号，如 `0`。 |
+| `order_id` | 当前占用该资源的工单 ID。 |
+| `reserved_at` | 扣减时间。 |
+| `external_routing_id` | 路由系统自己的决策 ID，可选。 |
+
+扣减和释放口径：
+
+- `/result` 调用前先在路由系统本地 reserve，防止自己并发重复分配。
+- `/result` 返回 `409` 时立即撤销本地 reserve。
+- `/result` 超时但平台状态已是 `network_binding_ready/completed` 时，不要再次 reserve；按已有结果继续处理。
+- 收到 release 并 ack 成功后，再把资源正式释放为可用。
+
+### 6.6 最小字段结构清单
+
+下面不是要求路由系统建同样的表，而是说明扫平台 MySQL 时需要按这些字段理解数据：
+
+```sql
+-- 待路由工单队列表
+task_orders(
+  id varchar(36) primary key,              -- 统一工单 ID / job_id / order_id
+  name varchar(255),
+  source_name varchar(255),
+  destination_name varchar(255),
+  business_start_time datetime,
+  business_end_time datetime,
+  routing_status varchar(50),             -- pending / computing / network_binding_ready / completed / failed
+  routing_input_dag json,                 -- 路由算法输入 DAG
+  runtime_config json,                    -- 业务类型、测评轮次、平台运行配置
+  materialized_instance_id varchar(36),
+  deleted_at datetime,
+  created_at datetime
+);
+
+-- 真实拓扑节点表
+nodes(
+  id varchar(36) primary key,              -- 平台内部节点 ID
+  hostname varchar(255) unique,            -- topology_node_id 必须使用这个值
+  display_name varchar(255),
+  business_ip varchar(45),
+  business_ipv6 varchar(64),
+  node_kind varchar(50),                   -- worker / terminal / both / admin
+  is_schedulable boolean,
+  is_routable boolean,
+  deleted_at datetime
+);
+
+-- 节点业务基线表
+node_baselines(
+  id varchar(36) primary key,
+  node_id varchar(36),                     -- 关联 nodes.id
+  task_type varchar(255),                  -- high_throughput_matmul / low_latency_video_pipeline
+  metric_key varchar(255),                 -- effective_gflops / frame_latency_p90_ms
+  baseline_value double,
+  operator varchar(8),
+  unit varchar(64),
+  run_count int,
+  raw_values json
+);
+
+-- 平台发给路由系统的资源释放事件表
+routing_resource_events(
+  id bigint primary key auto_increment,
+  event_type varchar(50),                  -- 第一阶段只看 release
+  order_id varchar(36),
+  job_id varchar(36),
+  external_routing_id varchar(255),
+  benchmark_run_id varchar(255),
+  task_type varchar(255),
+  node_hostname varchar(255),              -- 被释放的 topology_node_id
+  resource_kind varchar(50),               -- 第一阶段主要是 gpu
+  resource_id varchar(64),                 -- GPU 编号
+  amount int,
+  reason varchar(64),
+  router_ack_at datetime,
+  metadata json,
+  created_at datetime
+);
+```
+
+字段使用原则：
+
+- 跨系统唯一 ID 只看 `task_orders.id`，它等于 DAG 里的 `job_id/order_id`。
+- 路由回写真实节点只用 `nodes.hostname`，不要回写 `nodes.id`。
+- `node_baselines.node_id` 是平台内部外键，查询时通过 `JOIN nodes` 转成 `topology_node_id`。
+- `routing_resource_events.node_hostname` 对应 `nodes.hostname`，用于释放路由系统自己的 GPU 占用。
+
 ## 7. 输入 DAG 格式
 
 三节点常规业务示例：
@@ -228,10 +454,10 @@ while True:
   "business_end_ts_ms": 1777345200000,
   "nodes": [
     {
-      "node_id": "source",
-      "role": "source",
-      "node_type": "endpoint",
-      "fixed_node_name": "terminal-a",
+      "task_node_id": "source",
+      "task_role": "source",
+      "task_node_type": "terminal",
+      "fixed_topology_node_id": "terminal-a",
       "network": {
         "port_requirements": [
           {"name": "source", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
@@ -240,9 +466,9 @@ while True:
       "resources": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0}
     },
     {
-      "node_id": "compute",
-      "role": "compute",
-      "node_type": "compute",
+      "task_node_id": "compute",
+      "task_role": "compute",
+      "task_node_type": "worker",
       "network": {
         "port_requirements": [
           {"name": "compute", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
@@ -251,10 +477,10 @@ while True:
       "resources": {"cpu_units": 10, "mem_mb": 2048, "disk_mb": 1024, "gpu_units": 1}
     },
     {
-      "node_id": "sink",
-      "role": "sink",
-      "node_type": "endpoint",
-      "fixed_node_name": "terminal-b",
+      "task_node_id": "sink",
+      "task_role": "sink",
+      "task_node_type": "terminal",
+      "fixed_topology_node_id": "terminal-b",
       "network": {
         "port_requirements": [
           {"name": "sink", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
@@ -294,10 +520,10 @@ while True:
 
 关键理解：
 
-- `node_id` 是 DAG 逻辑角色，不是物理节点名。
-- 用户输入的源节点和目的节点写在 `fixed_node_name`。
-- 源节点和目的节点可以是物理计算节点；在本 DAG 中它们仍然只是 endpoint 角色。
-- `compute` 是路由系统需要选择真实部署节点的位置。
+- `task_node_id` 是任务内部子任务节点名，不是物理节点名。
+- 用户输入的源节点和目的节点写在 `fixed_topology_node_id`。
+- 源节点和目的节点可以是物理计算节点；在本 DAG 中它们仍然只是 terminal 子任务角色。
+- `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
 - `priority` 和 `edges[].flow.priority` 用于识别业务流优先级，取值 `1-8`，`1` 最高。该值由平台“系统设置 -> 模态优先级字典”维护。
@@ -307,7 +533,7 @@ while True:
 
 ### 8.1 `source -> compute -> sink`
 
-默认演示业务。路由系统选择 `compute` 的 `worker_host/gpu_device`，路径可放到 `metadata.path`。
+默认演示业务。路由系统选择 `compute` 的 `topology_node_id/gpu_device`，路径可放到 `metadata.path`。
 
 ### 8.2 `source -> sink`
 
@@ -334,7 +560,7 @@ while True:
 {
   "strategy": "resource_guarantee",
   "placements": [
-    {"node_id": "compute", "worker_host": "compute-node-a", "gpu_device": "0"}
+    {"task_node_id": "compute", "topology_node_id": "compute-node-a", "gpu_device": "0"}
   ],
   "metadata": {
     "path": ["terminal-a", "compute-node-a"]
@@ -359,7 +585,7 @@ Content-Type: application/json
   "selected_strategy": "GPU_EXCLUSIVE_RESOURCE_FIT",
   "external_routing_id": "route-20260610-0001",
   "placements": [
-    {"node_id": "compute", "worker_host": "compute-node-a", "gpu_device": "0"}
+    {"task_node_id": "compute", "topology_node_id": "compute-node-a", "gpu_device": "0"}
   ],
   "metadata": {
     "path": ["terminal-a", "compute-node-a", "terminal-b"],
@@ -396,8 +622,13 @@ Content-Type: application/json
       "flow_id": "order-uuid-001:source->compute",
       "from": "source",
       "to": "compute",
+      "task_type": "low_latency_video_pipeline",
+      "modal": "低时延转发模态",
+      "priority": 1,
+      "src_topology_node_id": "terminal-a",
       "src_host": "terminal-a",
       "src_ip": "fd00::10",
+      "dst_topology_node_id": "compute-node-a",
       "dst_host": "compute-node-a",
       "dst_ip": "fd00::21",
       "dst_port": 18842,
@@ -463,7 +694,7 @@ Content-Type: application/json
 验收业务默认 GPU 独占：
 
 ```text
-同一 worker_host + gpu_device
+同一 topology_node_id + gpu_device
 同一时刻
 只能被一个未释放任务占用
 ```
@@ -561,10 +792,10 @@ curl -sS -X POST \
     "selected_strategy": "GPU_EXCLUSIVE_RESOURCE_FIT",
     "external_routing_id": "router-selftest-001",
     "placements": [
-      {"node_id": "compute", "worker_host": "<chosen-worker-host>", "gpu_device": "0"}
+      {"task_node_id": "compute", "topology_node_id": "<chosen-topology-node-id>", "gpu_device": "0"}
     ],
     "metadata": {
-      "path": ["<source>", "<chosen-worker-host>", "<sink>"],
+      "path": ["<source>", "<chosen-topology-node-id>", "<sink>"],
       "selected_reason": "self-test placement",
       "algorithm_version": "router-selftest"
     }
@@ -656,8 +887,8 @@ curl -sS -X POST \
 步骤：
 
 1. 创建两个时间窗口重叠的 GPU 工单。
-2. 第一个工单回写 `worker_host=A, gpu_device=0` 并成功。
-3. 第二个工单也回写同一个 `worker_host=A, gpu_device=0`。
+2. 第一个工单回写 `topology_node_id=A, gpu_device=0` 并成功。
+3. 第二个工单也回写同一个 `topology_node_id=A, gpu_device=0`。
 
 预期结果：
 
@@ -673,8 +904,8 @@ curl -sS -X POST \
 硬性约定：
 1. 统一任务 ID 是 task_orders.id，也等于 routing_input_dag.job_id 和 routing_input_dag.order_id。
 2. 路由系统只负责选择 compute 节点、GPU 和路径解释，不要判断平台是否给 source/sink/compute 部署容器。
-3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_node_name，不要改。
-4. GPU 任务必须独占 GPU，同一 worker_host + gpu_device 不能分配给多个未释放任务。
+3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改。
+4. GPU 任务必须独占 GPU，同一 topology_node_id + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
 7. POST /result 后必须读取响应里的 network_bindings，并按其中 src_ip/dst_ip/dst_port 下发网络规则。
@@ -684,7 +915,7 @@ curl -sS -X POST \
 1. 调 GET /api/routing-resource-events?event_type=release&unacked=true 读取释放事件，把 GPU 加回自己的资源表，再调 POST /api/routing-resource-events/ack。
 2. 调 GET /api/routing-orders?status=pending&limit=100 获取待路由工单。
 3. 对每个工单调 PATCH /api/routing-orders/{order_id}/claim，409 表示别人抢到了，跳过。
-4. 解析 routing_input_dag，读取 nodes 和 node_baselines，选择 compute 的 worker_host/gpu_device。
+4. 解析 routing_input_dag，读取 nodes 和 node_baselines，选择 compute 的 topology_node_id/gpu_device。
 5. 成功时调 POST /api/routing-orders/{order_id}/result，placements 只需要回写 compute。
 6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
 7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。

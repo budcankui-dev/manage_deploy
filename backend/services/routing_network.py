@@ -75,6 +75,21 @@ def _business_task_type(order: TaskOrder) -> str | None:
     return None
 
 
+def _routing_priority(order: TaskOrder) -> int | None:
+    dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    raw_priority = dag.get("priority")
+    try:
+        return int(raw_priority) if raw_priority is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _routing_modality(order: TaskOrder) -> str | None:
+    dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    value = dag.get("modal") or dag.get("modality")
+    return str(value) if value else None
+
+
 def _dag_edge_map(order: TaskOrder) -> dict[tuple[str, str], dict[str, Any]]:
     dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
     edges = dag.get("edges")
@@ -112,6 +127,9 @@ async def build_network_bindings(
         machines = {}
 
     dag_edges = _dag_edge_map(order)
+    priority = _routing_priority(order)
+    modality = _routing_modality(order)
+    task_type = _business_task_type(order)
     bindings: list[dict[str, Any]] = []
 
     for edge in edges:
@@ -138,8 +156,13 @@ async def build_network_bindings(
                 "flow_id": flow.get("flow_id") or f"{order.id}:{src_role}->{dst_role}",
                 "from": src_role,
                 "to": dst_role,
+                "task_type": task_type,
+                "modal": modality,
+                "priority": priority,
+                "src_topology_node_id": src_machine.hostname if src_machine else None,
                 "src_host": src_machine.hostname if src_machine else None,
                 "src_ip": get_business_address(src_machine, settings.prefer_business_ipv6) if src_machine else None,
+                "dst_topology_node_id": dst_machine.hostname,
                 "dst_host": dst_machine.hostname,
                 "dst_ip": dst_address,
                 "dst_port": primary_port,

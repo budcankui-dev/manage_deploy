@@ -667,13 +667,11 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["task_type"] == "low_latency_video_pipeline"
     assert dag["priority"] == 1
     assert "constraints" not in dag
-    assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
-    assert [node["role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
-    assert [node["node_type"] for node in dag["nodes"]] == ["endpoint", "compute", "endpoint"]
-    assert dag["nodes"][0]["fixed_node_name"] == "benchmark-video-source"
-    assert dag["nodes"][0]["fixed_node_role"] == "source"
-    assert dag["nodes"][2]["fixed_node_name"] == "benchmark-video-sink"
-    assert dag["nodes"][2]["fixed_node_role"] == "destination"
+    assert [node["task_node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
+    assert [node["task_role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
+    assert [node["task_node_type"] for node in dag["nodes"]] == ["terminal", "worker", "terminal"]
+    assert dag["nodes"][0]["fixed_topology_node_id"] == "benchmark-video-source"
+    assert dag["nodes"][2]["fixed_topology_node_id"] == "benchmark-video-sink"
     assert all("exec" not in node for node in dag["nodes"])
     edge_pairs = [(edge["from"], edge["to"], edge["data_mb"], edge["bandwidth_mbps"]) for edge in dag["edges"]]
     assert edge_pairs == [
@@ -708,9 +706,9 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
         "selected_strategy": "GPU_EXCLUSIVE_LOW_RENT",
         "external_routing_id": "route-meta-001",
         "placements": [
-            {"node_id": "source", "worker_host": "worker-a"},
-            {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
-            {"node_id": "sink", "worker_host": "worker-c"},
+            {"task_node_id": "source", "topology_node_id": "worker-a"},
+            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            {"task_node_id": "sink", "topology_node_id": "worker-c"},
         ],
         "estimated_metric": {
             "estimated_cost": 1.6,
@@ -797,8 +795,8 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
             "job_id": "terminal-only-routing",
             "order_id": "terminal-only-routing",
             "nodes": [
-                {"node_id": "source", "role": "source", "node_type": "endpoint", "fixed_node_name": "terminal-a"},
-                {"node_id": "sink", "role": "sink", "node_type": "endpoint", "fixed_node_name": "terminal-b"},
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-a"},
+                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-b"},
             ],
             "edges": [{"from": "source", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10}],
         },
@@ -894,8 +892,8 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
             "job_id": "terminal-to-compute-routing",
             "order_id": "terminal-to-compute-routing",
             "nodes": [
-                {"node_id": "source", "role": "source", "node_type": "endpoint", "fixed_node_name": "endpoint-source"},
-                {"node_id": "compute", "role": "compute", "node_type": "compute", "fixed_node_name": "compute-dest"},
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "endpoint-source"},
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker", "fixed_topology_node_id": "compute-dest"},
             ],
             "edges": [{"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10}],
         },
@@ -908,7 +906,7 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"node_id": "compute", "worker_host": "compute-dest", "gpu_device": "0", "node_type": "compute"},
+                {"task_node_id": "compute", "topology_node_id": "compute-dest", "gpu_device": "0"},
             ],
         },
     )
@@ -951,10 +949,10 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     dag_nodes = []
     for node in order.routing_input_dag["nodes"]:
         item = dict(node)
-        if item["node_id"] == "source":
-            item["fixed_node_name"] = "worker-a"
-        elif item["node_id"] == "sink":
-            item["fixed_node_name"] = "worker-c"
+        if item["task_node_id"] == "source":
+            item["fixed_topology_node_id"] = "worker-a"
+        elif item["task_node_id"] == "sink":
+            item["fixed_topology_node_id"] = "worker-c"
         dag_nodes.append(item)
     order.source_name = "worker-a"
     order.destination_name = "worker-c"
@@ -966,7 +964,7 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
             ],
             "metadata": {"path": ["worker-a", "worker-b", "worker-c"]},
         },
@@ -981,9 +979,9 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one()
     placements = order.runtime_config["routing_result"]["placements"]
-    assert [item["node_id"] for item in placements] == ["compute", "source", "sink"]
+    assert [item["task_node_id"] for item in placements] == ["compute", "source", "sink"]
     assert order.runtime_config["routing_result"]["router_placements"] == [
-        {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"}
+        {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}
     ]
 
 
@@ -1027,9 +1025,9 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"node_id": "source", "worker_host": "worker-a"},
-                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
-                {"node_id": "sink", "worker_host": "worker-c"},
+                {"task_node_id": "source", "topology_node_id": "worker-a"},
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "worker-c"},
             ],
             "metadata": {
                 "path": ["worker-a", "worker-b", "worker-c"],
@@ -1132,9 +1130,9 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
     payload = {
         "strategy": "resource_guarantee",
         "placements": [
-            {"node_id": "source", "worker_host": "worker-a"},
-            {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
-            {"node_id": "sink", "worker_host": "worker-c"},
+            {"task_node_id": "source", "topology_node_id": "worker-a"},
+            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            {"task_node_id": "sink", "topology_node_id": "worker-c"},
         ],
     }
     first = await client.post(f"/api/routing-orders/{first_id}/result", json=payload)
@@ -1168,9 +1166,9 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"node_id": "source", "worker_host": "worker-a"},
-                {"node_id": "compute", "worker_host": "worker-b", "gpu_device": "0"},
-                {"node_id": "sink", "worker_host": "worker-c"},
+                {"task_node_id": "source", "topology_node_id": "worker-a"},
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "worker-c"},
             ],
             "external_routing_id": "route-release-001",
             "metadata": {"algorithm_version": "release-test"},
@@ -1274,7 +1272,7 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
     assert placements["compute"]["gpu_id"] == "0"
     assert placements["compute"]["gpu_device"] == "0"
     routing_placements = detail["routing_result"]["placements"]
-    compute_route = next(item for item in routing_placements if item["node_id"] == "compute")
+    compute_route = next(item for item in routing_placements if item["task_node_id"] == "compute")
     assert compute_route["gpu_device"] == "0"
 
     inst_nodes = (
@@ -1632,7 +1630,7 @@ async def test_cleanup_order_instances_can_scope_by_benchmark_run_and_task_type(
                 "task_type": task_type,
                 "routing_result": {
                     "strategy": "resource_guarantee",
-                    "placements": {"compute": {"worker_host": "worker-a", "gpu_device": "0"}},
+                    "placements": {"compute": {"topology_node_id": "worker-a", "gpu_device": "0"}},
                 },
             },
         }

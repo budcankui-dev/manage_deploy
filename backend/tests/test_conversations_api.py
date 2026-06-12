@@ -146,7 +146,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert route_body["status"] == "submitted"
     assert route_body["materialized_order_id"] == conversation_id
     assert route_body["latest_routing_request"]["status"] == "completed"
-    assert route_body["latest_routing_request"]["placements"]["compute"]["worker_host"] == "worker-b"
+    assert route_body["latest_routing_request"]["placements"]["compute"]["topology_node_id"] == "worker-b"
     assert route_body["latest_routing_request"]["placements"]["compute"]["gpu_device"] == "0"
 
     order = (
@@ -158,8 +158,8 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert order.runtime_config["business_task"]["task_type"] == "low_latency_video_pipeline"
 
     route_placements = order.runtime_config["routing_result"]["placements"]
-    compute_route = next(item for item in route_placements if item["node_id"] == "compute")
-    assert compute_route["worker_host"] == "worker-b"
+    compute_route = next(item for item in route_placements if item["task_node_id"] == "compute")
+    assert compute_route["topology_node_id"] == "worker-b"
     assert compute_route["gpu_device"] == "0"
 
     inst_nodes = (
