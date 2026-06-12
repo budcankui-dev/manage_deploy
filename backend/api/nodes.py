@@ -161,9 +161,7 @@ async def sync_node_resources(
         if field in result:
             setattr(node, field, result[field])
 
-    if gpu_probe_unavailable:
-        node.resource_note = "CPU/内存已同步；GPU 信息保留原配置，Node Agent 容器内未检测到 nvidia-smi。"
-    elif not node.resource_note or "未检测到 CUDA" in node.resource_note:
+    if (not gpu_probe_unavailable) and (not node.resource_note or "未检测到 CUDA" in node.resource_note):
         node.resource_note = None
 
     await db.commit()

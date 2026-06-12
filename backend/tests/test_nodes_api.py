@@ -196,6 +196,7 @@ async def test_sync_node_resources_preserves_gpu_when_probe_unavailable(monkeypa
         gpu_model="NVIDIA TITAN Xp",
         gpu_memory_mb=12288,
         driver_version="535.171.04",
+        resource_note="验收 GPU 节点",
     )
     node.id = "node-1"
     db = FakeSession(node)
@@ -222,4 +223,4 @@ async def test_sync_node_resources_preserves_gpu_when_probe_unavailable(monkeypa
     assert result.gpu_count == 1
     assert result.gpu_model == "NVIDIA TITAN Xp"
     assert result.driver_version == "535.171.04"
-    assert "GPU 信息保留原配置" in result.resource_note
+    assert result.resource_note == "验收 GPU 节点"
