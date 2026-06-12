@@ -29,6 +29,7 @@ async def run_intent_workflow(
         "intent_parser_mode": settings.intent_parser_engine,
         "intent_rule_fallback_enabled": True,
     }
+
     if should_use_llm_intent_parser(configured_runtime):
         try:
             from services.llm_intent_parser import parse_intent_llm

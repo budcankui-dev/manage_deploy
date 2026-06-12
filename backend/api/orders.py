@@ -486,7 +486,7 @@ async def get_order(
     current_user: User = Depends(get_current_user),
 ):
     order, instance, evaluation = await get_order_detail_context(db, order_id)
-    if not order:
+    if not order or order.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.user_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
@@ -601,7 +601,7 @@ async def get_order(
 async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
-    if not order:
+    if not order or order.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Order not found")
     await emit_release_events_for_order(
         db,
@@ -1107,7 +1107,7 @@ async def receive_routing_result(
         select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
     )
     order = row.scalar_one_or_none()
-    if not order:
+    if not order or order.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Order not found")
 
     if order.materialized_instance_id:

@@ -8,8 +8,8 @@ const { chromium } = require("playwright");
 const baseUrl = process.env.EVALUATION_BASE_URL || "http://10.112.244.94:8182";
 const username = process.env.E2E_ADMIN_USERNAME || "admin";
 const password = process.env.E2E_ADMIN_PASSWORD || "admin";
-const matmulRunId = process.env.MATMUL_BENCHMARK_RUN_ID || "matmul-formal-20260610-01";
-const videoRunId = process.env.VIDEO_BENCHMARK_RUN_ID || "video-formal-20260610-01";
+const matmulRunId = process.env.MATMUL_BENCHMARK_RUN_ID || "high_throughput_matmul-20260612095418";
+const videoRunId = process.env.VIDEO_BENCHMARK_RUN_ID || "video-route-pool-check-20260612160633";
 const outDir = path.resolve("docs/assets/evaluation-plan");
 
 async function pause(ms = 1000) {
@@ -63,7 +63,7 @@ async function captureBenchmark(page, runId, taskName, prefix) {
 
   await page.getByText("计算成功率", { exact: false }).first().click().catch(() => {});
   await pause(1200);
-  await page.getByText("运行证据", { exact: false }).first().scrollIntoViewIfNeeded().catch(() => {});
+  await page.getByText("测试工单列表", { exact: false }).first().scrollIntoViewIfNeeded().catch(() => {});
   await pause(800);
   await save(page, `${prefix}-benchmark-result.png`);
 
@@ -116,6 +116,8 @@ try {
   await login(page);
   await captureBenchmark(page, matmulRunId, "矩阵乘法计算任务", "matmul");
   await captureBenchmark(page, videoRunId, "视频AI推理任务", "video");
+  await openPage(page, "/settings", "运行环境与系统配置");
+  await save(page, "system-settings-runtime-mode.png");
   await captureIntentChat(page);
   await captureIntentEvaluation(page);
 } finally {

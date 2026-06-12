@@ -179,9 +179,9 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     defaults = default_response.json()
     assert defaults["environment_mode"] == "production"
     assert defaults["labels"]["environment_mode"] == "真实环境"
-    assert defaults["benchmark_routing_mode"] == "internal_auto"
+    assert defaults["benchmark_routing_mode"] == "external"
     assert defaults["expert_mode"] is True
-    assert defaults["labels"]["benchmark_routing_mode"] == "自动路由"
+    assert defaults["labels"]["benchmark_routing_mode"] == "外部路由系统"
     assert defaults["modality_priority_map"]["低时延转发模态"] == 1
 
     update_response = await client.put(
@@ -1241,6 +1241,43 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
     second = await client.post(f"/api/routing-orders/{second_id}/result", json=payload)
     assert second.status_code == 409
     assert "GPU slot conflict" in second.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_routing_result_rejects_soft_deleted_order(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-deleted-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-deleted-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    ).scalar_one()
+    order.deleted_at = datetime.now(UTC).replace(tzinfo=None)
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            ],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Order not found"
 
 
 @pytest.mark.asyncio

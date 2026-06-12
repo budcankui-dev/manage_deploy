@@ -2,14 +2,14 @@ from services.intent_parser import parse_intent
 from services.llm_intent_parser import _raw_to_parse_result
 
 
-def test_parse_video_pipeline_extracts_latency():
+def test_parse_video_pipeline_uses_baseline_objective_even_when_user_mentions_latency():
     result = parse_intent("部署低时延视频转发，从 compute-1 到 compute-2，处理90帧，720p，30fps，现在开始跑2小时，端到端时延低于 200ms")
     assert result.task_type == "low_latency_video_pipeline"
     assert result.data_profile["frame_count"] == 90
     assert result.data_profile["resolution"] == "720p"
     assert result.data_profile["fps"] == 30
     assert result.business_objective["metric_key"] == "frame_latency_p90_ms"
-    assert result.business_objective["target_value"] == 200
+    assert "target_value" not in result.business_objective
     assert result.parse_status == "valid"
 
 

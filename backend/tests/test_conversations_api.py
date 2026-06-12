@@ -175,7 +175,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
 
 
 @pytest.mark.asyncio
-async def test_conversation_rejects_unreasonable_video_latency(client, db_session, monkeypatch):
+async def test_conversation_ignores_user_supplied_video_latency_threshold(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session)
 
@@ -184,11 +184,16 @@ async def test_conversation_rejects_unreasonable_video_latency(client, db_sessio
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频转发任务，端到端时延低于 1ms"},
+        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，端到端时延低于 1ms"},
         headers=headers,
     )
     assert message_response.status_code == 200
     body = message_response.json()
-    assert body["status"] == "rejected"
-    assert body["latest_draft"]["parse_status"] == "rejected"
+    assert body["status"] == "drafting"
+    assert body["latest_draft"]["parse_status"] == "valid"
     assert body["latest_draft"]["task_type"] == "low_latency_video_pipeline"
+    assert body["latest_draft"]["business_objective"] == {
+        "metric_key": "frame_latency_p90_ms",
+        "operator": "<=",
+        "unit": "ms",
+    }

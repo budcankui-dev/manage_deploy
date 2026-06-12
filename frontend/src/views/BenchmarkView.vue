@@ -29,7 +29,7 @@
           <span class="step-num">1</span>
           <div>
             <div class="step-title">基线</div>
-            <div class="step-desc">直接列出所有可调度节点；不稳定节点保留展示，但不纳入本轮自动路由。</div>
+            <div class="step-desc">直接列出所有可调度节点；不稳定节点保留展示，但不纳入本轮候选计算节点。</div>
           </div>
           <el-button
             class="header-action"
@@ -153,7 +153,7 @@
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
-      <p class="status-note">创建测评工单会生成新的验收轮次 ID，后续运行、统计和工单证据表默认只针对这一轮，避免历史数据影响验收截图。</p>
+      <p class="status-note">创建测评工单会生成新的验收轮次 ID，后续运行、统计和测试工单列表默认只针对这一轮，避免历史数据影响验收截图。</p>
     </el-card>
 
     <el-card class="step-card">
@@ -226,10 +226,10 @@
     <el-card class="step-card evidence-card">
       <template #header>
         <div class="step-header">
-          <span class="step-num muted-step">证</span>
+          <span class="step-num muted-step">单</span>
           <div>
-            <div class="step-title">{{ currentTaskConfig.label }}运行证据</div>
-            <div class="step-desc">查看当前任务类型的验收工单、路由放置、实例状态、节点/GPU 分配和业务输入输出，证明任务真实运行。</div>
+            <div class="step-title">{{ currentTaskConfig.label }}测试工单列表</div>
+            <div class="step-desc">查看当前任务类型的测试工单、路由放置、实例状态、节点/GPU 分配和业务输入输出；展开详情可复核任务真实运行结果。</div>
           </div>
           <div class="header-actions">
             <el-button
@@ -263,7 +263,7 @@
         border
         row-key="id"
         highlight-current-row
-        empty-text="暂无验收工单"
+        empty-text="暂无测试工单"
         @selection-change="handleOrderSelectionChange"
         @row-dblclick="openOrderDetail"
       >
@@ -519,13 +519,13 @@ const executionForm = reactive({
   per_compute_slot_limit: 1,
 })
 const settingsForm = reactive({
-  benchmark_routing_mode: 'internal_auto',
+  benchmark_routing_mode: 'external',
   expert_mode: true,
   show_internal_controls: false,
   show_routing_dag_json: false,
 })
 
-const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'internal_auto')
+const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'external')
 const showInternalControls = computed(() => Boolean(settingsForm.show_internal_controls))
 const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_json))
 
@@ -998,7 +998,7 @@ async function loadSystemSettings() {
   settingsLoading.value = true
   try {
     const { data } = await adminApi.getSystemSettings()
-    settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'internal_auto'
+    settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'external'
     settingsForm.expert_mode = data?.expert_mode ?? true
     settingsForm.show_internal_controls = data?.show_internal_controls ?? false
     settingsForm.show_routing_dag_json = data?.show_routing_dag_json ?? false

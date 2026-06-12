@@ -17,10 +17,12 @@
 最近一次真实矩阵验收轮次：
 
 ```text
-benchmark_run_id: high_throughput_matmul-controlled-20260608-01
+benchmark_run_id: high_throughput_matmul-20260612095418
 结果: 30 / 30 已评估，30 / 30 达标，业务目标成功率 100.0%
-页面: http://10.112.244.94:8182/benchmark?benchmark_run_id=high_throughput_matmul-controlled-20260608-01
+页面: http://10.112.244.94:8182/benchmark?benchmark_run_id=high_throughput_matmul-20260612095418
 ```
+
+视频 AI 推理当前已完成小批量联调轮次 `video-route-pool-check-20260612160633`，4 / 4 可评价且达标，可用于证明固定视频、YOLO 推理、GPU 分配和带框预览链路；正式留档仍需按同一页面流程重新执行不少于 30 个可评价工单的验收轮次。
 
 ## 1. 本地提交前检查
 

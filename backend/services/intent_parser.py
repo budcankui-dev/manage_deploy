@@ -275,30 +275,7 @@ def parse_intent(
         if batch_count is not None:
             result.data_profile["batch_count"] = batch_count
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
-        throughput = _extract_number(text, [
-            r"(\d+(?:\.\d+)?)\s*gflops",
-            r"吞吐.*?(\d+(?:\.\d+)?)",
-        ])
-        latency = _extract_number(text, [
-            r"(\d+(?:\.\d+)?)\s*ms",
-            r"延迟.*?(\d+(?:\.\d+)?)",
-            r"时延.*?(\d+(?:\.\d+)?)",
-        ])
-        if throughput is not None:
-            result.business_objective = {
-                "metric_key": "effective_gflops",
-                "operator": ">=",
-                "target_value": throughput,
-                "unit": "GFLOPS",
-            }
-        elif latency is not None:
-            result.business_objective = {
-                "metric_key": "compute_latency_ms",
-                "operator": "<=",
-                "target_value": latency,
-                "unit": "ms",
-            }
-        elif not result.business_objective:
+        if not result.business_objective:
             result.business_objective = {
                 "metric_key": "effective_gflops",
                 "operator": ">=",
@@ -324,17 +301,11 @@ def parse_intent(
         if resolution is not None:
             result.data_profile["resolution"] = resolution
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
-        latency = _extract_number(text, [
-            r"(?:端到端)?(?:时延|延迟)\s*(?:低于|低于|不超过|小于|<=|≤)\s*(\d+(?:\.\d+)?)\s*ms",
-            r"(\d+(?:\.\d+)?)\s*ms\s*(?:以内|以下)",
-        ])
         result.business_objective = {
             "metric_key": "frame_latency_p90_ms",
             "operator": "<=",
             "unit": "ms",
         }
-        if latency is not None:
-            result.business_objective["target_value"] = latency
     elif any(k in lower for k in ("llm", "大模型", "文本生成", "token", "prompt")):
         result.task_type = result.task_type or "llm_text_generation"
         result.modality = result.modality or modality_for_task_type(result.task_type)
@@ -428,22 +399,6 @@ def parse_intent(
         result.parse_status = "incomplete"
         result.assistant_message = "当前可解析矩阵计算、视频推理和八类模态测试样本。请说明任务类型、源节点、目的节点和开始/结束时间。"
         return result
-
-    # 业务目标合理性校验
-    objective = result.business_objective
-    if objective:
-        target = objective.get("target_value")
-        metric_key = objective.get("metric_key")
-        if metric_key == "effective_gflops" and target is not None and target <= 0:
-            result.parse_status = "rejected"
-            result.validation_errors.append("计算吞吐目标必须大于 0")
-            result.assistant_message = "计算吞吐目标必须大于 0，请调整后再试。"
-            return result
-        if metric_key == "frame_latency_p90_ms" and target is not None and target < 10:
-            result.parse_status = "rejected"
-            result.validation_errors.append("视频帧时延目标不能低于 10ms")
-            result.assistant_message = "视频帧时延目标不能低于 10ms，请调整为可验收的目标。"
-            return result
 
     # 必填字段检查
     missing = []

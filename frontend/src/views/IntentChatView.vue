@@ -426,7 +426,6 @@ const isStreaming = ref(false)
 const isConfirming = ref(false)
 const isDemoRouting = ref(false)
 const messagesRef = ref(null)
-const editableTarget = ref(null)
 const uploadedFiles = ref([])
 const myOrders = ref([])
 const ordersLoading = ref(false)
@@ -637,12 +636,6 @@ function deploymentStatusTag(status) {
 
 function formatParseStatus(status) {
   return PARSE_STATUS_LABEL[status] || status || '-'
-}
-
-function onTargetChange(val) {
-  if (!conversation.value || !draft.value) return
-  const updated = { ...draft.value.business_objective, target_value: val }
-  conversationApi.updateDraft(conversation.value.id, { business_objective: updated })
 }
 
 function onUploadSuccess(response) {
@@ -1012,12 +1005,6 @@ onMounted(async () => {
     await loadConversation(target ? lastId : conversations.value[0].id)
   } else {
     await startNewConversation()
-  }
-})
-
-watch(draft, (d) => {
-  if (d?.business_objective?.target_value != null) {
-    editableTarget.value = d.business_objective.target_value
   }
 })
 

@@ -1,7 +1,7 @@
 # Work Item: 端到端验收测试完善
 
 Status: in_progress  
-Last Updated: 2026-06-08
+Last Updated: 2026-06-12
 
 ## 已完成
 
@@ -40,15 +40,16 @@ Last Updated: 2026-06-08
 - 前端部署在 admin-server（10.112.244.94:8182，nginx）
 - MANAGER_PUBLIC_URL=http://10.112.244.94:8181，容器上报路径正确
 
-### 视频AI推理真实验收轮次（2026-06-08）
+### 视频AI推理链路联调（截至 2026-06-12）
 - 远端视频 worker 镜像已重建并推送：`10.112.244.94:5000/low-latency-video:dev`。
 - `compute-3` 当前 Node Agent 已恢复可达，静态 IP 为 `10.112.59.209`；路由与部署可继续使用该节点。
 - 视频 baseline 已在可调度节点重跑并稳定：
   - compute-1：`frame_latency_p90_ms=9.38037 ms`，`stable=true`
   - compute-2：`frame_latency_p90_ms=9.32026 ms`，`stable=true`
 - 视频 smoke：`video-smoke-20260608102101`，2 个工单均完成指标上报，2/2 达标。
-- 视频 30 任务验收轮次：`video-acceptance-20260608102409`，30 个工单全部创建、内置随机路由、启动、指标上报成功；`evaluated_count=30`，`success_count=30`，业务目标成功率 `100%`。
-- 验收轮次执行后已调用“清理实例保留工单”，释放远端容器和实例运行态；工单、路由结果、GPU 分配、业务指标、结果摘要仍保留用于页面回看，列表中 `instance_exists=false`。
+- 当前可复核的视频链路轮次：`video-route-pool-check-20260612160633`，4 个工单全部可评价且达标，业务目标成功率 `100%`。该轮次用于证明固定视频、YOLO 推理、带框预览和路由/部署/指标链路可用，不能替代正式 30 样本验收结论。
+- 正式视频AI推理验收仍需重新执行不少于 30 个可评价工单，并按当前测试方案截图留档。
+- 联调轮次执行后可调用“清理实例保留工单”，释放远端容器和实例运行态；工单、路由结果、GPU 分配、业务指标、结果摘要仍保留用于页面回看，列表中 `instance_exists=false`。
 - 抽查工单详情可见：
   - `routing_input_dag.edges[]` 包含 `data_mb` 和 `bandwidth_mbps`
   - compute placement 包含 `gpu_device: "0"`
@@ -58,7 +59,7 @@ Last Updated: 2026-06-08
 
 - [x] 视频AI推理 worker（source/compute/sink + Dockerfile，固定视频 + YOLOv5n ONNX + 带框预览）
 - [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=30，每个可调度节点重复 3 次取中位数
-- [x] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足 `actual_p90 <= baseline_p90 / 0.8`（即不超过基线 1.25 倍），成功率达到 90%
+- [ ] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足 `actual_p90 <= baseline_p90 / 0.8`（即不超过基线 1.25 倍），成功率达到 90%
 - [x] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情、结果摘要和带框预览图
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
