@@ -141,11 +141,19 @@ rsync -az workers/low-latency-video/ manage-admin:/home/bupt/manage_deploy/worke
 ssh manage-admin "pids=\$(pgrep -f '[u]vicorn main:app.*8181' || true); [ -n \"\$pids\" ] && kill \$pids || true; sleep 1; cd /home/bupt/manage_deploy/backend && nohup /home/bupt/miniconda3/bin/python3.13 -m uvicorn main:app --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
 
 # 刷新前端静态文件
-ssh manage-admin "docker cp /home/bupt/manage_deploy/frontend/dist/. idn-frontend:/usr/share/nginx/html/"
+# 当前 8182 由 admin-server 宿主机 nginx 提供，root 为 /home/bupt/manage_deploy/frontend/dist。
+# 同步 frontend/dist 后通常无需 docker cp；若另行启用 idn-frontend 容器预览，再单独复制到容器目录。
+ssh manage-admin "curl -s http://127.0.0.1:8182/ | grep -o 'assets/index-[^\"<>]*' | head"
 
 # 验证节点 API
 ssh manage-admin "curl -s http://localhost:8181/api/nodes | python3 -c 'import sys,json; print(len(json.load(sys.stdin)), \"nodes\")'"
 ```
+
+节点资源同步说明：
+
+- 工作节点页面的“同步资源”会调用 Node Agent `/resources`，用于补齐 CPU 核数、CPU 型号和内存等展示字段。
+- 如果 Node Agent 容器内没有 `nvidia-smi`，系统不会把 `nodes` 表里已有 GPU 数量、型号、显存和驱动版本覆盖为空；CUDA 版本只作为诊断字段，不作为业务目标成功率判定条件。
+- 验收前如需确认 GPU 真实可用，应在业务基线或 worker 日志中核对实际后端，例如矩阵业务 `onnxruntime_cuda/cuda:0`，视频业务 `opencv_dnn_cuda/cuda:0` 或对应 GPU 推理后端。
 
 worker 代码或 Dockerfile 变更后，需要在 AMD64 环境构建并推送镜像：
 
