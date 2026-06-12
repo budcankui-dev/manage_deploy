@@ -2,12 +2,10 @@
 
 执行流程：
 1. 通过 Node Agent 在目标节点启动临时 worker 容器（BENCHMARK_MODE=true）
-2. 容器跑完后从日志收集 effective_gflops
+2. 容器跑完后从日志收集业务过程性指标
 3. 重复 N 次，取中位数
 4. 校验标准差 < 中位数 10%（稳定性）
 5. 返回结果
-
-如果 Node Agent 不可达，fallback 到本地执行（单机演示场景）。
 """
 
 from __future__ import annotations
@@ -34,6 +32,8 @@ BENCHMARK_PROFILES = {
         "command": "python3 /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",
+            "USE_GPU": "true",
+            "GPU_DEVICE": "0",
             "MATRIX_SIZE": "1024",
             "BATCH_COUNT": "50",
             "SEED": "42",
@@ -44,6 +44,7 @@ BENCHMARK_PROFILES = {
             "MIN_SAMPLES": "5",
             "MAX_SAMPLES": "12",
         },
+        "gpu_id": "0",
         "profile_id": "gpu_standard",
     },
     "low_latency_video_pipeline": {
@@ -73,6 +74,7 @@ BENCHMARK_PROFILES = {
             "VIDEO_NMS_THRESHOLD": "0.45",
             "VIDEO_MAX_DETECTIONS": "8",
         },
+        "gpu_id": "0",
         "profile_id": "video_industrial_inspection_720p",
     },
 }
@@ -98,6 +100,7 @@ async def run_baseline_on_node(
     image = image_override or profile["image"]
     command = profile.get("command")
     env = dict(profile["env"])
+    gpu_id = profile.get("gpu_id")
     values: list[float] = []
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -111,6 +114,7 @@ async def run_baseline_on_node(
                 container_name,
                 profile["metric_key"],
                 command,
+                gpu_id,
             )
             values.append(metric_value)
             logger.info(
@@ -146,6 +150,7 @@ async def _run_single_benchmark(
     container_name: str,
     metric_key: str,
     command: str | None = None,
+    gpu_id: str | None = None,
 ) -> float:
     """启动一个临时容器执行基准测试并收集结果。"""
     base_url = agent_address.rstrip("/")
@@ -157,8 +162,10 @@ async def _run_single_benchmark(
         "image": image,
         "command": command,
         "env": env,
+        "gpu_id": gpu_id,
         "network_mode": "host",
         "restart_policy": "no",
+        "pull_policy": "always",
     }
     resp = await client.post(
         f"{base_url}/containers/{task_id}/{node_id}/start",
@@ -196,6 +203,15 @@ async def _run_single_benchmark(
 
 def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> float:
     """从容器日志中解析 benchmark_result JSON。"""
+    result = _parse_benchmark_payload(logs)
+    if result is None:
+        raise RuntimeError(f"无法从容器日志解析基准测试结果")
+    _validate_benchmark_result(result, metric_key)
+    return float(result[metric_key])
+
+
+def _parse_benchmark_payload(logs: str) -> dict[str, Any] | None:
+    """从容器日志中解析 benchmark_result 原始 JSON。"""
     for line in logs.splitlines():
         line = line.strip()
         if "benchmark_result" in line:
@@ -206,16 +222,53 @@ def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> 
                 line = line[json_start:]
             try:
                 data = json.loads(line)
-                return float(data["benchmark_result"][metric_key])
-            except (json.JSONDecodeError, KeyError, TypeError):
+                result = data.get("benchmark_result")
+                return result if isinstance(result, dict) else None
+            except (json.JSONDecodeError, TypeError):
                 continue
-    raise RuntimeError(f"无法从容器日志解析基准测试结果")
+    return None
 
 
-# ---- Local fallback（单机演示场景，Node Agent 不可达时使用）----
+def _validate_benchmark_result(result: dict[str, Any], metric_key: str) -> None:
+    if metric_key not in result:
+        raise RuntimeError(f"基准测试结果缺少指标字段: {metric_key}")
+
+    # 正式验收基线必须和业务任务一致，不能把 CPU fallback 写入节点基线。
+    if metric_key == "effective_gflops":
+        backend = str(result.get("backend") or "")
+        if backend != "cupy_gpu":
+            raise RuntimeError(
+                "矩阵计算基线未使用 GPU CuPy 路径，不能作为正式验收基线；"
+                f"backend={backend or '-'}, gpu_device={result.get('gpu_device')}"
+            )
+        return
+
+    # 视频正式验收基线必须和业务任务一致：YOLO 推理 + GPU 后端。
+    # CPU / deterministic_surrogate 只能用于本地开发兜底，不能写入正式节点基线。
+    if metric_key != "frame_latency_p90_ms":
+        return
+    backend = str(result.get("actual_backend") or result.get("backend") or result.get("detector_backend") or "")
+    device = str(result.get("device") or "")
+    model_name = str(result.get("model_name") or "")
+    if backend not in {"onnxruntime_cuda", "opencv_dnn_cuda"} or not device.startswith("cuda"):
+        raise RuntimeError(
+            "视频基线未使用 GPU YOLO 推理路径，不能作为正式验收基线；"
+            f"actual_backend={backend or '-'}, device={device or '-'}, "
+            f"gpu_requested={result.get('gpu_requested')}, gpu_available={result.get('gpu_available')}, "
+            f"gpu_error={result.get('gpu_error')}"
+        )
+    if "yolo" not in model_name.lower():
+        raise RuntimeError(f"视频基线模型不是 YOLO: model_name={model_name or '-'}")
+
+
+# ---- Local fallback（仅开发调试；正式验收不允许写入 CPU/兜底基线）----
 
 def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
-    """本地执行基准测试（fallback，不通过容器）。"""
+    """本地执行基准测试。
+
+    该路径只用于开发调试。结果仍会经过 GPU/YOLO 校验，避免 CPU 或
+    deterministic fallback 被保存为正式节点基线。
+    """
     import sys
     import os
     if task_type not in BENCHMARK_PROFILES:
@@ -255,6 +308,7 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
         }
         for _ in range(runs):
             result = run_video_profile(job)
+            _validate_benchmark_result(result, profile["metric_key"])
             values.append(float(result[profile["metric_key"]]))
 
         median_val = statistics.median(values)
@@ -284,6 +338,7 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
         if warmup > 0:
             run_matmul(matrix_size, warmup, seed)
         result = run_matmul(matrix_size, batch_count, seed)
+        _validate_benchmark_result(result, profile["metric_key"])
         values.append(result["effective_gflops"])
 
     median_val = statistics.median(values)
@@ -305,5 +360,5 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
 
 # 兼容旧 API 调用
 def run_benchmark(task_type: str, runs: int = 3) -> dict[str, Any]:
-    """兼容接口 — 本地执行（供 POST /baselines/run 使用）。"""
+    """兼容接口 — 本地开发调试用；正式验收应调用远程容器基线。"""
     return run_benchmark_local(task_type, runs)

@@ -247,10 +247,10 @@ class BatchOperationRequest(BaseModel):
     instance_ids: list[str] = Field(default_factory=list, description="废弃字段，请使用 order_ids（兼容旧调用方）")
     benchmark_run_id: Optional[str] = Field(
         default=None,
-        description="按验收压测轮次批量操作；order_ids 为空时生效",
+        description="按验收测评轮次批量操作；order_ids 为空时生效",
     )
     task_type: Optional[str] = Field(default=None, description="按任务类型缩小批量操作范围")
-    is_benchmark: Optional[bool] = Field(default=None, description="按是否验收压测缩小批量操作范围")
+    is_benchmark: Optional[bool] = Field(default=None, description="按是否验收测评缩小批量操作范围")
 
     @model_validator(mode="before")
     @classmethod
@@ -332,6 +332,8 @@ class TaskOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    owner_user_id: Optional[str] = None
+    owner_username: Optional[str] = None
     external_task_id: Optional[str] = None
     template_id: str
     name: str
@@ -358,6 +360,7 @@ class TaskOrderResponse(BaseModel):
     updated_at: Optional[datetime] = None
     task_type: Optional[str] = None
     routing_policy: Optional[str] = None
+    business_priority: Optional[int] = None
     metric_key: Optional[str] = None
     actual_value: Optional[float] = None
     target_value: Optional[float] = None
@@ -448,11 +451,14 @@ class BusinessTaskListItem(BaseModel):
     order_id: str
     external_task_id: Optional[str] = None
     name: str
+    owner_user_id: Optional[str] = None
+    owner_username: Optional[str] = None
     task_type: Optional[str] = None
     is_benchmark: bool = False
     benchmark_run_id: Optional[str] = None
     modality: Optional[str] = None
     routing_policy: Optional[str] = None
+    business_priority: Optional[int] = None
     order_status: OrderStatus
     instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None

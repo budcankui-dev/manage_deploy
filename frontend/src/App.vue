@@ -41,6 +41,10 @@
           <el-icon><UserFilled /></el-icon>
           <span>用户管理</span>
         </router-link>
+        <router-link to="/settings" class="nav-item">
+          <el-icon><Setting /></el-icon>
+          <span>系统设置</span>
+        </router-link>
       </nav>
       <div class="sidebar-footer">
         <div class="account-row">
@@ -236,6 +240,7 @@ body::-webkit-scrollbar-thumb:hover {
 
 .main-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 32px;
 }

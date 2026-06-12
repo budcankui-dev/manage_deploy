@@ -239,7 +239,7 @@
         />
         <div class="parser-actions">
           <el-button type="primary" :loading="parserLoading" @click="testParse">解析这一条</el-button>
-          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用系统兜底。</small>
+          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用系统解析流程。</small>
         </div>
       </div>
       <div v-if="parserResult" class="parser-result">
@@ -249,7 +249,7 @@
             <small class="raw-value">{{ parserResult.engine || '-' }}</small>
           </el-descriptions-item>
           <el-descriptions-item label="大模型">
-            {{ parserResult.model || '未使用大模型或已自动兜底' }}
+            {{ parserResult.model || '系统解析流程' }}
           </el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('task_type')">
             {{ taskTypeLabel(parserResult.task_type) }}
@@ -709,7 +709,7 @@ function parseStatusLabel(value) {
 function parserEngineLabel(value) {
   return {
     llm_qwen: '大模型/智能体解析',
-    rule_parser: '系统兜底解析',
+    rule_parser: '系统解析流程',
   }[value] || value || '-'
 }
 

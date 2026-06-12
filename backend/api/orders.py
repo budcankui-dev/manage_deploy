@@ -64,6 +64,7 @@ from services.routing_network import (
     mark_network_binding_ready,
 )
 from services.scheduler import TaskScheduler
+from services.system_settings import get_runtime_settings, modality_priority_map_from_settings
 from services.time_utils import business_now
 
 from .instances import _create_instance_from_template
@@ -302,14 +303,31 @@ def _order_to_response(
     instance_exists: bool | None = None,
     deployment_status: TaskStatus | None = None,
     evaluation: BusinessObjectiveEvaluation | None = None,
+    owner: User | None = None,
 ) -> TaskOrderResponse:
     rc = order.runtime_config or {}
     bt = rc.get("business_task") or {}
     rp = bt.get("runtime_plan") or {}
+    routing_result = rc.get("routing_result") if isinstance(rc.get("routing_result"), dict) else {}
+    routing_dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    raw_priority = routing_dag.get("priority") or bt.get("priority")
+    try:
+        business_priority = int(raw_priority) if raw_priority is not None else None
+    except (TypeError, ValueError):
+        business_priority = None
     data = TaskOrderResponse.model_validate(order)
     updates = {
+        "owner_user_id": order.user_id,
+        "owner_username": owner.username if owner else None,
         "task_type": bt.get("task_type"),
-        "routing_policy": bt.get("routing_policy") or rp.get("routing_strategy"),
+        "routing_policy": (
+            routing_result.get("strategy")
+            or routing_result.get("selected_strategy")
+            or routing_result.get("routing_policy")
+            or bt.get("routing_policy")
+            or rp.get("routing_strategy")
+        ),
+        "business_priority": business_priority,
     }
     if instance_exists is not None:
         updates["instance_exists"] = instance_exists
@@ -348,6 +366,13 @@ async def _latest_evaluations_by_instance(
         if row.instance_id not in latest:
             latest[row.instance_id] = row
     return latest
+
+
+async def _users_by_ids(db: AsyncSession, user_ids: list[str]) -> dict[str, User]:
+    if not user_ids:
+        return {}
+    rows = await db.execute(select(User).where(User.id.in_(user_ids)))
+    return {row.id: row for row in rows.scalars()}
 
 
 async def _instance_state(
@@ -436,6 +461,7 @@ async def list_orders(
         db,
         [order.materialized_instance_id for order in orders if order.materialized_instance_id],
     )
+    user_map = await _users_by_ids(db, [order.user_id for order in orders if order.user_id])
     for order in orders:
         exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
         responses.append(
@@ -444,6 +470,7 @@ async def list_orders(
                 instance_exists=exists,
                 deployment_status=deployment_status,
                 evaluation=eval_map.get(order.materialized_instance_id or ""),
+                owner=user_map.get(order.user_id or ""),
             )
         )
     return responses
@@ -468,11 +495,17 @@ async def get_order(
         routing_result = business_task.get("routing_result")
 
     instance_exists, deployment_status = await _instance_state(db, order.materialized_instance_id)
+    owner = None
+    if order.user_id:
+        owner = (
+            await db.execute(select(User).where(User.id == order.user_id))
+        ).scalar_one_or_none()
     base = _order_to_response(
         order,
         instance_exists=instance_exists,
         deployment_status=deployment_status,
         evaluation=evaluation,
+        owner=owner,
     )
     detail = TaskOrderDetailResponse.model_validate(base.model_dump())
     detail.business_task = business_task if isinstance(business_task, dict) else None
@@ -1326,6 +1359,8 @@ async def create_batch_benchmark(
     business_start_time = business_now()
     business_end_time = business_start_time + timedelta(hours=1)
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
+    runtime_settings = await get_runtime_settings(db)
+    modality_priority_map = modality_priority_map_from_settings(runtime_settings)
     for i in range(payload.count):
         order_name = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
         runtime_config = {
@@ -1334,7 +1369,7 @@ async def create_batch_benchmark(
                 "created_at": business_start_time.isoformat(),
                 "sample_count": payload.count,
                 "profile": data_profile,
-                "mode": "mock-route-ready",
+                "mode": "acceptance-run",
             },
             "business_task": {
                 "task_type": payload.task_type,
@@ -1372,6 +1407,7 @@ async def create_batch_benchmark(
             business_start_time=business_start_time,
             business_end_time=business_end_time,
             data_profile=data_profile,
+            modality_priority_map=modality_priority_map,
         )
         order_ids.append(order.id)
 
@@ -1810,7 +1846,7 @@ async def auto_route_order(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Built-in random routing strategy for benchmark fallback."""
+    """Built-in automatic routing strategy for evaluation orders."""
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
@@ -1818,7 +1854,7 @@ async def auto_route_order(
     if current_user.role != UserRole.ADMIN and order.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Cannot route orders owned by another user")
     if not order.is_benchmark:
-        raise HTTPException(status_code=400, detail="Mock auto-route is only available for benchmark orders")
+        raise HTTPException(status_code=400, detail="自动路由仅支持业务测评工单")
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=400, detail=f"Order routing_status is '{order.routing_status}', expected 'pending'")
 

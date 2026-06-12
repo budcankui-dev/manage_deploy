@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from enums import OrderStatus, TaskStatus
-from models import BusinessObjectiveEvaluation, TaskInstance, TaskOrder
+from models import BusinessObjectiveEvaluation, TaskInstance, TaskOrder, User
 from schemas import BusinessTaskListItem, BusinessTaskListResponse
 
 
@@ -45,15 +45,34 @@ def _extract_benchmark_run_id(order: TaskOrder) -> str | None:
 
 
 def _routing_policy_from_order(order: TaskOrder) -> str | None:
+    config = order.runtime_config or {}
+    routing = config.get("routing_result")
+    if isinstance(routing, dict):
+        value = routing.get("strategy") or routing.get("selected_strategy") or routing.get("routing_policy")
+        if value:
+            return value
     business_task = _extract_business_task(order)
     if not business_task:
         return None
     routing = business_task.get("routing_result") or {}
     return (
         routing.get("strategy")
+        or routing.get("selected_strategy")
         or routing.get("routing_policy")
         or (business_task.get("runtime_plan") or {}).get("routing_strategy")
     )
+
+
+def _business_priority_from_order(order: TaskOrder, business_task: dict[str, Any] | None = None) -> int | None:
+    routing_dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    priority = routing_dag.get("priority")
+    if priority is None:
+        task = business_task or _extract_business_task(order) or {}
+        priority = task.get("priority")
+    try:
+        return int(priority) if priority is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _matches_filters(
@@ -101,17 +120,21 @@ def _build_list_item(
     instance: TaskInstance | None,
     evaluation: BusinessObjectiveEvaluation | None,
     instance_exists: bool | None,
+    owner: User | None = None,
 ) -> BusinessTaskListItem:
     objective = business_task.get("business_objective") or {}
     return BusinessTaskListItem(
         order_id=order.id,
         external_task_id=order.external_task_id or business_task.get("external_task_id"),
         name=order.name,
+        owner_user_id=order.user_id,
+        owner_username=owner.username if owner else None,
         task_type=business_task.get("task_type"),
         is_benchmark=bool(order.is_benchmark),
         benchmark_run_id=_extract_benchmark_run_id(order),
         modality=business_task.get("modality"),
         routing_policy=_routing_policy_from_order(order),
+        business_priority=_business_priority_from_order(order, business_task),
         order_status=order.status,
         instance_id=order.materialized_instance_id,
         instance_exists=instance_exists,
@@ -153,6 +176,13 @@ async def _instances_by_ids(db: AsyncSession, instance_ids: list[str]) -> dict[s
     if not instance_ids:
         return {}
     rows = await db.execute(select(TaskInstance).where(TaskInstance.id.in_(instance_ids)))
+    return {row.id: row for row in rows.scalars()}
+
+
+async def _users_by_ids(db: AsyncSession, user_ids: list[str]) -> dict[str, User]:
+    if not user_ids:
+        return {}
+    rows = await db.execute(select(User).where(User.id.in_(user_ids)))
     return {row.id: row for row in rows.scalars()}
 
 
@@ -212,6 +242,8 @@ async def list_business_tasks(
     page_size = min(max(filters.page_size, 1), 100)
     start = (page - 1) * page_size
     page_rows = filtered[start : start + page_size]
+    user_ids = [order.user_id for order, _ in page_rows if order.user_id]
+    user_map = await _users_by_ids(db, user_ids)
 
     items: list[BusinessTaskListItem] = []
     for order, business_task in page_rows:
@@ -221,7 +253,14 @@ async def list_business_tasks(
         if order.materialized_instance_id:
             instance_exists = instance is not None
         items.append(
-            _build_list_item(order, business_task, instance, evaluation, instance_exists)
+            _build_list_item(
+                order,
+                business_task,
+                instance,
+                evaluation,
+                instance_exists,
+                user_map.get(order.user_id or ""),
+            )
         )
 
     return BusinessTaskListResponse(items=items, total=total, page=page, page_size=page_size)

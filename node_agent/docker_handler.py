@@ -54,11 +54,16 @@ class DockerHandler:
         memory_swap_limit: Optional[str] = None,
         network_mode: str = "host",
         restart_policy: str = "on-failure",
+        pull_policy: Optional[str] = None,
     ) -> tuple[bool, Optional[str], Optional[str]]:
         from runtime_resources import parse_gpu_spec, build_resource_kwargs, resolve_mounts
         from port_utils import extract_host_ports, format_host_ports_label
 
         try:
+            if str(pull_policy or "").lower() in {"always", "true", "1", "yes"}:
+                logger.info("Pulling image before container start: %s", image)
+                self.client.images.pull(image)
+
             existing = self.get_container(container_name)
             if existing:
                 existing.reload()

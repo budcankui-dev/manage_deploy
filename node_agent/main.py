@@ -42,6 +42,7 @@ class ContainerStartRequest(BaseModel):
     memory_swap_limit: Optional[str] = None
     network_mode: str = "host"
     restart_policy: str = "on-failure"
+    pull_policy: Optional[str] = None
     health_check: Optional[dict] = None
 
 
@@ -120,6 +121,7 @@ async def start_container(
         memory_swap_limit=request.memory_swap_limit,
         network_mode=request.network_mode,
         restart_policy=request.restart_policy,
+        pull_policy=request.pull_policy,
     )
 
     if not success:

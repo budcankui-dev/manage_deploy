@@ -40,6 +40,11 @@ from services.intent_batch_eval import (
 )
 from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
+from services.system_settings import (
+    get_runtime_settings,
+    modality_priority_map_from_settings,
+    update_runtime_settings,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -70,7 +75,11 @@ def _parse_result_payload(result) -> dict[str, Any]:
     }
 
 
-def _routing_dag_preview(result, order_id: str = "preview") -> dict[str, Any] | None:
+def _routing_dag_preview(
+    result,
+    order_id: str = "preview",
+    runtime_settings: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if not (
         result.task_type
         and result.source_name
@@ -90,7 +99,27 @@ def _routing_dag_preview(result, order_id: str = "preview") -> dict[str, Any] | 
         business_end_time=result.business_end_time,
         data_profile=result.data_profile,
         resource_requirement=result.resource_requirement,
+        modality_priority_map=modality_priority_map_from_settings(runtime_settings),
     )
+
+
+# ─── 系统设置 ───────────────────────────────────────────────
+
+@router.get("/system-settings")
+async def get_system_settings(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    return await get_runtime_settings(db)
+
+
+@router.put("/system-settings")
+async def put_system_settings(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    return await update_runtime_settings(db, payload, updated_by=admin.id)
 
 
 # ─── 用户管理 ───────────────────────────────────────────────
@@ -313,18 +342,26 @@ async def list_all_orders(
 @router.post("/intent-parser/parse-one")
 async def parse_one(
     payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
     """管理员测试单条意图解析。"""
     utterance = payload.get("utterance", "")
     context = payload.get("context")
     expected = payload.get("expected")
-    result, trace = await run_intent_workflow(utterance, context, valid_nodes=VALID_NODES)
+    runtime_settings = await get_runtime_settings(db)
+    result, trace = await run_intent_workflow(
+        utterance,
+        context,
+        valid_nodes=VALID_NODES,
+        runtime_settings=runtime_settings,
+    )
     response = _parse_result_payload(result)
     response["trace"] = trace
     response["engine"] = trace.get("engine")
+    response["runtime_settings"] = runtime_settings
     response["model"] = trace.get("model")
-    response["routing_dag"] = _routing_dag_preview(result)
+    response["routing_dag"] = _routing_dag_preview(result, runtime_settings=runtime_settings)
     if isinstance(expected, dict):
         response["expected_result"] = expected
         response["scoring"] = score_parsed_result(result, expected)

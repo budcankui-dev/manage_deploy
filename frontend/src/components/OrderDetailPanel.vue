@@ -13,7 +13,10 @@
           <el-tag v-if="businessTask?.modality" type="success" effect="plain" size="large">
             {{ modalityLabel(businessTask.modality) }}
           </el-tag>
-          <el-tag v-if="detail.is_benchmark" type="warning" effect="plain" size="large">压测工单</el-tag>
+          <el-tag v-if="businessPriorityText !== '-'" type="primary" effect="plain" size="large">
+            优先级 {{ businessPriorityText }}
+          </el-tag>
+          <el-tag v-if="detail.is_benchmark" type="warning" effect="plain" size="large">验收测评工单</el-tag>
         </div>
       </section>
 
@@ -24,6 +27,8 @@
             <el-descriptions-item label="外部任务 ID">{{ detail.external_task_id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="任务类型">{{ taskTypeLabel(taskType) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
+            <el-descriptions-item label="业务优先级">{{ businessPriorityText }}</el-descriptions-item>
+            <el-descriptions-item label="所属用户">{{ detail.owner_username || detail.owner_user_id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="业务源节点">{{ detail.source_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="业务目的节点">{{ detail.destination_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="开始时间">{{ formatTime(detail.business_start_time || detail.scheduled_start_time) }}</el-descriptions-item>
@@ -235,7 +240,7 @@
               </el-table-column>
               <el-table-column label="来源" width="110">
                 <template #default="{ row }">
-                  <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                  <el-tag :type="row.fallback ? 'info' : 'success'" size="small">{{ row.fallback ? '检测结果' : '模型输出' }}</el-tag>
                 </template>
               </el-table-column>
             </el-table>
@@ -468,6 +473,13 @@ const networkReadyText = computed(() => {
   if (routingResult.value.network_ready_required && routingResult.value.network_ready) return '已确认'
   return '无需额外确认'
 })
+const businessPriorityText = computed(() => {
+  const value = detail.value?.routing_input_dag?.priority
+    ?? businessTask.value?.priority
+    ?? routingResult.value?.priority
+    ?? routingResult.value?.metadata?.priority
+  return value === null || value === undefined || value === '' ? '-' : String(value)
+})
 
 function normalizePlacementRow(role, placement) {
   const roleKey = String(role || '').toLowerCase() || 'unknown'
@@ -535,18 +547,7 @@ function shortId(value) {
 
 function prettyJson(value) {
   if (value == null) return '暂无数据'
-  return JSON.stringify(stripDisplayOnlyRoutingPriority(value), null, 2)
-}
-
-function stripDisplayOnlyRoutingPriority(value) {
-  if (Array.isArray(value)) return value.map((item) => stripDisplayOnlyRoutingPriority(item))
-  if (!value || typeof value !== 'object') return value
-  return Object.entries(value).reduce((acc, [key, item]) => {
-    // 平台目前只展示模态，不展示未正式定义的网络优先级字段；路由策略 cost_priority 不受影响。
-    if (key === 'priority' || key === 'traffic_class') return acc
-    acc[key] = stripDisplayOnlyRoutingPriority(item)
-    return acc
-  }, {})
+  return JSON.stringify(value, null, 2)
 }
 
 function formatMetric(value) {

@@ -43,6 +43,7 @@
 | 真实端点 | `source/sink` 的真实节点名看 `fixed_node_name` |
 | 算力选择 | 路由系统只需要回写 `compute.worker_host` 和可选 `compute.gpu_device` |
 | GPU 独占 | 同一 `worker_host + gpu_device` 同一时刻只能分配给一个未释放任务 |
+| 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
 | 扩展信息 | 算法版本、路径、成本、租金、解释等统一放到 `metadata` 字典 |
 
 ## 3. 推荐部署方式
@@ -220,6 +221,8 @@ while True:
   "job_name": "视频AI推理",
   "source_name": "terminal-a",
   "destination_name": "terminal-b",
+  "modal": "低时延转发模态",
+  "priority": 1,
   "policy_type": "LATENCY_CONSTRAINED",
   "business_start_ts_ms": 1777341600000,
   "business_end_ts_ms": 1777345200000,
@@ -269,7 +272,8 @@ while True:
       "flow": {
         "flow_id": "order-uuid-001:source->compute",
         "protocol": "tcp",
-        "dst_port_ref": "compute.compute"
+        "dst_port_ref": "compute.compute",
+        "priority": 1
       }
     },
     {
@@ -280,7 +284,8 @@ while True:
       "flow": {
         "flow_id": "order-uuid-001:compute->sink",
         "protocol": "tcp",
-        "dst_port_ref": "sink.sink"
+        "dst_port_ref": "sink.sink",
+        "priority": 1
       }
     }
   ]
@@ -295,7 +300,8 @@ while True:
 - `compute` 是路由系统需要选择真实部署节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
-- `edges[].flow` 用于识别业务流和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。业务模态字段可作为路由系统决定差异化网络处理的依据，平台不硬编码优先级。
+- `priority` 和 `edges[].flow.priority` 用于识别业务流优先级，取值 `1-8`，`1` 最高。该值由平台“系统设置 -> 模态优先级字典”维护。
+- `edges[].flow` 用于识别业务流和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。路由系统可结合 `priority` 对不同业务流下发 QoS 或路径策略。
 
 ## 8. 支持的 DAG 形态
 
@@ -450,7 +456,7 @@ Content-Type: application/json
 }
 ```
 
-业务容器还有第二层兜底：`PEER_CONNECT_TIMEOUT_SEC` 和 `PEER_WAIT_TIMEOUT_SEC` 默认 600 秒。即使路由系统确认后流表传播有延迟，worker 也会持续重试一段时间，不会立即失败。
+业务容器还有连接等待机制：`PEER_CONNECT_TIMEOUT_SEC` 和 `PEER_WAIT_TIMEOUT_SEC` 默认 600 秒。即使路由系统确认后流表传播有延迟，worker 也会持续重试一段时间，不会立即失败。
 
 ## 10. GPU 独占和资源释放
 
@@ -645,7 +651,7 @@ curl -sS -X POST \
 
 ### 用例 6：GPU 冲突时平台返回 409
 
-目的：验证平台兜底校验生效，防止路由系统误把同一 GPU 分给多个未释放任务。
+目的：验证平台部署前校验生效，防止路由系统误把同一 GPU 分给多个未释放任务。
 
 步骤：
 
@@ -732,16 +738,16 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 为什么这样选？
 ```
 
-## 16. 内置随机路由策略
+## 16. 路由模式与开发调试开关
 
 平台前端有两种路由方式：
 
 | 模式 | 用途 |
 |------|------|
-| 内置随机路由策略 | 外部路由未接入时的 fallback，可跑通演示闭环。 |
-| 外部路由系统 | 正式联调模式，平台只创建 pending 工单，等待外部路由回写。 |
+| 外部路由系统 | 正式联调和验收模式，平台只创建 pending 工单，等待外部路由回写。 |
+| 开发调试路由流程 | 仅开发调试使用，可通过系统设置页切换，用于外部路由系统接入前验证部署闭环。 |
 
-内置随机路由策略不是正式路由算法，只用于兜底演示和平台自测。
+开发调试路由流程不是正式路由算法，不用于证明路由策略效果；正式材料和验收截图应明确使用外部路由系统模式，或在联调说明中标注“仅开发调试”。
 
 ## 17. 业务目标成功率和路由的关系
 

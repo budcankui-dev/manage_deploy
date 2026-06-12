@@ -6,7 +6,15 @@ from sqlalchemy import select
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
 from enums import OrderStatus, RoutingStatus, UserRole
-from models import BusinessObjectiveEvaluation, RoutingResourceEvent, TaskInstance, TaskInstanceNode, TaskOrder, User
+from models import (
+    BusinessObjectiveEvaluation,
+    RoutingResourceEvent,
+    SystemSetting,
+    TaskInstance,
+    TaskInstanceNode,
+    TaskOrder,
+    User,
+)
 
 
 async def _create_user(db_session, username: str, role: UserRole = UserRole.USER) -> User:
@@ -130,6 +138,104 @@ async def test_auth_register_creates_regular_user(client, db_session):
     )
     assert login.status_code == 200
     assert login.json()["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_admin_system_settings_roundtrip_and_normalization(client, db_session):
+    headers, admin = await _auth_headers(
+        client,
+        db_session,
+        username="system-settings-admin",
+        role=UserRole.ADMIN,
+    )
+
+    default_response = await client.get("/api/admin/system-settings", headers=headers)
+    assert default_response.status_code == 200
+    defaults = default_response.json()
+    assert defaults["environment_mode"] == "production"
+    assert defaults["labels"]["environment_mode"] == "真实环境"
+    assert defaults["benchmark_routing_mode"] == "internal_auto"
+    assert defaults["expert_mode"] is True
+    assert defaults["labels"]["benchmark_routing_mode"] == "自动路由"
+    assert defaults["modality_priority_map"]["低时延转发模态"] == 1
+
+    update_response = await client.put(
+        "/api/admin/system-settings",
+        headers=headers,
+        json={
+            "environment_mode": "not-a-mode",
+            "intent_parser_mode": "rule",
+            "intent_rule_fallback_enabled": False,
+            "benchmark_routing_mode": "external",
+            "expert_mode": False,
+            "show_internal_controls": True,
+            "modality_priority_map": {
+                "低时延转发模态": 2,
+                "high_throughput_compute": 4,
+                "unknown": 99,
+            },
+            "notes": "联调路由系统",
+        },
+    )
+    assert update_response.status_code == 200
+    body = update_response.json()
+    assert body["environment_mode"] == "production"
+    assert body["intent_parser_mode"] == "rule"
+    assert body["intent_rule_fallback_enabled"] is False
+    assert body["benchmark_routing_mode"] == "external"
+    assert body["expert_mode"] is False
+    assert body["show_internal_controls"] is True
+    assert body["notes"] == "联调路由系统"
+    assert body["labels"]["benchmark_routing_mode"] == "外部路由系统"
+    assert body["labels"]["environment_mode"] == "真实环境"
+    assert body["modality_priority_map"]["低时延转发模态"] == 2
+    assert body["modality_priority_map"]["高通量计算模态"] == 4
+    assert len(body["modality_priority_rows"]) == 8
+
+    stored = (
+        await db_session.execute(select(SystemSetting).where(SystemSetting.key == "runtime_modes"))
+    ).scalar_one()
+    assert stored.updated_by == admin.id
+    assert "labels" not in stored.value
+    assert "modality_priority_rows" not in stored.value
+
+
+@pytest.mark.asyncio
+async def test_admin_parse_one_uses_runtime_settings(client, db_session):
+    headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="parse-one-admin",
+        role=UserRole.ADMIN,
+    )
+    await client.put(
+        "/api/admin/system-settings",
+        headers=headers,
+        json={
+            "intent_parser_mode": "rule",
+            "intent_rule_fallback_enabled": False,
+            "benchmark_routing_mode": "internal_auto",
+        },
+    )
+
+    response = await client.post(
+        "/api/admin/intent-parser/parse-one",
+        headers=headers,
+        json={
+            "utterance": "矩阵乘法任务，从 compute-1 到 compute-2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["engine"] == "rule_parser"
+    assert body["runtime_settings"]["intent_parser_mode"] == "rule"
+    assert body["task_type"] == "high_throughput_matmul"
+    assert body["source_name"] == "compute-1"
+    assert body["destination_name"] == "compute-2"
+    assert body["routing_dag"]["job_id"] == "preview"
+    assert body["routing_dag"]["priority"] == 5
+    assert body["routing_dag"]["edges"][0]["flow"]["priority"] == 5
 
 
 @pytest.mark.asyncio
@@ -293,7 +399,7 @@ async def test_business_task_summary_can_filter_benchmark_orders(client, db_sess
     )
     benchmark_order = TaskOrder(
         template_id=template_id,
-        name="验收压测工单",
+        name="验收测评工单",
         status=OrderStatus.COMPLETED,
         runtime_config=runtime_config(),
         materialized_instance_id="benchmark-instance",
@@ -558,6 +664,7 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["job_id"] == order.id
     assert dag["order_id"] == order.id
     assert dag["job_name"] == "视频AI推理"
+    assert dag["priority"] == 1
     assert "constraints" not in dag
     assert [node["node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
@@ -574,7 +681,8 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     ]
     assert dag["edges"][0]["flow"]["dst_port_ref"] == "compute.compute"
     assert "traffic_class" not in dag["edges"][0]["flow"]
-    assert "priority" not in dag["edges"][0]["flow"]
+    assert dag["edges"][0]["flow"]["priority"] == 1
+    assert dag["edges"][1]["flow"]["priority"] == 1
 
 
 @pytest.mark.asyncio
@@ -1201,7 +1309,7 @@ async def test_mock_auto_route_single_order_is_benchmark_only(client, db_session
     response = await client.post(f"/api/orders/{order.id}/auto-route", headers=headers)
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Mock auto-route is only available for benchmark orders"
+    assert response.json()["detail"] == "自动路由仅支持业务测评工单"
 
 
 @pytest.mark.asyncio
@@ -1682,7 +1790,7 @@ async def test_business_task_list_api(client, db_session):
     assert detail["evaluation"]["business_success"] is True
     placements = {item["role"]: item for item in detail["node_placements"]}
     assert placements["compute"]["hostname"] == "worker-b"
-    assert placements["compute"]["gpu_id"] == "all"
+    assert placements["compute"]["gpu_id"] == "0"
 
 
 @pytest.mark.parametrize("tags,expected_keys", [

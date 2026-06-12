@@ -106,6 +106,8 @@ async def init_db() -> None:
         await _ensure_column(conn, "routing_requests", "selected_strategy", "VARCHAR(255)")
         await _ensure_column(conn, "routing_requests", "error_message", "VARCHAR(2048)")
         await _ensure_column(conn, "routing_requests", "deleted_at", "DATETIME")
+        await _ensure_column(conn, "system_settings", "description", "VARCHAR(1024)")
+        await _ensure_column(conn, "system_settings", "updated_by", "VARCHAR(36)")
     await _ensure_default_users()
 
 

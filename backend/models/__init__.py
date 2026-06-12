@@ -303,6 +303,20 @@ class RoutingResourceEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
+class SystemSetting(Base):
+    """系统运行模式配置：用于区分真实环境和开发环境。"""
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    updated_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, onupdate=func.now(), nullable=True
+    )
+
+
 class BusinessTemplateCatalog(Base):
     __tablename__ = "business_template_catalog"
 

@@ -138,7 +138,8 @@ export function describeDataProfile(taskType, profile) {
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
       { label: '预热帧数', value: String(profile.warmup_frames ?? '-') },
       { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
-      { label: '计算强度', value: String(profile.work_units ?? '-') },
+      { label: '推理模型', value: profile.model_name || 'yolov5n' },
+      { label: '测试视频', value: profile.video_asset || '-' },
     ]
   }
   return Object.entries(profile).map(([key, value]) => ({

@@ -7,7 +7,7 @@
       </div>
       <div class="actions">
         <el-button @click="refreshAll">刷新</el-button>
-        <el-button type="primary" plain :loading="demoRunning" @click="submitSample">
+        <el-button v-if="showInternalControls" type="primary" plain :loading="demoRunning" @click="submitSample">
           一键演示矩阵乘法
         </el-button>
       </div>
@@ -63,7 +63,7 @@
             <el-option v-for="t in taskTypeOptions" :key="t" :label="taskTypeLabel(t)" :value="t" />
           </el-select>
           <el-select v-model="filters.is_benchmark" placeholder="工单来源" clearable style="width: 130px" @change="applyFilters">
-            <el-option label="验收压测" :value="true" />
+            <el-option label="验收测评" :value="true" />
             <el-option label="普通工单" :value="false" />
           </el-select>
           <el-input
@@ -91,29 +91,46 @@
           <el-button size="small" @click="applyFilters">应用筛选</el-button>
         </div>
         <p class="batch-hint">
-          清理实例会释放远端容器和实例记录，但保留工单、路由结果、业务指标和结果文件；删除工单用于清掉废弃压测轮次。
+          清理实例会释放远端容器和实例记录，但保留工单、路由结果、业务指标和结果文件；删除工单用于清掉废弃测评轮次。
         </p>
       </div>
 
       <el-table
         :data="items"
+        class="business-order-table"
         size="small"
+        border
+        row-key="order_id"
+        highlight-current-row
         v-loading="listLoading"
         @selection-change="handleOrderSelectionChange"
       >
-        <el-table-column type="selection" width="44" />
-        <el-table-column label="工单ID" width="120">
-          <template #default="{ row }"><code style="font-size:11px">{{ row.order_id?.slice(0,8) }}</code></template>
+        <el-table-column type="selection" width="44" fixed="left" />
+        <el-table-column label="工单" min-width="240" fixed="left" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="order-cell">
+              <strong>{{ row.name || row.order_id?.slice(0, 8) }}</strong>
+              <span>工单ID：{{ row.order_id?.slice(0, 8) }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="所属用户" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.owner_username || shortId(row.owner_user_id) || '-' }}</template>
         </el-table-column>
         <el-table-column label="任务类型" min-width="160">
           <template #default="{ row }">
             {{ taskTypeLabel(row.task_type) || '-' }}
-            <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain" style="margin-left:6px">压测</el-tag>
+            <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain" style="margin-left:6px">测评</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="所属模态" min-width="150">
+        <el-table-column label="模态 / 优先级" min-width="190">
           <template #default="{ row }">
-            <el-tag size="small" type="success" effect="plain">{{ modalityLabel(row.modality) }}</el-tag>
+            <div class="modality-cell">
+              <el-tag size="small" type="success" effect="plain">{{ modalityLabel(row.modality) }}</el-tag>
+              <el-tag v-if="row.business_priority != null" size="small" type="primary" effect="plain">
+                P{{ row.business_priority }}
+              </el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="路由策略" min-width="130">
@@ -186,11 +203,11 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row.order_id)">详情</el-button>
             <el-button
-              v-if="row.order_status === 'pending' && !row.instance_id"
+              v-if="showInternalControls && row.order_status === 'pending' && !row.instance_id"
               link
               type="warning"
               @click="openManualRouting(row)"
@@ -226,7 +243,7 @@
       </div>
     </section>
 
-    <el-drawer v-model="drawerOpen" :title="detailTitle" size="64%" destroy-on-close class="task-detail-drawer">
+    <el-drawer v-model="drawerOpen" title="任务工单详情" size="76%" destroy-on-close class="task-detail-drawer">
       <OrderDetailPanel
         v-loading="detailLoading"
         v-model:active-tab="detailTab"
@@ -241,8 +258,8 @@
       </OrderDetailPanel>
     </el-drawer>
 
-    <!-- 手动路由对话框 -->
-    <el-dialog v-model="manualRoutingVisible" title="手动分配路由" width="520px" destroy-on-close>
+    <!-- 内部调试：手动路由对话框 -->
+    <el-dialog v-if="showInternalControls" v-model="manualRoutingVisible" title="手动分配路由" width="520px" destroy-on-close>
       <p style="margin-bottom:12px">为任务 <strong>{{ manualRoutingOrder?.name || '未命名' }}</strong> 分配计算节点</p>
       <el-form label-width="100px" size="small">
         <el-form-item label="数据源节点">
@@ -278,7 +295,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
+import { adminApi, businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   DEPLOYMENT_STATUS_LABELS,
@@ -320,6 +337,7 @@ const batchCleanupLoading = ref(false)
 const batchDeleteLoading = ref(false)
 const runCleanupLoading = ref(false)
 const runDeleteLoading = ref(false)
+const settingsLoading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -328,11 +346,12 @@ const nodes = ref([])
 const selectedOrderIds = ref([])
 
 const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
+const showInternalControls = ref(false)
 
 const filters = reactive({
   q: '',
   task_type: '',
-  is_benchmark: '',
+  is_benchmark: false,
   benchmark_run_id: '',
   routing_policy: '',
   order_status: '',
@@ -351,8 +370,6 @@ const taskTypeOptions = computed(() => Object.keys(TASK_TYPE_LABELS))
 const hasBenchmarkRunScope = computed(() =>
   filters.is_benchmark === true && Boolean(String(filters.benchmark_run_id || '').trim())
 )
-
-const detailTitle = computed(() => orderDetail.value?.name || '任务详情')
 
 const manualRoutingVisible = ref(false)
 const manualRoutingOrder = ref(null)
@@ -537,7 +554,10 @@ watch(
 function applyRouteFilters() {
   const query = route.query
   if (typeof query.task_type === 'string') filters.task_type = query.task_type
-  if (typeof query.benchmark_run_id === 'string') filters.benchmark_run_id = query.benchmark_run_id
+  if (typeof query.benchmark_run_id === 'string') {
+    filters.benchmark_run_id = query.benchmark_run_id
+    if (typeof query.is_benchmark !== 'string') filters.is_benchmark = true
+  }
   if (typeof query.is_benchmark === 'string') {
     filters.is_benchmark = query.is_benchmark === 'true'
   }
@@ -546,6 +566,10 @@ function applyRouteFilters() {
 
 function formatMetric(value) {
   return value == null ? '-' : Number(value)
+}
+
+function shortId(value) {
+  return value ? String(value).slice(0, 8) : ''
 }
 
 function metricMeaningLabel(row) {
@@ -598,7 +622,17 @@ function handleOrderSelectionChange(rows) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadList(), loadNodes()])
+  await Promise.all([loadSystemSettings(), loadList(), loadNodes()])
+}
+
+async function loadSystemSettings() {
+  settingsLoading.value = true
+  try {
+    const { data } = await adminApi.getSystemSettings()
+    showInternalControls.value = Boolean(data?.show_internal_controls)
+  } finally {
+    settingsLoading.value = false
+  }
 }
 
 function buildFilterParams({ includePaging = false } = {}) {
@@ -1028,6 +1062,40 @@ async function submitSample() {
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.business-order-table {
+  width: 100%;
+}
+
+.business-order-table :deep(.el-table__row) {
+  cursor: default;
+}
+
+.order-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.order-cell strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-cell span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.modality-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .objective-card {

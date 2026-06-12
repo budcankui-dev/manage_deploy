@@ -84,9 +84,9 @@ E2E_TRIGGER_MATMUL_DEMO=1 npm run test:e2e:headed
 用户端意图对话 E2E 覆盖两类演示业务：
 
 - 矩阵乘法计算任务：自然语言输入 -> 参数完整 -> 确认生成工单 -> 状态进入待路由。
-- 视频AI推理任务：自然语言输入 -> 参数完整 -> 确认生成工单 -> 用户端“随机路由并部署” -> 同一工单物化实例并显示已部署。
+- 视频AI推理任务：自然语言输入 -> 参数完整 -> 确认生成工单 -> 用户端“自动路由并部署” -> 同一工单物化实例并显示已部署。
 
-该 E2E 使用内置随机路由兜底，只验证用户端链路和部署物化能力；正式路由算法仍通过 `/api/routing-orders/{order_id}/result` 回写 placements。
+该 E2E 可在系统设置页启用开发调试路由流程，只验证用户端链路和部署物化能力；正式路由系统仍通过 `/api/routing-orders/{order_id}/result` 回写 placements。
 
 Worker 和脚本语法：
 
@@ -106,7 +106,7 @@ git diff --check
 
 ## 科学计算矩阵乘法 E2E
 
-正式业务目标成功率验收以 [/benchmark](benchmark-test-plan.md) 为主入口。命令行 E2E 用于验证镜像、Node Agent、端口、网络通信和指标上报链路；专家演示时必须结合浏览器页面查看基线、压测工单证据链和最终成功率。
+正式业务目标成功率验收以 [/benchmark](benchmark-test-plan.md) 为主入口。命令行 E2E 用于验证镜像、Node Agent、端口、网络通信和指标上报链路；专家演示时必须结合浏览器页面查看基线、测评工单证据链和最终成功率。
 
 构建 worker 镜像：
 
@@ -161,16 +161,16 @@ http://10.112.244.94:8182/benchmark
 正式验收步骤：
 
 1. Step 1 批量测试所有可调度节点 baseline，确认每行都有基线值且稳定。
-2. Step 2 创建 30 个压测工单，矩阵 profile 与 baseline 保持一致，默认使用 10 秒观测窗口和最少 5 个有效样本。
+2. Step 2 创建 30 个测评工单，矩阵 profile 与 baseline 保持一致，默认使用 10 秒观测窗口和最少 5 个有效样本。
 3. 记录页面顶部显示的当前 `benchmark_run_id`；后续列表、路由、启动和 Step 4 统计都应限定在该轮次。
-4. Step 3 使用外部路由系统回写 placements；联调阶段可用页面“内置随机路由策略”生成 placements，用于验证部署与评价闭环。
+4. Step 3 使用外部路由系统回写 placements；联调阶段可在系统设置页启用开发调试路由流程生成 placements，用于验证部署与评价闭环。
 5. Step 3 启动已路由实例，等待状态进入已评估完成。
 6. 打开“验收工单证据链”中若干工单详情，核对业务参数 JSON、路由结果 JSON、source/compute/sink 节点、compute GPU 编号、实测指标和采集元数据。
 7. Step 4 截图最终结果，要求同一 `benchmark_run_id` 下已评估任务数 >= 30 且业务目标成功率 >= 90%。
 
-管理员验收页面应能看到全部 `is_benchmark=true` 压测工单；普通用户页面仍只展示自己的工单。如果 Step 4 有 30 个已评估任务但证据链表为空，应优先检查 `/api/orders` 的管理员可见性、登录 token 和 nginx `/api` 代理，而不是只截图成功率进度条。
+管理员验收页面应能看到全部 `is_benchmark=true` 测评工单；普通用户页面仍只展示自己的工单。如果 Step 4 有 30 个已评估任务但证据链表为空，应优先检查 `/api/orders` 的管理员可见性、登录 token 和 nginx `/api` 代理，而不是只截图成功率进度条。
 
-如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建压测工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
+如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建测评工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
 
 ## 用户端意图对话闭环
 
@@ -196,7 +196,7 @@ http://<manager-host>/intent-chat
 
 1. 对话气泡返回解析说明，右侧“意图参数”显示任务类型、所属模态、源节点、目的节点、开始/结束时间和对应数据画像。
 2. 展开“路由 DAG JSON 预览”，确认 `job_id/order_id` 为同一个工单 ID，`nodes` 包含 source/compute/sink，source/sink 的 `fixed_node_name` 来自用户输入。
-3. 点击“确认提交任务”后，系统创建工单并进入待路由。外部路由未接入时，可点击“随机路由并部署”完成演示闭环。
+3. 点击“确认提交任务”后，系统创建工单并进入待路由。外部路由未接入时，可在系统设置页启用开发调试路由流程，并点击“自动路由并部署”完成链路验证。
 4. 打开“我的工单”详情，确认“基本信息”展示业务类型和模态，“路由结果”展示 compute 节点和 GPU 编号，“部署状态”展示实例 ID。
 5. 业务运行并上报指标后，在“结果”页查看矩阵计算数字结果，或视频AI推理的检测类别、画框坐标、P90 帧时延和带框预览图。
 
@@ -210,7 +210,7 @@ http://<manager-host>/intent-chat
 PYTHONPATH=workers/low-latency-video/src backend/venv/bin/python -m pytest -q workers/low-latency-video/tests
 ```
 
-本地 baseline fallback：
+本地 baseline 开发调试路径：
 
 ```bash
 cd backend

@@ -13,6 +13,7 @@ const ADMIN_ROUTES = new Set([
   'Users',
   'Benchmark',
   'IntentEvaluation',
+  'SystemSettings',
 ])
 
 const routes = [
@@ -107,6 +108,11 @@ const routes = [
     path: '/users',
     name: 'Users',
     component: () => import('@/views/UsersView.vue'),
+  },
+  {
+    path: '/settings',
+    name: 'SystemSettings',
+    component: () => import('@/views/SystemSettingsView.vue'),
   },
 ]
 

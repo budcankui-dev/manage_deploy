@@ -29,6 +29,7 @@ from schemas import (
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
+from services.system_settings import get_runtime_settings, modality_priority_map_from_settings
 
 from .business_tasks import create_business_task
 
@@ -104,7 +105,13 @@ async def send_message(
     )
     valid_nodes = [row[0] for row in nodes_result.fetchall()]
 
-    parsed, _trace = await run_intent_workflow(payload.content, existing, valid_nodes)
+    runtime_settings = await get_runtime_settings(db)
+    parsed, _trace = await run_intent_workflow(
+        payload.content,
+        existing,
+        valid_nodes,
+        runtime_settings=runtime_settings,
+    )
 
     version = (latest_draft.version + 1) if latest_draft else 1
     draft = IntentDraft(
@@ -195,7 +202,13 @@ async def send_message_stream(
 
     # Structured parse happens before streaming so the user-visible response is
     # derived from validated parameters, not from a free-form LLM guess.
-    parsed, _trace = await run_intent_workflow(payload.content, existing, valid_nodes)
+    runtime_settings = await get_runtime_settings(db)
+    parsed, _trace = await run_intent_workflow(
+        payload.content,
+        existing,
+        valid_nodes,
+        runtime_settings=runtime_settings,
+    )
 
     # Capture primitive IDs needed inside the generator
     conv_id = conversation.id
@@ -385,6 +398,9 @@ async def confirm_intent(
             raise HTTPException(status_code=409, detail="工单已创建，请勿重复提交")
         raise
 
+    runtime_settings = await get_runtime_settings(db)
+    modality_priority_map = modality_priority_map_from_settings(runtime_settings)
+
     # 生成外部路由 DAG payload，并同步作为工单路由输入，避免页面与路由请求出现两套 DAG。
     input_payload = build_routing_payload(
         order_id=order.id,
@@ -397,6 +413,7 @@ async def confirm_intent(
         business_end_time=draft.business_end_time,
         data_profile=draft.data_profile,
         resource_requirement=draft.resource_requirement,
+        modality_priority_map=modality_priority_map,
     )
     order.routing_input_dag = input_payload
 
@@ -458,7 +475,7 @@ async def demo_route_conversation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Use the built-in random routing strategy for a single user order demo."""
+    """Use the internal automatic routing path for a single user order demo."""
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
     if conversation.status not in {ConversationStatus.AWAITING_ROUTING, ConversationStatus.READY_TO_SUBMIT}:
         raise HTTPException(status_code=400, detail=f"当前状态不可演示路由：{conversation.status}")
@@ -489,7 +506,7 @@ async def demo_route_conversation(
         )
     ).scalars().all()
     if not nodes:
-        raise HTTPException(status_code=400, detail="没有可调度节点，无法执行演示随机路由")
+        raise HTTPException(status_code=400, detail="没有可调度节点，无法执行自动路由部署")
 
     source_destination = {order.source_name, order.destination_name}
     compute_candidates = [node for node in nodes if node.hostname not in source_destination]
@@ -502,7 +519,7 @@ async def demo_route_conversation(
         order_id=order.id,
         payload=RoutingResultPayload(
             strategy="random_demo",
-            selected_strategy="随机路由策略",
+            selected_strategy="自动路由",
             external_routing_id=f"demo-route-{conversation.id[:8]}",
             placements=[
                 RoutingPlacement(
@@ -657,6 +674,7 @@ async def _get_conversation_detail(
     if draft:
         draft_response = IntentDraftResponse.model_validate(draft)
         if draft.parse_status == ParseStatus.VALID:
+            runtime_settings = await get_runtime_settings(db)
             draft_response.routing_dag_preview = build_routing_payload(
                 order_id=conversation.id,
                 order_name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
@@ -668,6 +686,7 @@ async def _get_conversation_detail(
                 business_end_time=draft.business_end_time,
                 data_profile=draft.data_profile,
                 resource_requirement=draft.resource_requirement,
+                modality_priority_map=modality_priority_map_from_settings(runtime_settings),
             )
     return ConversationResponse(
         id=conversation.id,

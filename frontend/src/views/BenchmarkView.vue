@@ -4,11 +4,11 @@
       <div>
         <p class="eyebrow">业务目标验收</p>
         <h1>业务目标成功率闭环验证</h1>
-        <p class="hero-subtitle">按基线、批量压测、路由执行、成功率统计四步完成专家验收演示；正式判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
+        <p class="hero-subtitle">按基线、创建验收工单、运行测评、成功率统计四步完成专家验收演示；正式判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
         <div class="run-strip">
           <span>当前验收轮次</span>
           <strong>{{ currentBenchmarkRunId || '历史全部数据' }}</strong>
-          <small>{{ currentBenchmarkRunId ? '本页列表、自动执行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史压测工单统计。' }}</small>
+          <small>{{ currentBenchmarkRunId ? '本页列表、运行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史验收工单统计。' }}</small>
         </div>
       </div>
       <div class="hero-actions">
@@ -17,7 +17,7 @@
           <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
           <el-option label="视频AI推理任务" value="low_latency_video_pipeline" />
         </el-select>
-        <el-button type="primary" :loading="fullFlowLoading" @click="startFullFlow">
+        <el-button type="primary" :loading="fullFlowLoading || settingsLoading" @click="startFullFlow">
           开始完整测试流程
         </el-button>
       </div>
@@ -88,6 +88,9 @@
           {{ node.hostname }}（{{ excludedNodeReason(node) }}）
         </span>
       </div>
+      <p class="status-note">
+        若重测值与历史基线差距明显，应优先核对 CPU/GPU 运行口径、worker 镜像版本和同 GPU 并发占用情况；正式验收前建议按当前固定 profile 重新建立稳定基线。
+      </p>
     </el-card>
 
     <el-card class="step-card">
@@ -95,7 +98,7 @@
         <div class="step-header">
           <span class="step-num">2</span>
           <div>
-            <div class="step-title">批量压测</div>
+            <div class="step-title">创建测评工单</div>
             <div class="step-desc">创建带 is_benchmark 标记的验收工单。</div>
           </div>
         </div>
@@ -121,17 +124,15 @@
             <el-input-number v-model="benchmarkForm.frame_stride" :min="1" controls-position="right" />
             <span>有效帧</span>
             <el-input-number v-model="benchmarkForm.measured_frames" :min="10" :max="300" controls-position="right" />
-            <span>计算强度</span>
-            <el-input-number v-model="benchmarkForm.work_units" :min="1000" :step="5000" controls-position="right" />
           </template>
-          <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建压测工单</el-button>
+          <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建测评工单</el-button>
         </div>
         <div class="pending-pill">
           当前待路由工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
-      <p class="status-note">创建压测工单会生成新的验收轮次 ID，后续路由、启动、统计和工单证据表默认只针对这一轮，避免历史数据影响验收截图。</p>
+      <p class="status-note">创建测评工单会生成新的验收轮次 ID，后续运行、统计和工单证据表默认只针对这一轮，避免历史数据影响验收截图。</p>
     </el-card>
 
     <el-card class="step-card">
@@ -140,34 +141,40 @@
           <span class="step-num">3</span>
           <div>
             <div class="step-title">执行</div>
-            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；点击自动执行后，系统会按资源槽位分批运行直到本轮完成。</div>
+            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
-            <el-button size="small" type="primary" :loading="routeLoading" @click="handleRouteAction">
-              {{ routeActionLabel }}
+            <el-button size="small" type="primary" :loading="routeLoading || startLoading || settingsLoading" @click="runEvaluationFlow">
+              运行测评
             </el-button>
-            <el-button size="small" type="success" :loading="startLoading" @click="doStartAll">自动执行</el-button>
             <el-button size="small" plain @click="loadOrders">刷新</el-button>
           </div>
         </div>
       </template>
-      <div class="route-mode-panel" :class="`mode-${routeMode}`">
+      <div v-if="showInternalControls" class="route-mode-panel" :class="`mode-${routeMode}`">
         <div class="route-mode-title">
           <span>路由方式</span>
-          <el-radio-group v-model="routeMode" size="small">
-            <el-radio-button label="mock">内置随机路由策略</el-radio-button>
+          <el-radio-group v-model="settingsForm.benchmark_routing_mode" size="small">
+            <el-radio-button label="internal_auto">自动路由</el-radio-button>
             <el-radio-button label="external">外部路由系统</el-radio-button>
           </el-radio-group>
         </div>
         <p>{{ routeModeDescription }}</p>
       </div>
+      <div v-else class="route-mode-panel expert-route-panel">
+        <div class="route-mode-title">
+          <span>路由执行方式</span>
+          <el-tag type="success" size="small">{{ routeModeLabel }}</el-tag>
+        </div>
+        <p>{{ routeModeDescription }}</p>
+      </div>
       <div class="execution-control-row">
-        <span class="control-label">执行槽位设置</span>
-        <span>总并发上限</span>
+        <span class="control-label">批次执行设置</span>
+        <span>每批最多任务数</span>
         <el-input-number v-model="executionForm.max_parallel" :min="1" :max="10" controls-position="right" />
-        <span>单槽位并发</span>
+        <span>同一GPU并发数</span>
         <el-input-number v-model="executionForm.per_compute_slot_limit" :min="1" :max="4" controls-position="right" />
-        <span class="muted">槽位 = 计算节点 + GPU 编号；正式测评建议单槽位并发 = 1。</span>
+        <span class="muted">GPU任务默认每个工单只使用 1 张 GPU；正式测评建议同一 GPU 并发数设为 1。</span>
       </div>
       <div class="status-grid">
         <div class="status-cell waiting">
@@ -191,7 +198,7 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：点一次“自动执行”即可自动跑完整轮；系统会按计算节点/GPU 槽位限流，避免批量压测互相抢占资源导致业务目标误判。</p>
+      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会按每批最多任务数分批启动，并避免多个 GPU 任务同时争用同一张 GPU。</p>
       <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
     </el-card>
 
@@ -201,7 +208,7 @@
           <span class="step-num muted-step">证</span>
           <div>
             <div class="step-title">{{ currentTaskConfig.label }}运行证据</div>
-            <div class="step-desc">查看当前任务类型的压测工单、路由放置、实例状态、节点/GPU 分配和业务输入输出，证明任务真实运行。</div>
+            <div class="step-desc">查看当前任务类型的验收工单、路由放置、实例状态、节点/GPU 分配和业务输入输出，证明任务真实运行。</div>
           </div>
           <div class="header-actions">
             <el-button
@@ -230,55 +237,76 @@
       </template>
       <el-table
         :data="orders"
+        class="evidence-table"
         size="small"
-        empty-text="暂无压测工单"
+        border
+        row-key="id"
+        highlight-current-row
+        empty-text="暂无验收工单"
         @selection-change="handleOrderSelectionChange"
+        @row-dblclick="openOrderDetail"
       >
-        <el-table-column type="selection" width="44" />
-        <el-table-column prop="name" label="工单" min-width="210" show-overflow-tooltip />
-        <el-table-column label="任务状态" width="110">
+        <el-table-column type="selection" width="44" fixed="left" />
+        <el-table-column label="工单" min-width="260" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-tag size="small">{{ orderStatusLabel(row.status) }}</el-tag>
+            <div class="order-cell">
+              <strong>{{ row.name || shortId(row.id) }}</strong>
+              <span>工单ID：{{ shortId(row.id) }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="路由状态" width="110">
+        <el-table-column label="所属用户" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.owner_username || shortId(row.owner_user_id) || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="任务类型" min-width="150">
+          <template #default="{ row }">{{ taskTypeLabel(row.task_type) }}</template>
+        </el-table-column>
+        <el-table-column label="模态 / 优先级" min-width="190">
           <template #default="{ row }">
-            <el-tag size="small" :type="routingStatusType(row.routing_status)">
-              {{ routingStatusLabel(row.routing_status) }}
-            </el-tag>
+            <div class="modality-cell">
+              <el-tag size="small" type="success" effect="plain">
+                {{ modalityLabel(row.runtime_config?.business_task?.modality) }}
+              </el-tag>
+              <el-tag v-if="row.business_priority != null" size="small" type="primary" effect="plain">
+                P{{ row.business_priority }}
+              </el-tag>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="实例状态" width="110">
-          <template #default="{ row }">{{ instanceStatusLabel(row.deployment_status || row.instance_status) }}</template>
-        </el-table-column>
-        <el-table-column label="实例" min-width="190" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.materialized_instance_id || '未物化' }}</template>
-        </el-table-column>
-        <el-table-column label="业务目标判定" width="120">
+        <el-table-column label="状态" min-width="230">
           <template #default="{ row }">
-            <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-            <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
-            <el-tag v-else type="info" size="small">未评估</el-tag>
+            <div class="status-tags">
+              <el-tag size="small">{{ orderStatusLabel(row.status) }}</el-tag>
+              <el-tag size="small" :type="routingStatusType(row.routing_status)">
+                {{ routingStatusLabel(row.routing_status) }}
+              </el-tag>
+              <el-tag size="small" type="info" effect="plain">
+                {{ instanceStatusLabel(row.deployment_status || row.instance_status) }}
+              </el-tag>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="实际 / 阈值" min-width="180">
+        <el-table-column label="业务目标" min-width="230">
           <template #default="{ row }">
-            <span v-if="row.actual_value != null && row.target_value != null">
-              {{ formatMetric(row.actual_value, row.unit) }} / {{ formatMetric(row.target_value, row.unit) }}
-            </span>
-            <span v-else class="muted">等待指标上报</span>
+            <div class="objective-cell">
+              <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
+              <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
+              <el-tag v-else type="info" size="small">未评估</el-tag>
+              <span v-if="row.actual_value != null && row.target_value != null">
+                {{ formatMetric(row.actual_value, row.unit) }} / {{ formatMetric(row.target_value, row.unit) }}
+              </span>
+              <span v-else class="muted">等待指标上报</span>
+              <small>{{ metricMeaningLabel(row.metric_key) }}</small>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="指标含义" min-width="150">
-          <template #default="{ row }">{{ metricMeaningLabel(row.metric_key) }}</template>
-        </el-table-column>
-        <el-table-column label="路由放置" min-width="220" show-overflow-tooltip>
+        <el-table-column label="路由放置" min-width="280" show-overflow-tooltip>
           <template #default="{ row }">{{ summarizePlacements(row.runtime_config?.routing_result?.placements) }}</template>
         </el-table-column>
-        <el-table-column label="创建时间" width="170">
+        <el-table-column label="创建时间" width="160">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="100" align="right">
+        <el-table-column label="操作" width="96" align="center" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain :loading="detailLoading && selectedOrderId === row.id" @click="openOrderDetail(row)">
               详情
@@ -308,13 +336,13 @@
           </el-button>
         </div>
       </template>
-      <div v-if="!summaryAggregate" class="empty-hint">暂无统计数据，完成压测后查看。</div>
+      <div v-if="!summaryAggregate" class="empty-hint">暂无统计数据，完成测评后查看。</div>
       <div v-else class="result-block">
         <div class="result-title">{{ currentTaskConfig.label }}</div>
         <div class="result-meta-grid">
           <div>
             <span>统计口径</span>
-            <strong>{{ currentBenchmarkRunId ? '当前验收轮次' : '全部历史压测工单' }}</strong>
+            <strong>{{ currentBenchmarkRunId ? '当前验收轮次' : '全部历史验收工单' }}</strong>
           </div>
           <div>
             <span>总工单数</span>
@@ -347,25 +375,23 @@
           </span>
         </div>
         <div v-if="!hasEnoughEvaluations" class="sample-warning">
-          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足正式验收所需 {{ formalEvaluationCount }} 个；请完成批量压测后再截图作为最终结果。
+          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足正式验收所需 {{ formalEvaluationCount }} 个；请完成本轮测评后再截图作为最终结果。
         </div>
       </div>
     </el-card>
 
-    <el-drawer v-model="detailDrawerVisible" title="压测工单详情" size="64%">
-      <div v-if="selectedOrderDetail" class="detail-toolbar">
-        <div>
-          <strong>{{ taskTypeLabel(selectedOrderDetail.task_type) }}</strong>
-          <span>{{ detailTaskSummary }}</span>
-        </div>
-        <el-button type="primary" plain size="small" @click="openBusinessTaskDetail">
-          在业务任务中心查看
-        </el-button>
-      </div>
+    <el-drawer
+      v-model="detailDrawerVisible"
+      title="任务工单详情"
+      size="76%"
+      destroy-on-close
+      class="task-detail-drawer"
+    >
       <OrderDetailPanel
         v-loading="detailLoading"
         v-model:active-tab="detailTab"
         :detail="selectedOrderDetail"
+        :result-objects="selectedOrderResultObjects"
       />
     </el-drawer>
   </div>
@@ -375,7 +401,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
+import { adminApi, baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   MATMUL_PIPELINE_STEPS,
@@ -396,6 +422,7 @@ import {
   videoPreviewEvidenceRows,
   videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
+  modalityLabel,
 } from '@/constants/businessTaskDisplay'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
@@ -406,13 +433,13 @@ const taskConfigs = {
     label: '矩阵乘法计算任务',
     unit: 'GFLOPS',
     requiresGpu: true,
-    objectiveText: '业务目标：计算节点 effective_gflops 不低于该节点同 profile 历史基线的 0.8 倍。',
+    objectiveText: '业务目标：业务能力保持率 ≥ 80%。矩阵吞吐要求 actual_gflops ≥ 节点同 profile 历史基线 × 0.8。',
   },
   low_latency_video_pipeline: {
     label: '视频AI推理任务',
     unit: 'ms',
     requiresGpu: true,
-    objectiveText: '业务目标：工业检测抽帧推理的 frame_latency_p90_ms 不高于该节点同 profile 历史基线的 1.5 倍。',
+    objectiveText: '业务目标：业务能力保持率 ≥ 80%。视频 P90 时延要求 actual_p90 ≤ 节点 GPU+YOLO 同 profile 历史基线 ÷ 0.8。',
   },
 }
 const taskType = ref('high_throughput_matmul')
@@ -426,7 +453,7 @@ const testingNodes = ref(new Map())
 const batchBaselineLoading = ref(false)
 const batchCreateLoading = ref(false)
 const routeLoading = ref(false)
-const routeMode = ref('mock')
+const settingsLoading = ref(false)
 const startLoading = ref(false)
 const fullFlowLoading = ref(false)
 const resultRefreshing = ref(false)
@@ -440,6 +467,7 @@ const deleteLoading = ref(false)
 const selectedOrderId = ref('')
 const selectedOrderIds = ref([])
 const selectedOrderDetail = ref(null)
+const selectedOrderResultObjects = ref([])
 const dataLoadGeneration = ref(0)
 const initialBenchmarkRunId = typeof route.query.benchmark_run_id === 'string'
   ? route.query.benchmark_run_id
@@ -468,16 +496,24 @@ const executionForm = reactive({
   max_parallel: 2,
   per_compute_slot_limit: 1,
 })
+const settingsForm = reactive({
+  benchmark_routing_mode: 'internal_auto',
+  expert_mode: true,
+  show_internal_controls: false,
+})
 
-const routeActionLabel = computed(() =>
-  routeMode.value === 'mock' ? '生成随机路由' : '刷新外部路由状态'
+const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'internal_auto')
+const showInternalControls = computed(() => Boolean(settingsForm.show_internal_controls))
+
+const routeModeLabel = computed(() =>
+  routeMode.value === 'external' ? '外部路由系统' : '自动路由'
 )
 
 const routeModeDescription = computed(() => {
   if (routeMode.value === 'external') {
-    return '外部路由模式不会由平台生成路由结果；平台保留 pending 工单和 DAG，等待路由系统扫描并回写 placements/GPU 后再执行。'
+    return '当前轮次将等待外部路由系统回写节点和 GPU 分配结果；平台负责部署校验、执行和结果统计。'
   }
-  return '内置随机路由策略由平台随机选择可调度节点并写入 placements，可作为外部路由系统未接入时的 fallback 策略，用于跑通业务测评闭环。'
+  return '当前轮次由系统自动完成节点放置并执行测评闭环；页面重点展示工单、部署和业务结果证据。'
 })
 
 const currentTaskConfig = computed(() =>
@@ -710,6 +746,10 @@ function formatMetric(value, unit = '') {
   return `${text} ${unit || ''}`.trim()
 }
 
+function shortId(value) {
+  return value ? String(value).slice(0, 8) : '—'
+}
+
 function metricMeaningLabel(metricKey) {
   const labels = {
     effective_gflops: '计算速率',
@@ -870,6 +910,18 @@ async function loadNodes() {
   }
 }
 
+async function loadSystemSettings() {
+  settingsLoading.value = true
+  try {
+    const { data } = await adminApi.getSystemSettings()
+    settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'internal_auto'
+    settingsForm.expert_mode = data?.expert_mode ?? true
+    settingsForm.show_internal_controls = data?.show_internal_controls ?? false
+  } finally {
+    settingsLoading.value = false
+  }
+}
+
 async function loadBaselines() {
   const snapshot = buildDataLoadSnapshot()
   baselinesLoading.value = true
@@ -959,7 +1011,7 @@ function sleep(ms) {
 }
 
 async function loadAll() {
-  await Promise.all([loadNodes(), loadBaselines()])
+  await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines()])
   await loadOrders()
   await loadSummary()
 }
@@ -997,7 +1049,7 @@ async function createBatch() {
       data_profile: buildBenchmarkDataProfile(),
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
-    ElMessage.success(`已创建 ${data.created} 条压测工单`)
+    ElMessage.success(`已创建 ${data.created} 条测评工单`)
     await Promise.all([loadOrders(), loadSummary()])
     return data
   } finally {
@@ -1015,6 +1067,7 @@ function buildBenchmarkDataProfile() {
       frame_stride: benchmarkForm.frame_stride,
       warmup_frames: benchmarkForm.warmup_frames,
       measured_frames: benchmarkForm.measured_frames,
+      // 内部开发测评参数，正式 GPU+YOLO 验收页面不展示。
       work_units: benchmarkForm.work_units,
       video_asset: 'bottle-detection.mp4',
       inference_mode: 'yolo_onnx',
@@ -1045,9 +1098,15 @@ async function openOrderDetail(row) {
   selectedOrderId.value = row.id
   detailLoading.value = true
   detailTab.value = 'business'
+  selectedOrderResultObjects.value = []
   try {
     const { data } = await ordersApi.get(row.id)
+    const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
+    const objectsResp = evidenceInstanceId
+      ? await businessApi.results(evidenceInstanceId).catch(() => ({ data: [] }))
+      : { data: [] }
     selectedOrderDetail.value = data
+    selectedOrderResultObjects.value = objectsResp.data || []
     detailDrawerVisible.value = true
   } finally {
     detailLoading.value = false
@@ -1070,7 +1129,7 @@ async function deleteSelectedOrders() {
   if (!selectedOrderIds.value.length) return
   try {
     await ElMessageBox.confirm(
-      `将删除 ${selectedOrderIds.value.length} 个压测工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
+      `将删除 ${selectedOrderIds.value.length} 个验收工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
       '确认删除工单',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -1086,11 +1145,6 @@ async function deleteSelectedOrders() {
   } finally {
     deleteLoading.value = false
   }
-}
-
-function openBusinessTaskDetail() {
-  if (!selectedOrderDetail.value?.id) return
-  router.push({ path: '/business-tasks', query: { orderId: selectedOrderDetail.value.id } })
 }
 
 async function doAutoRoute() {
@@ -1117,20 +1171,30 @@ async function refreshExternalRoutingStatus() {
     if (waiting > 0) {
       ElMessage.info(`仍有 ${waiting} 条工单待外部路由系统回写；已路由/执行中/完成 ${routed} 条。`)
     } else if (orders.value.length) {
-      ElMessage.success('当前轮次工单已全部完成路由，可继续自动执行。')
+      ElMessage.success('当前轮次工单已全部完成路由，可继续运行测评。')
     } else {
-      ElMessage.warning('当前没有压测工单，请先创建压测工单。')
+      ElMessage.warning('当前没有验收工单，请先创建测评工单。')
     }
   } finally {
     routeLoading.value = false
   }
 }
 
-async function handleRouteAction() {
-  if (routeMode.value === 'external') {
-    return refreshExternalRoutingStatus()
+async function runEvaluationFlow() {
+  if (!currentBenchmarkRunId.value) {
+    ElMessage.warning('请先创建或选择一个验收轮次，再运行测评。')
+    return null
   }
-  return doAutoRoute()
+  if (routeMode.value === 'external') {
+    await refreshExternalRoutingStatus()
+    if (orderStats.value.waitingRoute > 0) {
+      ElMessage.warning('仍有工单等待外部路由结果，路由回写完成后再次点击运行测评。')
+      return null
+    }
+  } else {
+    await doAutoRoute()
+  }
+  return doStartAll()
 }
 
 async function doStartAll() {
@@ -1139,7 +1203,7 @@ async function doStartAll() {
     return null
   }
   startLoading.value = true
-  controlledStartStatus.value = '正在自动按节点/GPU 槽位分批执行验收任务...'
+  controlledStartStatus.value = '正在按小批次运行验收任务...'
   try {
     let latest = null
     for (let round = 1; round <= 180; round += 1) {
@@ -1157,7 +1221,7 @@ async function doStartAll() {
       const active = Number(data.active || 0)
       const started = Number(data.started || 0)
       const cleaned = Number(data.cleaned || 0)
-      controlledStartStatus.value = `自动执行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
+      controlledStartStatus.value = `测评运行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
 
       if (total > 0 && evaluated >= total) {
         ElMessage.success(`本轮 ${evaluated} 个验收任务已全部完成评估`)
@@ -1187,11 +1251,10 @@ async function startFullFlow() {
     await createBatch()
     if (routeMode.value === 'external') {
       await refreshExternalRoutingStatus()
-      ElMessage.info('外部路由模式已创建工单；请等待路由系统回写完成后再点击自动执行。')
+      ElMessage.info('已创建工单，请等待路由结果回写完成后再点击运行测评。')
       return
     }
-    await doAutoRoute()
-    await doStartAll()
+    await runEvaluationFlow()
     ElMessage.success('完整测试流程已执行完成，请查看 Step 4 成功率和工单证据。')
   } finally {
     fullFlowLoading.value = false
@@ -1201,6 +1264,7 @@ async function startFullFlow() {
 watch(taskType, async () => {
   dataLoadGeneration.value += 1
   selectedOrderDetail.value = null
+  selectedOrderResultObjects.value = []
   detailDrawerVisible.value = false
   if (
     currentBenchmarkRunId.value &&
@@ -1217,7 +1281,9 @@ onMounted(loadAll)
 <style scoped>
 .benchmark-page {
   padding: 28px;
-  max-width: 1120px;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
 }
 
 .hero-card {
@@ -1521,6 +1587,61 @@ onMounted(loadAll)
   font-size: 13px;
 }
 
+.evidence-card {
+  overflow: hidden;
+}
+
+.evidence-table {
+  width: 100%;
+}
+
+.evidence-table :deep(.el-table__row) {
+  cursor: default;
+}
+
+.order-cell,
+.objective-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.order-cell strong {
+  overflow: hidden;
+  color: #303133;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-cell span,
+.objective-cell small {
+  color: #909399;
+  font-size: 12px;
+}
+
+.objective-cell > span:not(.muted) {
+  color: #303133;
+  font-weight: 600;
+}
+
+.status-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.modality-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-detail-drawer :deep(.el-drawer__body) {
+  padding: 18px 24px 28px;
+}
+
 .result-card :deep(.el-card__body) {
   padding: 30px 34px;
 }
@@ -1626,28 +1747,6 @@ onMounted(loadAll)
   display: flex;
   flex-direction: column;
   gap: 18px;
-}
-
-.detail-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  padding: 14px 16px;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
-}
-
-.detail-toolbar strong,
-.detail-toolbar span {
-  display: block;
-}
-
-.detail-toolbar span {
-  margin-top: 4px;
-  color: #606266;
-  font-size: 13px;
 }
 
 .detail-section h3 {

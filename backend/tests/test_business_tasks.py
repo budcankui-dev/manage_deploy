@@ -193,7 +193,7 @@ def test_evaluate_with_baseline_higher_is_better_fail():
 
 
 def test_evaluate_with_baseline_lower_is_better():
-    """With baseline=100, actual=110 should pass (110 <= 100*1.2=120)."""
+    """With baseline=100, actual=110 should pass (110 <= 100/0.8=125)."""
     evaluation = evaluate_business_objective(
         BusinessObjective(
             metric_key="end_to_end_latency_ms",
@@ -209,11 +209,11 @@ def test_evaluate_with_baseline_lower_is_better():
 
     assert evaluation.business_success is True
     assert evaluation.failure_reason is None
-    assert evaluation.target_value == 120.0  # 100 * 1.2
+    assert evaluation.target_value == 125.0  # 100 / 0.8
 
 
 def test_evaluate_with_baseline_lower_is_better_fail():
-    """With baseline=100, actual=130 should fail (130 > 100*1.2=120)."""
+    """With baseline=100, actual=130 should fail (130 > 100/0.8=125)."""
     evaluation = evaluate_business_objective(
         BusinessObjective(
             metric_key="end_to_end_latency_ms",
@@ -229,11 +229,11 @@ def test_evaluate_with_baseline_lower_is_better_fail():
 
     assert evaluation.business_success is False
     assert evaluation.failure_reason is not None
-    assert evaluation.target_value == 120.0  # 100 * 1.2
+    assert evaluation.target_value == 125.0  # 100 / 0.8
 
 
-def test_evaluate_video_latency_uses_task_specific_tolerance():
-    """Video P90 latency uses a wider tolerance for shared acceptance nodes."""
+def test_evaluate_video_latency_uses_unified_capability_retention():
+    """Video P90 latency uses the same >=80% capability retention rule."""
     evaluation = evaluate_business_objective(
         BusinessObjective(
             metric_key="frame_latency_p90_ms",
@@ -242,7 +242,7 @@ def test_evaluate_video_latency_uses_task_specific_tolerance():
             unit="ms",
         ),
         actual_metric_key="frame_latency_p90_ms",
-        actual_value=145,
+        actual_value=124,
         object_uris=["s3://results/run-video/output.json"],
         task_type="low_latency_video_pipeline",
         baseline_value=100,
@@ -250,4 +250,4 @@ def test_evaluate_video_latency_uses_task_specific_tolerance():
 
     assert evaluation.business_success is True
     assert evaluation.failure_reason is None
-    assert evaluation.target_value == 150.0  # 100 * 1.5
+    assert evaluation.target_value == 125.0  # 100 / 0.8

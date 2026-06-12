@@ -16,6 +16,17 @@ MODALITIES = [
     "高安全传输模态",
 ]
 
+DEFAULT_MODALITY_PRIORITY = {
+    "低时延转发模态": 1,
+    "确定性转发模态": 2,
+    "高安全传输模态": 3,
+    "智算中心模态": 4,
+    "高通量计算模态": 5,
+    "高能效边缘计算模态": 6,
+    "分布式存算模态": 7,
+    "大规模连接模态": 8,
+}
+
 
 TASK_TYPE_MODALITY = {
     "high_throughput_matmul": "高通量计算模态",
@@ -65,6 +76,32 @@ def normalize_modality(value: str | None, task_type: str | None = None) -> str |
     if value in legacy:
         return legacy[value]
     return modality_for_task_type(task_type) or value
+
+
+def normalize_modality_priority_map(value: dict[str, Any] | None = None) -> dict[str, int]:
+    """Return a complete modality -> priority map. 1 is highest, 8 is lowest."""
+    result = dict(DEFAULT_MODALITY_PRIORITY)
+    if isinstance(value, dict):
+        for modality, raw_priority in value.items():
+            normalized = normalize_modality(str(modality), None)
+            if normalized not in MODALITIES:
+                continue
+            try:
+                priority = int(raw_priority)
+            except (TypeError, ValueError):
+                continue
+            result[normalized] = min(8, max(1, priority))
+    return result
+
+
+def priority_for_modality(
+    modality: str | None,
+    priority_map: dict[str, Any] | None = None,
+    task_type: str | None = None,
+) -> int:
+    normalized = normalize_modality(modality, task_type) or ""
+    priorities = normalize_modality_priority_map(priority_map)
+    return priorities.get(normalized, 8)
 
 
 def default_objective_for_task_type(task_type: str | None) -> dict[str, Any]:

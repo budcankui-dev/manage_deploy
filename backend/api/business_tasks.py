@@ -104,9 +104,9 @@ async def build_instance_create_from_business_task(
         env = dict(shared_env)
         env["TASK_ROLE"] = role
         placement_gpu_id = _placement_gpu_id(placement)
-        gpu_id = placement_gpu_id if placement_gpu_id is not None else ("all" if role in gpu_roles else None)
-        if placement_gpu_id is not None:
-            env["GPU_DEVICE"] = placement_gpu_id
+        gpu_id = placement_gpu_id if placement_gpu_id is not None else ("0" if role in gpu_roles else None)
+        if gpu_id is not None:
+            env["GPU_DEVICE"] = gpu_id
         overrides.append(
             TaskInstanceNodeOverride(
                 template_node_name=template_node_name,
@@ -437,6 +437,7 @@ async def evaluate_and_store_business_metric(
         estimated_value=estimated_value,
         baseline_value=baseline_value,
     )
+    _apply_video_gpu_success_guard(evaluation, result_metadata)
     if evaluation.target_value is None:
         return None
     row = BusinessObjectiveEvaluation(
@@ -466,6 +467,34 @@ async def evaluate_and_store_business_metric(
         )
     await db.flush()
     return row
+
+
+def _apply_video_gpu_success_guard(
+    evaluation: BusinessObjectiveEvaluationResult,
+    result_metadata: dict[str, Any],
+) -> None:
+    if evaluation.task_type != "low_latency_video_pipeline":
+        return
+    if evaluation.metric_key != "frame_latency_p90_ms":
+        return
+    backend = str(
+        result_metadata.get("actual_backend")
+        or result_metadata.get("backend")
+        or result_metadata.get("detector_backend")
+        or ""
+    )
+    device = str(result_metadata.get("device") or "")
+    if backend in {"onnxruntime_cuda", "opencv_dnn_cuda"} and device.startswith("cuda"):
+        return
+    evaluation.business_success = False
+    reason = (
+        "视频AI推理正式验收要求 GPU+YOLO 推理路径，"
+        f"当前 actual_backend={backend or '-'}, device={device or '-'}"
+    )
+    gpu_error = result_metadata.get("gpu_error") or result_metadata.get("detector_fallback_reason")
+    if gpu_error:
+        reason = f"{reason}, gpu_error={gpu_error}"
+    evaluation.failure_reason = reason
 
 
 async def _get_catalog(db: AsyncSession, task_type: str) -> BusinessTemplateCatalog:

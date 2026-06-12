@@ -133,7 +133,7 @@ async def purge_instance_artifacts_preserve_evidence(
     """删除实例运行态数据，但保留工单、业务评估和结果对象作为验收证据。
 
     工单继续保留 materialized_instance_id，前端通过 instance_exists=false 表示
-    “实例已清理，仅保留工单证据”。这样压测环境可以释放容器/实例表数据，又不丢失
+    “实例已清理，仅保留工单证据”。这样测评环境可以释放容器/实例表数据，又不丢失
     success rate、输入参数、路由结果和业务输出。
     """
     if not instance_id:

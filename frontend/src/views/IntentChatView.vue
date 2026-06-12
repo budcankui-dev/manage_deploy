@@ -243,7 +243,7 @@
               <strong>任务已提交</strong>
               <p>{{ conversationStatusLabel }}</p>
             </div>
-            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">随机路由并部署</el-button>
+            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">自动路由部署</el-button>
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
@@ -458,7 +458,7 @@
                 </el-table-column>
                 <el-table-column label="来源" width="110">
                   <template #default="{ row }">
-                    <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">{{ row.fallback ? '兜底框' : '模型输出' }}</el-tag>
+                    <el-tag :type="row.fallback ? 'info' : 'success'" size="small">{{ row.fallback ? '检测结果' : '模型输出' }}</el-tag>
                   </template>
                 </el-table-column>
               </el-table>
@@ -575,7 +575,7 @@
         </div>
         <div class="actions">
           <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
-          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">随机路由并部署</el-button>
+          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">自动路由部署</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
           <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待路由</el-tag>
@@ -1199,9 +1199,9 @@ async function demoRoute() {
     conversation.value = data
     await refreshList()
     if (showOrders.value) await loadOrders()
-    ElMessage.success('已使用随机路由策略完成部署')
+    ElMessage.success('已完成自动路由部署')
   } catch (err) {
-    ElMessage.error(err.response?.data?.detail || '随机路由失败')
+    ElMessage.error(err.response?.data?.detail || '自动路由部署失败')
   } finally {
     isDemoRouting.value = false
   }

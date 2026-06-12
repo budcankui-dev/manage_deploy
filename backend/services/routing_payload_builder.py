@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from services.modality_catalog import priority_for_modality
 from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
 
 
@@ -23,6 +24,7 @@ def build_routing_payload(
     data_profile: dict[str, Any] | None = None,
     resource_requirement: dict[str, Any] | None = None,
     template_nodes: list[dict[str, Any]] | None = None,
+    modality_priority_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成外部路由系统可消费的 DAG JSON。
 
@@ -31,6 +33,7 @@ def build_routing_payload(
     job_name = _task_type_to_job_name(task_type)
     modal = modality or task_type
     job_id = order_id
+    priority = priority_for_modality(modal, modality_priority_map, task_type)
 
     submit_ts_ms = int(business_start_time.timestamp() * 1000)
 
@@ -42,7 +45,7 @@ def build_routing_payload(
         source_name,
         destination_name,
     )
-    edges = _build_dag_edges(task_type, nodes, data_profile)
+    edges = _build_dag_edges(task_type, nodes, data_profile, priority)
 
     return {
         "job_id": job_id,
@@ -52,6 +55,7 @@ def build_routing_payload(
         "source_name": source_name,
         "destination_name": destination_name,
         "modal": modal,
+        "priority": priority,
         "_comment": modal,
         "policy_type": _infer_policy_type(task_type),
         "submit_ts_ms": submit_ts_ms,
@@ -221,6 +225,7 @@ def _build_dag_edges(
     task_type: str,
     nodes: list[dict[str, Any]],
     data_profile: dict[str, Any] | None,
+    priority: int,
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的边列表，表达业务数据流向。"""
     data_mb = estimate_data_mb(task_type, data_profile)
@@ -242,6 +247,7 @@ def _build_dag_edges(
                 "flow_id": f"{task_type}:{src}->{dst}",
                 "protocol": "tcp",
                 "dst_port_ref": f"{dst}.{dst}",
+                "priority": priority,
             },
         })
     return edges

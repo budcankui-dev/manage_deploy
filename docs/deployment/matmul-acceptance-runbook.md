@@ -8,11 +8,11 @@
 
 ```text
 任务类型：矩阵乘法计算任务
-统计范围：当前 benchmark_run_id 下 is_benchmark=true 的验收压测工单
+统计范围：当前 benchmark_run_id 下 is_benchmark=true 的验收测评工单
 正式通过：已评估任务数 >= 30 且业务目标成功率 >= 90%
 ```
 
-当前 `/benchmark` 页面的“内置随机路由策略”用于跑通闭环，可作为外部路由系统未接入时的 fallback 策略；它不证明外部路由算法最优。正式矩阵验收使用“自动执行”，按计算节点/GPU 槽位限流执行，避免 30 个任务一次性并发启动导致单任务基线口径失真。
+当前 `/benchmark` 页面优先使用外部路由系统回写的 placements；系统设置页可切换开发调试路由流程，用于外部路由系统联调前验证部署与评价闭环。正式矩阵验收使用“运行测评”，按小批次限流执行，避免 30 个任务一次性并发启动导致单任务基线口径失真。
 
 最近一次真实矩阵验收轮次：
 
@@ -197,7 +197,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
   /home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_video_template.py"
 ```
 
-视频模板同样要求 `port_defs.auto=true`。compute 子任务默认需要 GPU，路由结果应写回 `gpu_device`；如果现场临时 CPU 兜底，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。
+视频模板同样要求 `port_defs.auto=true`。compute 子任务默认需要 GPU，路由结果应写回 `gpu_device`；如果启用了仅开发调试的 CPU 路径，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。
 
 ## 4. 业务节点预检
 
@@ -217,7 +217,7 @@ done
 
 然后重启 Docker 和 Node Agent。
 
-如果 Node Agent 镜像较旧，`POST /ports/available` 可能返回 404。当前 backend 会在这种情况下使用数据库已分配端口和模板端口范围做本地 fallback 分配，足够支撑验收；后续仍建议重建并部署包含 `/ports/available` 的 Node Agent 镜像。
+如果 Node Agent 镜像较旧，`POST /ports/available` 可能返回 404。当前 backend 会在这种情况下使用数据库已分配端口和模板端口范围做本地开发调试端口分配，足够支撑联调；正式环境仍建议重建并部署包含 `/ports/available` 的 Node Agent 镜像。
 
 ## 5. 命令行 E2E 预检
 
@@ -263,8 +263,8 @@ http://10.112.244.94:8182/benchmark
 操作顺序：
 
 1. Step 1 点击“批量测试所有节点”，确认 `compute-1/2/3` 都有稳定 baseline。
-2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建压测工单”，记录页面顶部显示的 `benchmark_run_id`。
-3. Step 3 点击“生成随机路由”，再点击“自动执行”，等待当前轮次状态进入“已评估完成”或“失败”。自动执行会按计算节点/GPU 槽位启动下一批任务，已评估样本会自动清理容器实例但保留工单证据。
+2. Step 2 使用默认 `任务数=30`、`矩阵=1024`、`批次=50`，点击“创建测评工单”，记录页面顶部显示的 `benchmark_run_id`。
+3. Step 3 使用外部路由系统回写 placements，或在系统设置页启用开发调试路由流程后点击“运行测评”，等待当前轮次状态进入“已评估完成”或“失败”。运行测评会按小批次启动下一批任务，已评估样本会自动清理容器实例但保留工单证据。
 4. Step 4 点击“计算/更新成功率”，确认“已评估数 >= 30”。
 5. 若成功率 `>= 90%`，保存页面截图和后端 summary JSON；若不足，保存失败任务详情和容器日志。
 
@@ -272,8 +272,8 @@ http://10.112.244.94:8182/benchmark
 
 1. 在页面顶部任务类型选择“视频AI推理任务”。
 2. Step 1 对参与计算的节点执行视频 profile baseline，确认基线稳定。
-3. Step 2 使用默认 `任务数=30`、`frame_stride=30`、`warmup_frames=10`、`measured_frames=30` 创建压测工单。
-4. Step 3 生成随机路由后点击“自动执行”，系统按计算节点/GPU 槽位分批运行。
+3. Step 2 使用默认 `任务数=30`、`frame_stride=30`、`warmup_frames=10`、`measured_frames=30` 创建测评工单。
+4. Step 3 完成路由结果回写后点击“运行测评”，系统按小批次分批运行；正式测评时同一 GPU 并发数设为 1。
 5. 在工单详情中确认 source / compute / sink 放置、compute GPU 编号、`frame_latency_p90_ms`、检测类别、画框坐标和带框预览图。
 6. Step 4 确认已评估任务数 `>= 30` 且成功率 `>= 90%`。
 
@@ -296,9 +296,9 @@ curl -sS "http://10.112.244.94:8181/api/orders?is_benchmark=true&benchmark_run_i
 | baseline 失败 | Node Agent 地址、Docker 权限、私有仓库拉取、benchmark 容器日志 |
 | Step 4 样本不足 | 任务未完成、指标未上报、无 baseline 导致不可评价 |
 | 成功率异常 100% 但任务数很少 | 不是正式验收；必须达到 30 个已评估任务 |
-| 批量压测只有少数任务上报指标 | 检查模板 `port_defs.auto=true`、backend 自动端口 fallback、同一节点端口是否重复 |
-| 自动执行长时间无进展 | 检查当前轮次是否已路由、是否仍有运行中任务未上报指标、Node Agent 日志、容器日志和端口冲突预检 |
-| 一次性启动后成功率低于 90% | 不建议作为正式矩阵验收口径；改用“自动执行”，因为 baseline 是同 profile 单任务历史能力 |
+| 批量测评只有少数任务上报指标 | 检查模板 `port_defs.auto=true`、backend 自动端口分配、同一节点端口是否重复 |
+| 运行测评长时间无进展 | 检查当前轮次是否已路由、是否仍有运行中任务未上报指标、Node Agent 日志、容器日志和端口冲突预检 |
+| 一次性启动后成功率低于 90% | 不建议作为正式矩阵验收口径；改用“运行测评”，因为 baseline 是同 profile 单任务历史能力 |
 | 视频详情没有带框图 | 确认 worker 镜像已包含 `workers/low-latency-video/assets`，sink 上报 tags.result 中有 `annotated_frame_data_url`，后端已重启到最新代码 |
 | 视频详情 GPU 显示无分配 | 检查路由结果是否为 compute/worker 写回 `gpu_device`，以及 Node Agent 创建容器时是否传入 GPU 设备 |
 | 视频基线或任务很慢 | 优先确认是否走 GPU；正式参数为 `measured_frames=30`，不要在演示前临时提高帧数 |
