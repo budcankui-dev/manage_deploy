@@ -13,6 +13,7 @@ from models import (
     SystemSetting,
     TaskInstance,
     TaskInstanceNode,
+    TaskMetric,
     TaskOrder,
     User,
 )
@@ -560,6 +561,80 @@ async def test_benchmark_summary_and_orders_can_filter_by_run_id(client, db_sess
     )
     assert orders_response.status_code == 200
     assert [row["name"] for row in orders_response.json()] == ["run-a benchmark order"]
+
+
+@pytest.mark.asyncio
+async def test_recalculate_benchmark_evaluations_from_metrics(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    admin_headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="benchmark-recalc-admin",
+        role=UserRole.ADMIN,
+    )
+    instance = TaskInstance(
+        id="recalc-instance",
+        template_id=template_id,
+        name="recalc-instance",
+        status="stopped",
+    )
+    order = TaskOrder(
+        template_id=template_id,
+        name="recalc benchmark order",
+        status=OrderStatus.COMPLETED,
+        runtime_config={
+            "benchmark": {"run_id": "recalc-run"},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "data_profile": {"matrix_size": 1024, "batch_count": 50},
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "target_value": 80,
+                    "unit": "GFLOPS",
+                },
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+                "routing_result": {"strategy": "resource_guarantee", "placements": {}},
+            },
+        },
+        materialized_instance_id=instance.id,
+        is_benchmark=True,
+    )
+    metric = TaskMetric(
+        instance_id=instance.id,
+        template_id=template_id,
+        metric_key="effective_gflops",
+        metric_value=100,
+        unit="GFLOPS",
+        tags={"result": {"effective_gflops": 100, "backend": "gpu"}},
+    )
+    db_session.add_all([instance, order, metric])
+    await db_session.commit()
+
+    before = await client.get(
+        "/api/business-tasks/summary",
+        params={"is_benchmark": True, "benchmark_run_id": "recalc-run"},
+    )
+    assert before.status_code == 200
+    assert before.json()[0]["evaluated_count"] == 0
+
+    response = await client.post(
+        "/api/orders/benchmark/recalculate",
+        headers=admin_headers,
+        json={"benchmark_run_id": "recalc-run", "task_type": "high_throughput_matmul"},
+    )
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == [order.id]
+    assert response.json()["failed"] == {}
+
+    after = await client.get(
+        "/api/business-tasks/summary",
+        params={"is_benchmark": True, "benchmark_run_id": "recalc-run"},
+    )
+    assert after.status_code == 200
+    assert after.json()[0]["evaluated_count"] == 1
+    assert after.json()[0]["success_count"] == 1
+    assert after.json()[0]["business_success_rate"] == 1.0
 
 
 @pytest.mark.asyncio

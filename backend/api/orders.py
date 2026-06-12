@@ -31,6 +31,7 @@ from models import (
     Node as NodeModel,
     NodeBaseline,
     RoutingRequest,
+    TaskMetric,
     TaskInstance,
     TaskInstanceNode,
     TaskOrder,
@@ -1624,6 +1625,71 @@ async def _cleanup_evaluated_benchmark_instance(
     return True
 
 
+async def _reevaluate_orders_from_latest_metrics(
+    db: AsyncSession,
+    orders: list[TaskOrder],
+) -> tuple[list[str], dict[str, str]]:
+    """Rebuild missing/stale business evaluations from reported task_metrics."""
+    from api.business_tasks import evaluate_and_store_business_metric
+
+    succeeded: list[str] = []
+    failed: dict[str, str] = {}
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        if not instance_id:
+            failed[order.id] = "Order has no materialized instance"
+            continue
+        business_task = (order.runtime_config or {}).get("business_task") or {}
+        objective = business_task.get("business_objective") or {}
+        metric_key = objective.get("metric_key")
+        if not metric_key:
+            failed[order.id] = "Order missing business objective metric_key"
+            continue
+
+        metric = (
+            await db.execute(
+                select(TaskMetric)
+                .where(
+                    TaskMetric.instance_id == instance_id,
+                    TaskMetric.metric_key == metric_key,
+                )
+                .order_by(TaskMetric.reported_at.desc(), TaskMetric.id.desc())
+            )
+        ).scalars().first()
+        if not metric:
+            failed[order.id] = f"No reported metric found for {metric_key}"
+            continue
+
+        row = await evaluate_and_store_business_metric(
+            db,
+            instance_id=instance_id,
+            metric_key=metric.metric_key,
+            metric_value=metric.metric_value,
+            tags=metric.tags,
+        )
+        if row is None:
+            failed[order.id] = "Metric exists but evaluation could not be built; check baseline/objective"
+            continue
+        succeeded.append(order.id)
+    return succeeded, failed
+
+
+@router.post("/benchmark/recalculate", response_model=BatchOperationResponse)
+async def recalculate_benchmark_evaluations(
+    request: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按当前验收轮次重算业务目标评估，不重新启动容器。"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    orders, failed = await _resolve_batch_orders(db, request)
+    succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(db, orders)
+    failed.update(recalc_failed)
+    await db.commit()
+    return BatchOperationResponse(succeeded=succeeded, failed=failed)
+
+
 @router.post("/start-controlled-routed")
 async def start_controlled_routed_benchmark_orders(
     payload: ControlledBenchmarkStartRequest | None = None,
@@ -1640,6 +1706,9 @@ async def start_controlled_routed_benchmark_orders(
     """
     payload = payload or ControlledBenchmarkStartRequest()
     orders = await _controlled_benchmark_orders(db, payload, current_user)
+    recalc_succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(db, orders)
+    if recalc_succeeded:
+        await db.flush()
     instance_map = await _instances_for_orders(db, orders)
     eval_map = await _latest_evaluations_by_instance(
         db,
@@ -1647,7 +1716,7 @@ async def start_controlled_routed_benchmark_orders(
     )
 
     cleaned: list[str] = []
-    failed: dict[str, str] = {}
+    failed: dict[str, str] = dict(recalc_failed)
     if payload.cleanup_evaluated:
         for order in orders:
             instance_id = order.materialized_instance_id

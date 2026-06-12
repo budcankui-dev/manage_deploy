@@ -1002,6 +1002,12 @@ _ALLOWED_METRIC_TAGS = frozenset([
     "result", "objects", "object_uris",
     "compute_latency_ms", "matrix_size", "batch_count", "seed",
     "end_to_end_latency_ms", "codec", "preset",
+    # 业务目标评估和工单详情需要保留这些过程性指标/证据字段。
+    "effective_gflops", "backend", "gpu_device",
+    "frame_latency_p90_ms", "frame_latency_avg_ms", "frame_latency_min_ms",
+    "frame_latency_max_ms", "measured_frames", "actual_backend", "detector_backend",
+    "device", "gpu_requested", "gpu_available", "gpu_assigned", "gpu_error",
+    "model_name", "video_asset", "detections", "annotated_frame_data_url",
 ])
 
 

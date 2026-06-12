@@ -235,6 +235,20 @@ class AgentClient:
         except httpx.RequestError as e:
             return False, {"error": str(e)}
 
+    async def get_resources(
+        self,
+        management_ip: str,
+    ) -> tuple[bool, dict]:
+        url = self._build_url(management_ip, "/resources")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return True, response.json()
+                return False, {"error": response.text, "status_code": response.status_code}
+        except httpx.RequestError as e:
+            return False, {"error": str(e), "status_code": None}
+
     async def delete_container_by_name(
         self,
         management_ip: str,

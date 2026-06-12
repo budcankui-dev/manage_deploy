@@ -238,21 +238,21 @@
               size="small"
               type="warning"
               plain
-              :disabled="!selectedOrderIds.length"
+              :disabled="!selectedOrderIds.length && !currentBenchmarkRunId"
               :loading="cleanupLoading"
               @click="cleanupSelectedOrderInstances"
             >
-              清理实例保留工单
+              {{ selectedOrderIds.length ? '清理选中实例' : '清理本轮实例' }}
             </el-button>
             <el-button
               size="small"
               type="danger"
               plain
-              :disabled="!selectedOrderIds.length"
+              :disabled="!selectedOrderIds.length && !currentBenchmarkRunId"
               :loading="deleteLoading"
               @click="deleteSelectedOrders"
             >
-              删除选中工单
+              {{ selectedOrderIds.length ? '删除选中工单' : '删除本轮工单' }}
             </el-button>
             <el-button size="small" plain @click="loadOrders">刷新工单列表</el-button>
           </div>
@@ -1042,8 +1042,19 @@ async function loadSummary() {
 async function refreshAcceptanceResult() {
   resultRefreshing.value = true
   try {
+    const payload = {
+      benchmark_run_id: currentBenchmarkRunId.value || null,
+      task_type: taskType.value,
+      is_benchmark: true,
+    }
+    const { data } = await ordersApi.recalculateBenchmark(payload)
     await Promise.all([loadOrders(), loadSummary()])
-    ElMessage.success('已更新工单指标并重新计算业务目标成功率')
+    const failedCount = Object.keys(data.failed || {}).length
+    if (failedCount) {
+      ElMessage.warning(`已补算 ${data.succeeded?.length || 0} 个工单，${failedCount} 个暂无可用指标`)
+    } else {
+      ElMessage.success(`已补算 ${data.succeeded?.length || 0} 个工单并更新业务目标成功率`)
+    }
   } finally {
     resultRefreshing.value = false
   }
@@ -1188,10 +1199,17 @@ async function openOrderDetail(row) {
 }
 
 async function cleanupSelectedOrderInstances() {
-  if (!selectedOrderIds.value.length) return
+  if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
   cleanupLoading.value = true
   try {
-    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
+    const payload = selectedOrderIds.value.length
+      ? selectedOrderIds.value
+      : {
+          benchmark_run_id: currentBenchmarkRunId.value,
+          task_type: taskType.value,
+          is_benchmark: true,
+        }
+    const { data } = await ordersApi.cleanupInstances(payload)
     ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
     await Promise.all([loadOrders(), loadSummary()])
   } finally {
@@ -1200,10 +1218,12 @@ async function cleanupSelectedOrderInstances() {
 }
 
 async function deleteSelectedOrders() {
-  if (!selectedOrderIds.value.length) return
+  if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
+  const deletingCurrentRun = !selectedOrderIds.value.length
+  const countText = deletingCurrentRun ? '当前验收轮次的全部' : `选中的 ${selectedOrderIds.value.length} 个`
   try {
     await ElMessageBox.confirm(
-      `将删除 ${selectedOrderIds.value.length} 个验收工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
+      `将删除${countText}验收工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
       '确认删除工单',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -1212,7 +1232,14 @@ async function deleteSelectedOrders() {
   }
   deleteLoading.value = true
   try {
-    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    const payload = selectedOrderIds.value.length
+      ? selectedOrderIds.value
+      : {
+          benchmark_run_id: currentBenchmarkRunId.value,
+          task_type: taskType.value,
+          is_benchmark: true,
+        }
+    const { data } = await ordersApi.batchDelete(payload)
     ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
     selectedOrderIds.value = []
     await Promise.all([loadOrders(), loadSummary()])

@@ -6,6 +6,16 @@
         <p class="subtitle">管理运行任务容器的工作节点</p>
       </div>
       <div class="header-actions">
+        <el-select v-model="nodeKindFilter" class="node-kind-filter" size="small" placeholder="节点类型">
+          <el-option label="全部节点" value="all" />
+          <el-option label="计算节点" value="worker" />
+          <el-option label="终端节点" value="terminal" />
+          <el-option label="计算+终端" value="both" />
+          <el-option label="管理节点" value="admin" />
+          <el-option label="路由设备" value="router" />
+          <el-option label="交换机" value="switch" />
+          <el-option label="存储节点" value="storage" />
+        </el-select>
         <span class="selected-count" v-if="selectedIds.length">已选 {{ selectedIds.length }} 项</span>
         <el-button type="danger" plain :disabled="!selectedIds.length" @click="batchDeleteNodes">批量删除</el-button>
         <el-button type="primary" @click="openCreateDialog">
@@ -50,6 +60,10 @@
                 <el-dropdown-item @click="editNode(node)">
                   <el-icon><Edit /></el-icon>
                   编辑
+                </el-dropdown-item>
+                <el-dropdown-item @click="syncResources(node)">
+                  <el-icon><Refresh /></el-icon>
+                  同步资源
                 </el-dropdown-item>
                 <el-dropdown-item @click="openOrphanDialog(node)">
                   <el-icon><Warning /></el-icon>
@@ -98,7 +112,6 @@
               <span class="value">{{ formatRuntime(node) }}</span>
             </div>
           </div>
-          <div v-if="node.resource_note" class="resource-note">{{ node.resource_note }}</div>
         </div>
       </div>
     </div>
@@ -115,14 +128,14 @@
       </el-button>
     </div>
 
-    <div v-if="nodes.length" class="pagination-wrap">
+    <div v-if="filteredNodes.length" class="pagination-wrap">
       <el-pagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
         background
         layout="total, sizes, prev, pager, next"
         :page-sizes="[8, 12, 20, 50]"
-        :total="nodes.length"
+        :total="filteredNodes.length"
       />
     </div>
 
@@ -256,10 +269,11 @@ import { storeToRefs } from 'pinia'
 import { useNodesStore } from '@/stores/nodes'
 import { nodesApi } from '@/api'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 
 const store = useNodesStore()
 const { nodes } = storeToRefs(store)
-const { fetchNodes, createNode, updateNode, deleteNode } = store
+const { fetchNodes, createNode, updateNode, deleteNode, syncNodeResources } = store
 
 const showDialog = ref(false)
 const editingNode = ref(null)
@@ -268,6 +282,7 @@ const formRef = ref(null)
 const selectedIds = ref([])
 const currentPage = ref(1)
 const pageSize = ref(8)
+const nodeKindFilter = ref('all')
 const showOrphanDialog = ref(false)
 const orphanNode = ref(null)
 const orphanContainers = ref([])
@@ -282,7 +297,19 @@ onMounted(() => {
 
 const paginatedNodes = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return (nodes.value || []).slice(start, start + pageSize.value)
+  return filteredNodes.value.slice(start, start + pageSize.value)
+})
+
+const filteredNodes = computed(() => {
+  const list = nodes.value || []
+  if (nodeKindFilter.value === 'all') return list
+  if (nodeKindFilter.value === 'worker') {
+    return list.filter(node => ['worker', 'both'].includes(node.node_kind || 'worker'))
+  }
+  if (nodeKindFilter.value === 'terminal') {
+    return list.filter(node => ['terminal', 'both'].includes(node.node_kind))
+  }
+  return list.filter(node => node.node_kind === nodeKindFilter.value)
 })
 
 function nodeKindLabel(kind) {
@@ -325,22 +352,31 @@ function formatGpu(node) {
 }
 
 function formatCpu(node) {
-  const cores = node.cpu_cores ? `${node.cpu_cores} 核` : '未填写核数'
+  const cores = node.cpu_cores ? `${node.cpu_cores} 核` : '未同步'
   const model = node.cpu_model ? ` / ${node.cpu_model}` : ''
   return `${cores}${model}`
 }
 
 function formatMemory(value) {
   const mb = Number(value || 0)
-  if (!mb) return '未填写'
+  if (!mb) return '未同步'
   if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`
   return `${mb} MB`
 }
 
 function formatRuntime(node) {
-  const driver = node.driver_version || '驱动未填'
-  const cuda = node.cuda_version || 'CUDA 未填'
+  const driver = node.driver_version || '驱动未同步'
+  const cuda = node.cuda_version || 'CUDA 未同步'
   return `${driver} / ${cuda}`
+}
+
+async function syncResources(node) {
+  try {
+    await syncNodeResources(node.id)
+    ElMessage.success(`${node.hostname} 资源信息已同步`)
+  } catch {
+    // 全局拦截器已提示错误
+  }
 }
 
 function toggleSelected(id) {
@@ -491,6 +527,10 @@ async function cleanupAllOrphans() {
   gap: 10px;
 }
 
+.node-kind-filter {
+  width: 132px;
+}
+
 .selected-count {
   color: var(--text-secondary);
   font-size: 13px;
@@ -584,15 +624,6 @@ async function cleanupAllOrphans() {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
-}
-
-.resource-note {
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(59, 130, 246, 0.08);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 .detail-row {

@@ -417,17 +417,6 @@ async def evaluate_and_store_business_metric(
         metric_key=metric_key,
     )
 
-    existing = (
-        await db.execute(
-            select(BusinessObjectiveEvaluation).where(
-                BusinessObjectiveEvaluation.instance_id == instance_id,
-                BusinessObjectiveEvaluation.metric_key == metric_key,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing:
-        return existing
-
     evaluation = evaluate_business_objective(
         objective,
         actual_metric_key=metric_key,
@@ -440,6 +429,28 @@ async def evaluate_and_store_business_metric(
     _apply_video_gpu_success_guard(evaluation, result_metadata)
     if evaluation.target_value is None:
         return None
+    existing = (
+        await db.execute(
+            select(BusinessObjectiveEvaluation).where(
+                BusinessObjectiveEvaluation.instance_id == instance_id,
+                BusinessObjectiveEvaluation.metric_key == metric_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        existing.task_type = business_task.get("task_type") or "unknown"
+        existing.routing_strategy = routing_result.get("strategy")
+        existing.actual_value = evaluation.actual_value
+        existing.target_value = evaluation.target_value
+        existing.operator = evaluation.operator
+        existing.unit = evaluation.unit
+        existing.business_success = evaluation.business_success
+        existing.failure_reason = evaluation.failure_reason
+        existing.estimated_value = evaluation.estimated_value
+        existing.estimation_error_ratio = evaluation.estimation_error_ratio
+        existing.object_uris = {"uris": evaluation.object_uris, "result_metadata": result_metadata}
+        return existing
+
     row = BusinessObjectiveEvaluation(
         instance_id=instance_id,
         task_type=business_task.get("task_type") or "unknown",

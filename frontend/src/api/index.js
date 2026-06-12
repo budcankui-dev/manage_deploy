@@ -55,6 +55,7 @@ export const nodesApi = {
   create: (data) => api.post('/nodes', data),
   update: (id, data) => api.put(`/nodes/${id}`, data),
   delete: (id) => api.delete(`/nodes/${id}`),
+  syncResources: (id) => api.post(`/nodes/${id}/sync-resources`),
   listOrphans: (id) => api.get(`/nodes/${id}/orphans`),
   cleanupOrphans: (id, containerNames = []) => api.post(`/nodes/${id}/orphans/cleanup`, { container_names: containerNames })
 }
@@ -109,6 +110,7 @@ export const ordersApi = {
     data,
     withTimeout(BENCHMARK_FLOW_TIMEOUT)
   ),
+  recalculateBenchmark: (data = {}) => api.post('/orders/benchmark/recalculate', data, withTimeout(LONG_RUNNING_TIMEOUT)),
   cleanupInstances: (payload) => api.post(
     '/orders/batch/cleanup-instances',
     Array.isArray(payload) ? { order_ids: payload } : payload,

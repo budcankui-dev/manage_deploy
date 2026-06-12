@@ -271,6 +271,13 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/resources")
+async def get_host_resources():
+    from runtime_resources import collect_host_resources
+
+    return collect_host_resources()
+
+
 if __name__ == "__main__":
     import uvicorn
 

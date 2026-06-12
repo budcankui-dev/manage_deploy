@@ -128,6 +128,43 @@ async def update_node(
     return db_node
 
 
+@router.post("/{node_id}/sync-resources", response_model=NodeResponse)
+async def sync_node_resources(
+    node_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    node = await _load_node_or_404(db, node_id)
+    success, result = await AgentClient().get_resources(_get_node_endpoint(node))
+    if not success:
+        raise HTTPException(
+            status_code=502,
+            detail=result.get("error") or "Failed to query node resources",
+        )
+
+    for field in (
+        "gpu_count",
+        "gpu_model",
+        "gpu_memory_mb",
+        "cpu_model",
+        "cpu_cores",
+        "memory_mb",
+        "driver_version",
+        "cuda_version",
+    ):
+        if field in result:
+            setattr(node, field, result[field])
+
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    if diagnostics.get("nvidia_smi_error") and not result.get("cuda_version"):
+        node.resource_note = "节点资源已同步；未检测到 CUDA 版本，请确认 nvidia-smi 或 NVIDIA 驱动环境。"
+    elif not node.resource_note or "未检测到 CUDA" in node.resource_note:
+        node.resource_note = None
+
+    await db.commit()
+    await db.refresh(node)
+    return node
+
+
 @router.delete("/{node_id}")
 async def delete_node(
     node_id: str,

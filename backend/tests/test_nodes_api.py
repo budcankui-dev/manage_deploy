@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from api.nodes import create_node, update_node, list_node_orphans
+from api.nodes import create_node, update_node, list_node_orphans, sync_node_resources
 from models import Node
 from schemas import NodeCreate, NodeUpdate
 
@@ -149,3 +149,37 @@ async def test_list_node_orphans_filters_known_container_names(monkeypatch):
     assert len(result) == 1
     assert result[0].container_id == "cid-2"
     assert "数据库中已不存在" in result[0].reason
+
+
+@pytest.mark.asyncio
+async def test_sync_node_resources_updates_hardware_fields(monkeypatch):
+    node = Node(
+        hostname="worker-a",
+        agent_address="http://10.0.0.1:8001",
+        management_ip="10.0.0.1",
+        business_ip="10.0.1.10",
+    )
+    node.id = "node-1"
+    db = FakeSession(node)
+    db.values = [node]
+
+    async def fake_get_resources(self, _endpoint):
+        return True, {
+            "gpu_count": 1,
+            "gpu_model": "NVIDIA TITAN Xp",
+            "gpu_memory_mb": 12288,
+            "cpu_model": "Intel Xeon",
+            "cpu_cores": 16,
+            "memory_mb": 64000,
+            "driver_version": "535.171.04",
+            "cuda_version": "12.2",
+        }
+
+    monkeypatch.setattr("api.nodes.AgentClient.get_resources", fake_get_resources)
+
+    result = await sync_node_resources("node-1", db)
+
+    assert result.cpu_cores == 16
+    assert result.cuda_version == "12.2"
+    assert result.gpu_model == "NVIDIA TITAN Xp"
+    assert db.committed is True

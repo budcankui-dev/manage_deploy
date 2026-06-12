@@ -36,12 +36,22 @@ export const useNodesStore = defineStore('nodes', () => {
     nodes.value = nodes.value.filter(n => n.id !== id)
   }
 
+  async function syncNodeResources(id) {
+    const { data } = await nodesApi.syncResources(id)
+    const index = nodes.value.findIndex(n => n.id === id)
+    if (index !== -1) {
+      nodes.value[index] = data
+    }
+    return data
+  }
+
   return {
     nodes,
     loading,
     fetchNodes,
     createNode,
     updateNode,
-    deleteNode
+    deleteNode,
+    syncNodeResources
   }
 })
