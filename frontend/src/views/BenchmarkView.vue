@@ -353,157 +353,20 @@
     </el-card>
 
     <el-drawer v-model="detailDrawerVisible" title="压测工单详情" size="64%">
-      <div v-if="!selectedOrderDetail" class="empty-hint">请选择一个工单查看详情。</div>
-      <div v-else class="detail-drawer-body">
-        <div class="detail-toolbar">
-          <div>
-            <strong>{{ taskTypeLabel(selectedOrderDetail.task_type) }}</strong>
-            <span>{{ detailTaskSummary }}</span>
-          </div>
-          <el-button type="primary" plain size="small" @click="openBusinessTaskDetail">
-            在业务任务中心查看完整详情
-          </el-button>
+      <div v-if="selectedOrderDetail" class="detail-toolbar">
+        <div>
+          <strong>{{ taskTypeLabel(selectedOrderDetail.task_type) }}</strong>
+          <span>{{ detailTaskSummary }}</span>
         </div>
-
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="工单 ID">{{ selectedOrderDetail.id }}</el-descriptions-item>
-          <el-descriptions-item label="实例 ID">{{ selectedOrderDetail.materialized_instance_id || '未物化' }}</el-descriptions-item>
-          <el-descriptions-item label="任务状态">{{ selectedOrderDetail.status }}</el-descriptions-item>
-          <el-descriptions-item label="部署状态">{{ selectedOrderDetail.deployment_status || selectedOrderDetail.instance?.status || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="业务类型">{{ taskTypeLabel(selectedOrderDetail.task_type) }}</el-descriptions-item>
-          <el-descriptions-item label="路由策略">{{ routingPolicyLabel(selectedOrderDetail.routing_policy) }}</el-descriptions-item>
-        </el-descriptions>
-
-        <section class="detail-section">
-          <h3>实际节点 / GPU 分配</h3>
-          <el-table :data="selectedOrderDetail.node_placements || []" size="small" empty-text="暂无节点分配信息">
-            <el-table-column prop="role" label="子任务" width="100" />
-            <el-table-column prop="hostname" label="物理节点" min-width="140" />
-            <el-table-column prop="instance_node_name" label="实例节点" min-width="120" />
-            <el-table-column label="GPU" width="90">
-              <template #default="{ row }">
-                <span :class="{ 'warning-text': isGpuMissingForCompute(row) }">{{ gpuDisplay(row) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="status" label="节点状态" width="110" />
-          </el-table>
-        </section>
-
-        <section class="detail-section business-proof-card">
-          <h3>业务输入与结果展示</h3>
-          <p class="proof-summary">{{ detailObjectiveMeaning }}</p>
-          <ol class="pipeline-steps">
-            <li v-for="step in detailPipelineSteps" :key="step.role">
-              <strong>{{ step.role }}</strong>
-              <span>{{ step.title }}：{{ step.detail }}</span>
-            </li>
-          </ol>
-
-          <div class="proof-grid">
-            <div>
-              <h4>输入参数</h4>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item v-for="row in detailInputRows" :key="row.label" :label="row.label">
-                  {{ row.value }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </div>
-            <div>
-              <h4>计算输出</h4>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item v-for="row in detailOutputRows" :key="row.label" :label="row.label">
-                  {{ row.value }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </div>
-          </div>
-
-          <div v-if="detailVideoPreview || detailVideoDetections.length" class="benchmark-video-proof">
-            <div class="benchmark-video-preview">
-              <h4>视频推理分类画框结果</h4>
-              <div v-if="detailVideoPreview" class="benchmark-video-proof-frame">
-                <img :src="detailVideoPreview" alt="视频推理分类画框结果" />
-                <div v-if="detailVideoNeedsOverlay" class="benchmark-video-proof-overlay">
-                  <div v-if="detailVideoEvidenceRows.length" class="benchmark-video-proof-badge">
-                    <span v-for="row in detailVideoEvidenceRows" :key="row">{{ row }}</span>
-                  </div>
-                  <div
-                    v-for="row in detailVideoDetections"
-                    :key="`${row.label || row.label_zh}-${row.bbox_xyxy?.join('-')}`"
-                    class="benchmark-video-proof-box"
-                    :style="detailVideoBoxStyle(row)"
-                  >
-                    <span>{{ row.label_zh || row.display_label || row.label }}</span>
-                  </div>
-                </div>
-              </div>
-              <el-empty v-else description="等待带框预览图" :image-size="80" />
-            </div>
-            <div v-if="detailVideoDetections.length" class="benchmark-video-detections">
-              <h4>分类检测结果</h4>
-              <el-table :data="detailVideoDetections" size="small" border>
-                <el-table-column label="类别" min-width="140">
-                  <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="置信度" width="100">
-                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
-                </el-table-column>
-                <el-table-column label="画框坐标" min-width="180">
-                  <template #default="{ row }">{{ Array.isArray(row.bbox_xyxy) ? row.bbox_xyxy.join(', ') : '-' }}</template>
-                </el-table-column>
-                <el-table-column label="来源" width="110">
-                  <template #default="{ row }">
-                    <el-tag :type="row.fallback ? 'warning' : 'success'" size="small">
-                      {{ row.fallback ? '兜底框' : '模型输出' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-          </div>
-
-          <div v-if="detailParamConsistency" class="consistency-row">
-            <el-tag :type="detailParamConsistency.ok ? 'success' : 'warning'" size="small">
-              {{ detailParamConsistency.label }}
-            </el-tag>
-            <span>{{ detailParamConsistency.detail }}</span>
-          </div>
-          <div class="result-verdict" :class="detailVerdict.statusClass">
-            <strong>{{ detailVerdict.title }}</strong>
-            <p>{{ detailVerdict.subtitle }}</p>
-          </div>
-        </section>
-
-        <section class="detail-section">
-          <h3>业务目标评估</h3>
-          <div v-if="selectedOrderDetail.evaluation" class="metric-grid">
-            <div><span>实测指标</span><strong>{{ formatMetric(selectedOrderDetail.evaluation.actual_value, selectedOrderDetail.evaluation.unit) }}</strong></div>
-            <div><span>达标阈值</span><strong>{{ formatMetric(selectedOrderDetail.evaluation.target_value, selectedOrderDetail.evaluation.unit) }}</strong></div>
-            <div><span>是否达标</span><strong :class="selectedOrderDetail.evaluation.business_success ? 'success-text' : 'danger-text'">{{ selectedOrderDetail.evaluation.business_success ? '达标' : '未达标' }}</strong></div>
-            <div><span>指标键</span><strong>{{ selectedOrderDetail.evaluation.metric_key }}</strong></div>
-          </div>
-          <div v-else class="empty-hint compact">尚未收到业务指标上报，任务完成后会生成评估结果。</div>
-        </section>
-
-        <section class="detail-section json-grid">
-          <div>
-            <h3>业务参数 JSON</h3>
-            <pre>{{ prettyJson(selectedOrderDetail.business_task) }}</pre>
-          </div>
-          <div>
-            <h3>提交给路由系统的 DAG JSON</h3>
-            <pre>{{ prettyJson(selectedOrderDetail.routing_input_dag) }}</pre>
-          </div>
-          <div>
-            <h3>路由结果 JSON</h3>
-            <pre>{{ prettyJson(selectedOrderDetail.routing_result) }}</pre>
-          </div>
-          <div>
-            <h3>指标采集结果 JSON</h3>
-            <pre>{{ prettyJson(selectedOrderDetail.evaluation?.result_metadata) }}</pre>
-          </div>
-        </section>
+        <el-button type="primary" plain size="small" @click="openBusinessTaskDetail">
+          在业务任务中心查看
+        </el-button>
       </div>
+      <OrderDetailPanel
+        v-loading="detailLoading"
+        v-model:active-tab="detailTab"
+        :detail="selectedOrderDetail"
+      />
     </el-drawer>
   </div>
 </template>
@@ -513,6 +376,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
+import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   MATMUL_PIPELINE_STEPS,
   VIDEO_PIPELINE_STEPS,
@@ -570,6 +434,7 @@ const controlledStartStatus = ref('')
 const dashboardUpdatedAt = ref('')
 const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
+const detailTab = ref('business')
 const cleanupLoading = ref(false)
 const deleteLoading = ref(false)
 const selectedOrderId = ref('')
@@ -1179,6 +1044,7 @@ function buildBenchmarkDataProfile() {
 async function openOrderDetail(row) {
   selectedOrderId.value = row.id
   detailLoading.value = true
+  detailTab.value = 'business'
   try {
     const { data } = await ordersApi.get(row.id)
     selectedOrderDetail.value = data

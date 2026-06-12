@@ -217,16 +217,6 @@ def _network_requirements_for_role(
     return {"port_requirements": requirements} if requirements else {}
 
 
-def _flow_profile(task_type: str) -> tuple[str, int]:
-    if task_type == "low_latency_video_pipeline":
-        return "low_latency", 90
-    if task_type == "high_throughput_matmul":
-        return "high_throughput", 60
-    if task_type == "llm_text_generation":
-        return "interactive", 70
-    return "best_effort", 40
-
-
 def _build_dag_edges(
     task_type: str,
     nodes: list[dict[str, Any]],
@@ -240,7 +230,6 @@ def _build_dag_edges(
         return []
 
     edges = []
-    traffic_class, priority = _flow_profile(task_type)
     for i in range(len(nodes) - 1):
         src = nodes[i]["node_id"]
         dst = nodes[i + 1]["node_id"]
@@ -253,8 +242,6 @@ def _build_dag_edges(
                 "flow_id": f"{task_type}:{src}->{dst}",
                 "protocol": "tcp",
                 "dst_port_ref": f"{dst}.{dst}",
-                "traffic_class": traffic_class,
-                "priority": priority,
             },
         })
     return edges

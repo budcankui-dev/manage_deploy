@@ -269,9 +269,7 @@ while True:
       "flow": {
         "flow_id": "order-uuid-001:source->compute",
         "protocol": "tcp",
-        "dst_port_ref": "compute.compute",
-        "traffic_class": "low_latency",
-        "priority": 90
+        "dst_port_ref": "compute.compute"
       }
     },
     {
@@ -282,9 +280,7 @@ while True:
       "flow": {
         "flow_id": "order-uuid-001:compute->sink",
         "protocol": "tcp",
-        "dst_port_ref": "sink.sink",
-        "traffic_class": "low_latency",
-        "priority": 90
+        "dst_port_ref": "sink.sink"
       }
     }
   ]
@@ -299,7 +295,7 @@ while True:
 - `compute` 是路由系统需要选择真实部署节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
-- `edges[].flow` 用于识别业务流、优先级和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。
+- `edges[].flow` 用于识别业务流和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。业务模态字段可作为路由系统决定差异化网络处理的依据，平台不硬编码优先级。
 
 ## 8. 支持的 DAG 形态
 
@@ -402,8 +398,6 @@ Content-Type: application/json
       "dst_named_ports": {"compute": 18842},
       "dst_port_ref": "compute.compute",
       "protocol": "tcp",
-      "traffic_class": "low_latency",
-      "priority": 90,
       "data_mb": 20,
       "bandwidth_mbps": 20
     }
@@ -411,7 +405,7 @@ Content-Type: application/json
 }
 ```
 
-路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口、`traffic_class`、`priority` 下发真实网络规则。
+路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态和路由系统自身策略处理。
 
 ## 9.1 网络就绪确认
 
@@ -582,7 +576,7 @@ curl -sS -X POST \
 预期结果：
 
 - `/result` 返回 `routing_status=network_binding_ready`，并返回 `network_bindings`。
-- `network_bindings` 中能看到每条业务流的 `dst_ip`、`dst_port`、`traffic_class`、`priority`。
+- `network_bindings` 中能看到每条业务流的 `src_ip`、`dst_ip`、`dst_port` 和端口名。
 - `/network-ready` 返回 `routing_status=completed`。
 - 如果该业务需要部署容器，响应中有非空 `instance_id`。
 - 平台工单详情能看到 compute 节点和 GPU 编号。
@@ -677,7 +671,7 @@ curl -sS -X POST \
 4. GPU 任务必须独占 GPU，同一 worker_host + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
-7. POST /result 后必须读取响应里的 network_bindings，并按其中 dst_ip/dst_port/traffic_class/priority 下发网络规则。
+7. POST /result 后必须读取响应里的 network_bindings，并按其中 src_ip/dst_ip/dst_port 下发网络规则。
 8. 网络规则下发完成后必须调用 POST /api/routing-orders/{order_id}/network-ready。
 
 需要实现：
@@ -688,7 +682,7 @@ curl -sS -X POST \
 5. 成功时调 POST /api/routing-orders/{order_id}/result，placements 只需要回写 compute。
 6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
 7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。
-8. 根据 network_bindings 下发流表或业务优先级规则。
+8. 根据 network_bindings 下发流表；如需要 QoS，可由路由系统结合业务模态自行决定。
 9. 下发完成后调 POST /api/routing-orders/{order_id}/network-ready。
 10. 临时资源不足调 PATCH /api/routing-orders/{order_id}/requeue。
 11. 确定无法路由调 PATCH /api/routing-orders/{order_id}/fail。

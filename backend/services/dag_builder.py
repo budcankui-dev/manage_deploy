@@ -59,8 +59,6 @@ def build_matmul_dag(
                     "flow_id": f"{order_id}:source->compute",
                     "protocol": "tcp",
                     "dst_port_ref": "compute.compute",
-                    "traffic_class": "high_throughput",
-                    "priority": 60,
                 },
             },
             {
@@ -72,8 +70,6 @@ def build_matmul_dag(
                     "flow_id": f"{order_id}:compute->sink",
                     "protocol": "tcp",
                     "dst_port_ref": "sink.sink",
-                    "traffic_class": "high_throughput",
-                    "priority": 60,
                 },
             },
         ],

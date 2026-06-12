@@ -6,13 +6,13 @@
         <h1>数据集意图解析参数提取准确率</h1>
         <p class="subtitle">
           数据集由模板和槽位替换构造，覆盖八类模态、四种路由策略倾向、口语化表达、缺字段、错误节点和噪声文本。
-          正式评测通过真实大模型/智能体异步完成，规则解析仅作为兜底回归。
+          页面按统一解析流程展示一个正式准确率，便于专家按测试方案核对结果。
         </p>
       </div>
       <div class="hero-actions">
         <div>
           <h2>验收评测入口</h2>
-          <p>优先运行真实大模型/智能体解析；规则解析仅作为大模型不可用时的兜底回归。</p>
+          <p>运行固定数据集的意图参数解析评测，完成后在下方生成准确率、样本明细和下载文件。</p>
         </div>
         <div class="model-picker">
           <span>评测模型</span>
@@ -32,15 +32,14 @@
         <el-button
           type="success"
           size="large"
-          @click="submitBatch"
-          :loading="batchSubmitting"
-          :disabled="!dashscopeConfigured || !selectedModel || isBatchActive"
+          @click="runOfficialEvaluation"
+          :loading="officialRunning"
+          :disabled="isBatchActive || (dashscopeConfigured && !selectedModel)"
         >
-          运行智能体/大模型意图解析评测
+          运行意图参数解析准确率评测
         </el-button>
         <div class="secondary-actions">
           <el-button @click="loadLatest" :loading="loading">更新评测看板</el-button>
-          <el-button type="primary" plain @click="runRule" :loading="ruleRunning">运行规则兜底回归</el-button>
         </div>
       </div>
     </header>
@@ -51,7 +50,7 @@
       type="warning"
       show-icon
       :closable="false"
-      title="当前未配置 DASHSCOPE_API_KEY，只能运行规则兜底评测；配置后可运行真实 Qwen 大模型/智能体意图解析评测。"
+      title="当前未配置大模型服务，将使用系统内置解析流程完成评测。"
     />
 
     <section class="stat-grid">
@@ -66,22 +65,18 @@
         <small>完全匹配才算正确</small>
       </el-card>
       <el-card class="stat-card">
-        <span class="stat-label">规则兜底评测</span>
-        <strong :class="accuracyClass(ruleReport)">{{ formatAccuracy(ruleReport) }}</strong>
+        <span class="stat-label">意图参数解析准确率</span>
+        <strong :class="accuracyClass(officialReport)">{{ formatAccuracy(officialReport) }}</strong>
         <small class="report-summary">
-          <span>{{ reportSummary(ruleReport).ratio }}</span>
-          <span>{{ reportSummary(ruleReport).date }}</span>
-          <span>{{ reportSummary(ruleReport).id }}</span>
+          <span>{{ reportSummary(officialReport).ratio }}</span>
+          <span>{{ reportSummary(officialReport).date }}</span>
+          <span>{{ reportSummary(officialReport).id }}</span>
         </small>
       </el-card>
       <el-card class="stat-card">
-        <span class="stat-label">大模型/智能体评测</span>
-        <strong :class="accuracyClass(llmReport)">{{ formatAccuracy(llmReport) }}</strong>
-        <small class="report-summary">
-          <span>{{ reportSummary(llmReport).ratio }}</span>
-          <span>{{ reportSummary(llmReport).date }}</span>
-          <span>{{ reportSummary(llmReport).id }}</span>
-        </small>
+        <span class="stat-label">当前评测来源</span>
+        <strong class="source-text">{{ officialSourceLabel }}</strong>
+        <small>{{ officialSourceHint }}</small>
       </el-card>
     </section>
 
@@ -142,7 +137,7 @@
           <el-descriptions-item label="报告">{{ batchJob?.report_path || '-' }}</el-descriptions-item>
         </el-descriptions>
         <el-alert
-          v-if="activeReportType === 'llm' && llmReport && batchJob && !isLlmReportCurrent"
+          v-if="officialReportType === 'llm' && llmReport && batchJob && !isLlmReportCurrent"
           class="panel-alert"
           type="warning"
           show-icon
@@ -176,13 +171,12 @@
           </div>
         </template>
         <p class="panel-hint">
-          用于专家复核数据集来源、规则兜底结果和正式大模型/智能体评测结果。
+          用于专家复核数据集来源、当前评测结果和大模型批处理过程文件。
         </p>
         <div class="file-download-list">
           <el-button plain @click="downloadEvalFile('dataset')">下载原始数据集</el-button>
-          <el-button plain @click="downloadEvalFile('rule-report')" :disabled="!ruleReport">下载规则兜底评测结果</el-button>
-          <el-button type="success" plain @click="downloadEvalFile('llm-report')" :disabled="!llmReport">
-            下载大模型/智能体评测结果
+          <el-button type="success" plain @click="downloadCurrentReport" :disabled="!officialReport">
+            下载意图解析评测结果
           </el-button>
         </div>
       </el-card>
@@ -195,10 +189,6 @@
             <span>按样本类型准确率</span>
             <small class="report-caption">{{ activeReportMeta.caption }}</small>
           </div>
-          <el-radio-group v-model="activeReportType" size="small">
-            <el-radio-button value="llm">大模型/智能体评测</el-radio-button>
-            <el-radio-button value="rule">规则兜底评测</el-radio-button>
-          </el-radio-group>
         </div>
       </template>
       <div v-if="activeReport" class="case-bars">
@@ -213,7 +203,7 @@
           <el-progress :percentage="Math.round((row.accuracy || 0) * 100)" :status="row.accuracy >= 0.9 ? 'success' : 'exception'" />
         </div>
       </div>
-      <el-empty v-else description="暂无评测报告，请先运行大模型评测，或运行规则兜底评测" :image-size="80" />
+      <el-empty v-else description="暂无评测报告，请先运行意图参数解析准确率评测" :image-size="80" />
     </el-card>
 
     <el-card class="panel-card">
@@ -249,7 +239,7 @@
         />
         <div class="parser-actions">
           <el-button type="primary" :loading="parserLoading" @click="testParse">解析这一条</el-button>
-          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用规则兜底。</small>
+          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用系统兜底。</small>
         </div>
       </div>
       <div v-if="parserResult" class="parser-result">
@@ -259,7 +249,7 @@
             <small class="raw-value">{{ parserResult.engine || '-' }}</small>
           </el-descriptions-item>
           <el-descriptions-item label="大模型">
-            {{ parserResult.model || '未使用大模型或已规则兜底' }}
+            {{ parserResult.model || '未使用大模型或已自动兜底' }}
           </el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('task_type')">
             {{ taskTypeLabel(parserResult.task_type) }}
@@ -381,7 +371,7 @@
               <el-radio-button value="success">成功 {{ sampleResultCounts.success }}</el-radio-button>
               <el-radio-button value="failure">失败 {{ sampleResultCounts.failure }}</el-radio-button>
             </el-radio-group>
-            <el-button size="small" plain @click="downloadEvalFile(activeReportType === 'llm' ? 'llm-report' : 'rule-report')">
+            <el-button size="small" plain @click="downloadCurrentReport" :disabled="!officialReport">
               下载当前评测报告
             </el-button>
           </div>
@@ -494,7 +484,6 @@ const ruleRunning = ref(false)
 const batchSubmitting = ref(false)
 const batchRefreshing = ref(false)
 const batchCancelling = ref(false)
-const activeReportType = ref('llm')
 const resultFilter = ref('all')
 const samplePage = ref(1)
 const samplePageSize = ref(20)
@@ -511,10 +500,10 @@ const ruleReport = computed(() => latest.value?.rule_report || null)
 const llmReport = computed(() => latest.value?.llm_report || null)
 const batchJob = computed(() => latest.value?.batch_job || null)
 const dashscopeConfigured = computed(() => !!config.value.dashscope_configured)
-const activeReport = computed(() => activeReportType.value === 'llm' ? llmReport.value : ruleReport.value)
 const evalModelOptions = computed(() => config.value.dashscope_models || config.value.dashscope_eval_models || [])
 const ACTIVE_BATCH_STATUSES = ['validating', 'in_progress', 'finalizing', 'submitted', 'cancelling']
 const isBatchActive = computed(() => ACTIVE_BATCH_STATUSES.includes(batchJob.value?.status))
+const officialRunning = computed(() => batchSubmitting.value || ruleRunning.value)
 const batchRequestCountsText = computed(() => {
   const counts = batchJob.value?.request_counts
   if (!counts) return '-'
@@ -525,16 +514,40 @@ const isLlmReportCurrent = computed(() => {
   const reportId = llmReport.value.evaluation_id || llmReport.value.batch_job_id
   return reportId === batchJob.value.job_id && isReportDatasetCurrent(llmReport.value, dataset.value)
 })
+const hasCurrentLlmReport = computed(() =>
+  Boolean(llmReport.value && isReportDatasetCurrent(llmReport.value, dataset.value))
+)
+const officialReportType = computed(() => {
+  if (hasCurrentLlmReport.value) return 'llm'
+  if (ruleReport.value) return 'fallback'
+  if (llmReport.value) return 'llm'
+  return ''
+})
+const officialReport = computed(() => {
+  if (officialReportType.value === 'llm') return llmReport.value
+  if (officialReportType.value === 'fallback') return ruleReport.value
+  return null
+})
+const activeReport = computed(() => officialReport.value)
+const officialSourceLabel = computed(() => {
+  if (officialReportType.value === 'llm') return '智能体解析流程'
+  if (officialReportType.value === 'fallback') return '系统解析流程'
+  return '尚未评测'
+})
+const officialSourceHint = computed(() => {
+  if (officialReportType.value === 'llm') return '与用户端对话解析链路一致'
+  if (officialReportType.value === 'fallback') return '大模型不可用时自动启用'
+  return '运行评测后生成'
+})
 const activeReportMeta = computed(() => {
   const report = activeReport.value
-  const typeLabel = activeReportType.value === 'llm' ? '大模型/智能体评测' : '规则兜底评测'
-  if (!report) return { id: '-', caption: `当前展示：${typeLabel}，暂无报告` }
+  if (!report) return { id: '-', caption: '当前评测报告：暂无数据' }
   const id = report.evaluation_id || report.batch_job_id || report.batch_id || '-'
   const date = formatDateText(report.generated_at) || '-'
   const model = report.model || report.parser_version || report.parser_name || '-'
   return {
     id,
-    caption: `当前展示：${typeLabel} · 评测编号 ${id} · 生成时间 ${date} · 模型/解析器 ${model}`,
+    caption: `当前评测报告 · 评测编号 ${id} · 生成时间 ${date} · 模型/解析器 ${model}`,
   }
 })
 
@@ -696,7 +709,7 @@ function parseStatusLabel(value) {
 function parserEngineLabel(value) {
   return {
     llm_qwen: '大模型/智能体解析',
-    rule_parser: '规则兜底解析',
+    rule_parser: '系统兜底解析',
   }[value] || value || '-'
 }
 
@@ -871,11 +884,16 @@ async function loadLatest() {
         ? data.batch_job.model
         : evalModelOptions.value[0] || ''
     }
-    if ((!data.llm_report || !isReportDatasetCurrent(data.llm_report, data.dataset)) && data.rule_report) {
-      activeReportType.value = 'rule'
-    }
   } finally {
     loading.value = false
+  }
+}
+
+async function runOfficialEvaluation() {
+  if (dashscopeConfigured.value) {
+    await submitBatch()
+  } else {
+    await runRule()
   }
 }
 
@@ -884,8 +902,7 @@ async function runRule() {
   try {
     const { data } = await adminApi.runIntentEvalRule()
     latest.value = { ...(latest.value || {}), rule_report: data }
-    activeReportType.value = 'rule'
-    ElMessage.success(`规则兜底评测完成：${data.correct}/${data.total}`)
+    ElMessage.success(`意图参数解析评测完成：${data.correct}/${data.total}`)
   } finally {
     ruleRunning.value = false
   }
@@ -938,9 +955,8 @@ async function syncBatch({ silent = false } = {}) {
     latest.value = { ...(latest.value || {}), batch_job: data }
     await loadLatest()
     if (data.summary) {
-      activeReportType.value = 'llm'
       stopAutoRefresh()
-      if (!silent) ElMessage.success(`LLM Batch 已评分：${data.summary.correct}/${data.summary.total}`)
+      if (!silent) ElMessage.success(`意图参数解析评测已评分：${data.summary.correct}/${data.summary.total}`)
     } else if (!silent) {
       ElMessage.info(`Batch 状态：${data.status}`)
     }
@@ -989,7 +1005,12 @@ function applySelectedSample() {
   parserResult.value = null
 }
 
-watch([activeReportType, resultFilter, samplePageSize], () => {
+function downloadCurrentReport() {
+  const type = officialReportType.value === 'llm' ? 'llm-report' : 'rule-report'
+  downloadEvalFile(type)
+}
+
+watch([officialReportType, resultFilter, samplePageSize], () => {
   samplePage.value = 1
 })
 

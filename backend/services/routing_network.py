@@ -66,16 +66,6 @@ def _role_for_node(node: TaskInstanceNode) -> str:
     return str(role or "").lower()
 
 
-def _flow_defaults(task_type: str | None) -> tuple[str, int]:
-    if task_type == "low_latency_video_pipeline":
-        return "low_latency", 90
-    if task_type == "high_throughput_matmul":
-        return "high_throughput", 60
-    if task_type == "llm_text_generation":
-        return "interactive", 70
-    return "best_effort", 40
-
-
 def _business_task_type(order: TaskOrder) -> str | None:
     config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
     business_task = config.get("business_task")
@@ -121,8 +111,6 @@ async def build_network_bindings(
     else:
         machines = {}
 
-    task_type = _business_task_type(order)
-    default_class, default_priority = _flow_defaults(task_type)
     dag_edges = _dag_edge_map(order)
     bindings: list[dict[str, Any]] = []
 
@@ -159,8 +147,6 @@ async def build_network_bindings(
                 "dst_named_ports": port_map,
                 "dst_port_ref": flow.get("dst_port_ref") or f"{dst_role}.{next(iter(port_map), 'default')}",
                 "protocol": flow.get("protocol") or "tcp",
-                "traffic_class": flow.get("traffic_class") or default_class,
-                "priority": int(flow.get("priority") or default_priority),
                 "data_mb": dag_edge.get("data_mb"),
                 "bandwidth_mbps": dag_edge.get("bandwidth_mbps"),
             }

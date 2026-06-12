@@ -494,6 +494,15 @@ async def get_order(
             role = env.get("TASK_ROLE") or inst_node.name
             gpu_device = env.get("GPU_DEVICE")
             gpu_id = inst_node.gpu_id
+            biz_addr = get_business_address(machine, settings.prefer_business_ipv6) if machine else None
+            node_port_access_urls: dict[str, str] = {}
+            if inst_node.port_values and biz_addr:
+                for port_name, port_val in inst_node.port_values.items():
+                    try:
+                        port_int = int(port_val)
+                    except (TypeError, ValueError):
+                        continue
+                    node_port_access_urls[str(port_name)] = format_service_url(biz_addr, port_int)
             if role in ("compute", "worker") and not (gpu_device or gpu_id):
                 routing_gpu = _gpu_from_routing_result(routing_result, role)
                 gpu_device = routing_gpu or None
@@ -503,9 +512,11 @@ async def get_order(
                     instance_node_name=inst_node.name,
                     node_id=inst_node.node_id,
                     hostname=machine.hostname if machine else None,
+                    business_address=biz_addr,
                     gpu_id=gpu_id,
                     gpu_device=gpu_device,
                     port_values=inst_node.port_values,
+                    port_access_urls=node_port_access_urls or None,
                     status=inst_node.status,
                 )
             )
@@ -513,7 +524,6 @@ async def get_order(
                 continue
             if not machine:
                 continue
-            biz_addr = get_business_address(machine, settings.prefer_business_ipv6)
             for port_name, port_val in inst_node.port_values.items():
                 try:
                     port_int = int(port_val)

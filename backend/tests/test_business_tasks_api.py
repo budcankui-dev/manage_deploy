@@ -572,9 +572,9 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
         ("source", "compute", 2, 20),
         ("compute", "sink", 2, 20),
     ]
-    assert dag["edges"][0]["flow"]["traffic_class"] == "low_latency"
-    assert dag["edges"][0]["flow"]["priority"] == 90
     assert dag["edges"][0]["flow"]["dst_port_ref"] == "compute.compute"
+    assert "traffic_class" not in dag["edges"][0]["flow"]
+    assert "priority" not in dag["edges"][0]["flow"]
 
 
 @pytest.mark.asyncio
