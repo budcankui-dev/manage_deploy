@@ -1039,7 +1039,8 @@ async function loadSummary() {
   dashboardUpdatedAt.value = formatTime(new Date())
 }
 
-async function refreshAcceptanceResult() {
+async function refreshAcceptanceResult(options = {}) {
+  const { silent = false } = options
   resultRefreshing.value = true
   try {
     const payload = {
@@ -1050,11 +1051,15 @@ async function refreshAcceptanceResult() {
     const { data } = await ordersApi.recalculateBenchmark(payload)
     await Promise.all([loadOrders(), loadSummary()])
     const failedCount = Object.keys(data.failed || {}).length
+    if (silent) {
+      return data
+    }
     if (failedCount) {
       ElMessage.warning(`已补算 ${data.succeeded?.length || 0} 个工单，${failedCount} 个暂无可用指标`)
     } else {
       ElMessage.success(`已补算 ${data.succeeded?.length || 0} 个工单并更新业务目标成功率`)
     }
+    return data
   } finally {
     resultRefreshing.value = false
   }
@@ -1098,7 +1103,11 @@ function sleep(ms) {
 async function loadAll() {
   await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines()])
   await loadOrders()
-  await loadSummary()
+  if (orders.value.length) {
+    await refreshAcceptanceResult({ silent: true })
+  } else {
+    await loadSummary()
+  }
 }
 
 async function runSingleBaseline(row) {
@@ -1377,7 +1386,12 @@ watch(taskType, async () => {
   ) {
     setCurrentBenchmarkRunId('')
   }
-  await Promise.all([loadBaselines(), loadOrders(), loadSummary()])
+  await Promise.all([loadBaselines(), loadOrders()])
+  if (orders.value.length) {
+    await refreshAcceptanceResult({ silent: true })
+  } else {
+    await loadSummary()
+  }
 })
 onMounted(loadAll)
 </script>
