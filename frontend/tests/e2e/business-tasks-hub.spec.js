@@ -56,7 +56,7 @@ test('optional headed matmul demo trigger is visible', async ({ page }, testInfo
 
   await page.getByRole('button', { name: '一键演示矩阵乘法' }).click()
   await expect(
-    page.getByText(/矩阵乘法示例任务|至少需要 3 个工作节点|任务已提交|演示完成/)
+    page.getByText(/矩阵乘法示例任务|至少需要 3 个可调度拓扑节点|任务已提交|演示完成/)
   ).toBeVisible({ timeout: 300_000 })
 
   await page.screenshot({

@@ -914,7 +914,7 @@ async function waitForEvaluation(instanceId, maxAttempts = 80, intervalMs = 3000
 
 async function submitSample() {
   if (nodes.value.length < 3) {
-    ElMessage.error('至少需要 3 个工作节点才能提交示例任务')
+    ElMessage.error('至少需要 3 个可调度拓扑节点才能提交示例任务')
     return
   }
   demoRunning.value = true

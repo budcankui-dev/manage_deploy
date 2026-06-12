@@ -36,6 +36,24 @@ from .business_tasks import create_business_task
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
+def _node_kind(node: Node) -> str:
+    return str(node.node_kind or "worker").lower()
+
+
+def _is_demo_compute_candidate(node: Node) -> bool:
+    return (
+        bool(node.is_schedulable)
+        and bool(node.is_routable)
+        and node.deleted_at is None
+        and _node_kind(node) in {"worker", "both"}
+    )
+
+
+def _prefer_gpu_nodes(nodes: list[Node]) -> list[Node]:
+    with_gpu = [node for node in nodes if int(node.gpu_count or 0) > 0]
+    return with_gpu or nodes
+
+
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
     payload: ConversationCreate,
@@ -501,16 +519,22 @@ async def demo_route_conversation(
     nodes = (
         await db.execute(
             select(Node)
-            .where(Node.is_schedulable == True, Node.deleted_at.is_(None))
+            .where(
+                Node.is_schedulable == True,
+                Node.is_routable == True,
+                Node.deleted_at.is_(None),
+            )
             .order_by(Node.hostname.asc())
         )
     ).scalars().all()
-    if not nodes:
-        raise HTTPException(status_code=400, detail="没有可调度节点，无法执行自动路由部署")
+    compute_nodes = [node for node in nodes if _is_demo_compute_candidate(node)]
+    if not compute_nodes:
+        raise HTTPException(status_code=400, detail="没有可用计算节点，无法执行自动路由部署")
 
-    source_destination = {order.source_name, order.destination_name}
-    compute_candidates = [node for node in nodes if node.hostname not in source_destination]
-    compute_node = compute_candidates[0] if compute_candidates else nodes[0]
+    source_destination = {name for name in (order.source_name, order.destination_name) if name}
+    preferred_compute = [node for node in compute_nodes if node.hostname not in source_destination]
+    compute_candidates = _prefer_gpu_nodes(preferred_compute or compute_nodes)
+    compute_node = compute_candidates[0]
 
     # Import lazily to avoid coupling the conversation module to order router setup.
     from api.orders import RoutingPlacement, RoutingResultPayload, receive_routing_result as receive_order_routing_result

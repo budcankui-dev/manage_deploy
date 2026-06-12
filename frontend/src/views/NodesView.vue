@@ -2,8 +2,8 @@
   <div class="nodes-view">
     <header class="page-header">
       <div class="title-section">
-        <h1>工作节点</h1>
-        <p class="subtitle">管理运行任务容器的工作节点</p>
+        <h1>拓扑节点</h1>
+        <p class="subtitle">管理参与路由和业务容器部署的终端/计算节点</p>
       </div>
       <div class="header-actions">
         <el-select v-model="nodeKindFilter" class="node-kind-filter" size="small" placeholder="节点类型">
@@ -121,7 +121,7 @@
         <el-icon><Connection /></el-icon>
       </div>
       <h3>还没有注册节点</h3>
-      <p>先添加一个工作节点，才能开始分发任务容器</p>
+      <p>先添加一个拓扑节点，才能开始路由计算和分发任务容器</p>
       <el-button type="primary" @click="openCreateDialog">
         <el-icon><Plus /></el-icon>
         添加第一个节点
@@ -205,6 +205,13 @@
         </div>
 
         <div class="form-section-title">调度控制</div>
+        <el-alert
+          class="node-mode-hint"
+          type="info"
+          :closable="false"
+          show-icon
+          title="终端节点如果要承载 source/sink 业务容器，需要开启参与任务调度并部署 Node Agent；如果只用于路由路径检查，可关闭任务调度，仅参与外部路由。"
+        />
         <div class="form-grid compact">
           <el-form-item label="参与任务调度">
             <el-switch v-model="form.is_schedulable" active-text="参与" inactive-text="不参与" />
@@ -672,6 +679,10 @@ async function cleanupAllOrphans() {
 
 .form-grid.compact {
   grid-template-columns: repeat(2, minmax(180px, 260px));
+}
+
+.node-mode-hint {
+  margin-bottom: 14px;
 }
 
 .empty-state {

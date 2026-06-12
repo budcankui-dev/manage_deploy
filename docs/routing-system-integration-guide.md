@@ -42,6 +42,7 @@
 | 子任务节点 ID | `routing_input_dag.nodes[].task_node_id`，常见为 `source`、`compute`、`sink` |
 | 固定拓扑节点 | `routing_input_dag.nodes[].fixed_topology_node_id`，表示用户已指定源/目的真实节点 |
 | 算力选择 | 路由系统回写 `placements[].task_node_id=compute`、`topology_node_id=<nodes.hostname>`、可选 `gpu_device` |
+| 端点部署 | 正式业务默认由平台在 `source/sink` 固定拓扑节点部署端点容器；路由系统通常不需要回写 source/sink placement |
 | GPU 独占 | 同一 `topology_node_id + gpu_device` 同一时刻只能分配给一个未释放任务 |
 | 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
 | 扩展信息 | 算法版本、路径、成本、租金、解释等统一放到 `metadata` 字典 |
@@ -250,8 +251,19 @@ WHERE deleted_at IS NULL
 
 - `node_kind in ('worker', 'both')` 且 `is_schedulable=1` 的节点可作为 `compute` 候选。
 - `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
+- 正式业务要部署 `source/sink` 端点容器，因此源/目的真实节点还必须 `is_schedulable=1`，并部署 Node Agent、Docker、业务镜像拉取能力。
+- 如果某终端节点没有 Docker/Node Agent，只能用于纯路由路径检查；这类节点应设置 `is_schedulable=0, is_routable=1`，不要用于业务目标成功率测评。
 - 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统应按 `nodes.hostname` 匹配。
 - 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id`。
+
+扩展拓扑节点时按下面规则配置即可：
+
+| 场景 | 推荐配置 | 是否可用于业务目标测评 | 说明 |
+|------|----------|------------------------|------|
+| 终端节点需要承载 source/sink 容器 | `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
+| 终端节点只有网络路径，没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 只用于 route-only 路径检查；平台不会在其上创建业务实例。 |
+| 计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。 |
+| 专用计算节点 | `node_kind=worker`，`is_schedulable=1`，`is_routable=1` | 可以 | 路由系统可把它作为 `compute` placement，并按 GPU 独占规则扣减资源。 |
 
 ### 6.3 `node_baselines`
 
@@ -522,7 +534,8 @@ routing_resource_events(
 
 - `task_node_id` 是任务内部子任务节点名，不是物理节点名。
 - 用户输入的源节点和目的节点写在 `fixed_topology_node_id`。
-- 源节点和目的节点可以是物理计算节点；在本 DAG 中它们仍然只是 terminal 子任务角色。
+- 源节点和目的节点可以是物理终端节点，也可以是物理计算节点；在 DAG 里它们仍然只是 `source/sink` 子任务角色。
+- 正式业务默认会在 source/sink 所在真实节点启动端点容器，所以这些真实节点必须可调度。纯路由检查场景可由平台设置 `platform_deployment.deployable_roles=[]`，此时不创建业务容器，也不会产生业务指标。
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
@@ -533,11 +546,27 @@ routing_resource_events(
 
 ### 8.1 `source -> compute -> sink`
 
-默认演示业务。路由系统选择 `compute` 的 `topology_node_id/gpu_device`，路径可放到 `metadata.path`。
+默认演示业务。平台会根据 DAG 的 `fixed_topology_node_id` 在真实源/目的节点部署 `source/sink` 容器；路由系统只需要选择 `compute` 的 `topology_node_id/gpu_device`，路径可放到 `metadata.path`。
+
+如果路由系统只回写 compute：
+
+```json
+{
+  "strategy": "resource_guarantee",
+  "placements": [
+    {"task_node_id": "compute", "topology_node_id": "compute-node-a", "gpu_device": "0"}
+  ],
+  "metadata": {
+    "path": ["terminal-a", "compute-node-a", "terminal-b"]
+  }
+}
+```
+
+平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定。
 
 ### 8.2 `source -> sink`
 
-两个节点都是终端，只需要计算路径，不需要部署业务容器。
+两个节点都是终端，只需要计算路径，不需要部署业务容器。该模式只用于路由联调或路径验证，不用于业务目标成功率测评。
 
 回写时 `placements` 可以为空：
 
@@ -554,7 +583,7 @@ routing_resource_events(
 
 ### 8.3 `source -> compute`
 
-源节点是终端，目的侧承担计算角色。路由系统只需要回写 compute：
+源节点是终端，目的侧承担计算角色。目的节点可以是物理计算节点。若平台只部署 compute 容器，则 `platform_deployment.deployable_roles=["compute"]`；路由系统只需要回写 compute：
 
 ```json
 {
@@ -904,19 +933,20 @@ curl -sS -X POST \
 硬性约定：
 1. 统一任务 ID 是 task_orders.id，也等于 routing_input_dag.job_id 和 routing_input_dag.order_id。
 2. 路由系统只负责选择 compute 节点、GPU 和路径解释，不要判断平台是否给 source/sink/compute 部署容器。
-3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改。
+3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改；正式业务中平台会在这些节点部署端点容器。
 4. GPU 任务必须独占 GPU，同一 topology_node_id + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
 7. POST /result 后必须读取响应里的 network_bindings，并按其中 src_ip/dst_ip/dst_port 下发网络规则。
 8. 网络规则下发完成后必须调用 POST /api/routing-orders/{order_id}/network-ready。
+9. 没有 Docker/Node Agent 的终端节点只能用于 route-only 路径检查，不用于业务目标成功率测评。
 
 需要实现：
 1. 调 GET /api/routing-resource-events?event_type=release&unacked=true 读取释放事件，把 GPU 加回自己的资源表，再调 POST /api/routing-resource-events/ack。
 2. 调 GET /api/routing-orders?status=pending&limit=100 获取待路由工单。
 3. 对每个工单调 PATCH /api/routing-orders/{order_id}/claim，409 表示别人抢到了，跳过。
 4. 解析 routing_input_dag，读取 nodes 和 node_baselines，选择 compute 的 topology_node_id/gpu_device。
-5. 成功时调 POST /api/routing-orders/{order_id}/result，placements 只需要回写 compute。
+5. 成功时调 POST /api/routing-orders/{order_id}/result，正式业务 placements 只需要回写 compute；平台会补齐 source/sink。
 6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
 7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。
 8. 根据 network_bindings 下发流表；如需要 QoS，可由路由系统结合业务模态自行决定。

@@ -97,8 +97,6 @@ BENCHMARK_TASK_CONFIGS = {
             "unit": "GFLOPS",
         },
         "default_compute_gpu": "0",
-        "source_name": "benchmark-source",
-        "destination_name": "benchmark-sink",
     },
     "low_latency_video_pipeline": {
         "label": "视频AI推理任务",
@@ -128,8 +126,6 @@ BENCHMARK_TASK_CONFIGS = {
             "unit": "ms",
         },
         "default_compute_gpu": "0",
-        "source_name": "benchmark-video-source",
-        "destination_name": "benchmark-video-sink",
     },
 }
 
@@ -201,6 +197,61 @@ def _benchmark_config(task_type: str) -> dict:
         return BENCHMARK_TASK_CONFIGS[task_type]
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"Unsupported benchmark task_type: {task_type}") from exc
+
+
+def _normal_node_kind(node: NodeModel) -> str:
+    return str(node.node_kind or "worker").lower()
+
+
+def _node_can_host_endpoint_container(node: NodeModel) -> bool:
+    """A source/sink endpoint can be terminal, worker, or both, but must run containers."""
+    return (
+        bool(node.is_schedulable)
+        and bool(node.is_routable)
+        and node.deleted_at is None
+        and _normal_node_kind(node) in {"terminal", "worker", "both"}
+    )
+
+
+def _node_can_host_compute(node: NodeModel) -> bool:
+    """Compute placement must stay on compute-capable topology nodes."""
+    return (
+        bool(node.is_schedulable)
+        and bool(node.is_routable)
+        and node.deleted_at is None
+        and _normal_node_kind(node) in {"worker", "both"}
+    )
+
+
+def _prefer_gpu_nodes(nodes: list[NodeModel]) -> list[NodeModel]:
+    with_gpu = [node for node in nodes if int(node.gpu_count or 0) > 0]
+    return with_gpu or nodes
+
+
+async def _deployable_endpoint_nodes(db: AsyncSession) -> list[NodeModel]:
+    rows = await db.execute(
+        select(NodeModel)
+        .where(
+            NodeModel.is_schedulable == True,
+            NodeModel.is_routable == True,
+            NodeModel.deleted_at.is_(None),
+        )
+        .order_by(NodeModel.hostname.asc())
+    )
+    return [node for node in rows.scalars().all() if _node_can_host_endpoint_container(node)]
+
+
+def _pick_endpoint_pair(endpoint_nodes: list[NodeModel], index: int) -> tuple[NodeModel, NodeModel]:
+    if not endpoint_nodes:
+        raise HTTPException(
+            status_code=400,
+            detail="No deployable endpoint nodes available for source/sink containers",
+        )
+    if len(endpoint_nodes) == 1:
+        return endpoint_nodes[0], endpoint_nodes[0]
+    source = endpoint_nodes[index % len(endpoint_nodes)]
+    sink = endpoint_nodes[(index + 1) % len(endpoint_nodes)]
+    return source, sink
 
 
 def _merged_benchmark_profile(task_type: str, data_profile: dict | None) -> dict:
@@ -915,6 +966,66 @@ def _compute_gpu_slots_from_placements(
     return slots
 
 
+async def _resolve_topology_node(db: AsyncSession, raw: str) -> NodeModel:
+    import re
+
+    uuid_pattern = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        re.I,
+    )
+    if uuid_pattern.match(raw):
+        result = await db.execute(select(NodeModel).where(NodeModel.id == raw))
+        node = result.scalar_one_or_none()
+        if node:
+            return node
+
+    result = await db.execute(select(NodeModel).where(NodeModel.display_name == raw))
+    node = result.scalar_one_or_none()
+    if node:
+        return node
+
+    result = await db.execute(select(NodeModel).where(NodeModel.hostname == raw))
+    node = result.scalar_one_or_none()
+    if node:
+        return node
+
+    raise HTTPException(status_code=422, detail=f"Node not found: {raw}")
+
+
+async def _validate_deployable_placements(
+    db: AsyncSession,
+    order: TaskOrder,
+    placements: list[RoutingPlacement],
+    dag_nodes_by_role: dict[str, dict[str, Any]],
+) -> None:
+    for placement in placements:
+        if not _placement_is_deployable(order, placement, dag_nodes_by_role):
+            continue
+        role = str(placement.task_node_id or "").lower()
+        node = await _resolve_topology_node(db, placement.topology_node_id)
+        if node.deleted_at is not None:
+            raise HTTPException(status_code=422, detail=f"Node is deleted: {node.hostname}")
+        if role in {"compute", "worker", "infer", "train"}:
+            if not _node_can_host_compute(node):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Compute role '{role}' requires a schedulable worker/both node, "
+                        f"got {node.hostname} ({_normal_node_kind(node)})"
+                    ),
+                )
+        elif role in {"source", "sink", "input", "output", "video"}:
+            if not _node_can_host_endpoint_container(node):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Endpoint role '{role}' requires a schedulable terminal/worker/both node "
+                        f"because this order deploys endpoint containers. "
+                        f"Use platform_deployment.deployable_roles=[] for route-only checks."
+                    ),
+                )
+
+
 def _routing_request_placement_map(
     placements: list[RoutingPlacement],
 ) -> dict[str, dict[str, Any]]:
@@ -1148,6 +1259,7 @@ async def receive_routing_result(
         payload.placements,
         dag_nodes_by_role,
     )
+    await _validate_deployable_placements(db, order, effective_placements, dag_nodes_by_role)
     await _ensure_no_active_gpu_slot_conflicts(db, order, effective_placements)
 
     # Persist routing result
@@ -1353,7 +1465,11 @@ async def create_batch_benchmark(
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     runtime_settings = await get_runtime_settings(db)
     modality_priority_map = modality_priority_map_from_settings(runtime_settings)
+    endpoint_nodes = await _deployable_endpoint_nodes(db)
     for i in range(payload.count):
+        source_node, sink_node = _pick_endpoint_pair(endpoint_nodes, i)
+        source_name = source_node.hostname
+        destination_name = sink_node.hostname
         order_name = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"
         runtime_config = {
             "benchmark": {
@@ -1370,7 +1486,11 @@ async def create_batch_benchmark(
                 "business_objective": business_objective,
                 "runtime_plan": {"routing_strategy": payload.routing_strategy},
                 "routing_strategy": payload.routing_strategy,
-            }
+            },
+            "platform_deployment": {
+                "deployable_roles": ["source", "compute", "sink"],
+                "note": "business objective benchmark runs deploy endpoint containers on real topology nodes",
+            },
         }
         order = TaskOrder(
             user_id=current_user.id,
@@ -1380,8 +1500,8 @@ async def create_batch_benchmark(
             routing_status=RoutingStatus.PENDING.value,
             runtime_config=runtime_config,
             is_benchmark=True,
-            source_name=benchmark_config["source_name"],
-            destination_name=benchmark_config["destination_name"],
+            source_name=source_name,
+            destination_name=destination_name,
             business_start_time=business_start_time,
             business_end_time=business_end_time,
             scheduled_start_time=business_start_time,
@@ -1394,8 +1514,8 @@ async def create_batch_benchmark(
             order_name=order.name,
             task_type=payload.task_type,
             modality=benchmark_config["modality"],
-            source_name=benchmark_config["source_name"],
-            destination_name=benchmark_config["destination_name"],
+            source_name=source_name,
+            destination_name=destination_name,
             business_start_time=business_start_time,
             business_end_time=business_end_time,
             data_profile=data_profile,
@@ -1460,7 +1580,7 @@ async def batch_auto_route(
             routing_pool = pools_by_task_type.get(order_task_type)
             if not routing_pool or not routing_pool["compute"]:
                 raise RuntimeError(f"No stable baseline compute nodes available for {order_task_type}")
-            picked = _pick_benchmark_nodes(routing_pool)
+            picked = _pick_benchmark_nodes(routing_pool, order)
             await _do_auto_route(db, order, picked)
             routed += 1
         except Exception as exc:
@@ -1938,22 +2058,36 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
         stable_compute = [
             node
             for node in schedulable
-            if node.id in stable_node_ids and node.node_kind in ("worker", "both", None)
+            if node.id in stable_node_ids and _node_can_host_compute(node)
         ]
+        stable_compute = _prefer_gpu_nodes(stable_compute)
 
     terminal_nodes = [
-        node for node in schedulable if node.node_kind in ("terminal", "both", "worker", None)
-    ] or schedulable
+        node for node in schedulable if _node_can_host_endpoint_container(node)
+    ] or [node for node in schedulable if node.deleted_at is None]
     return {"terminal": terminal_nodes, "compute": stable_compute}
 
 
-def _pick_benchmark_nodes(pool: dict[str, list[NodeModel]]) -> dict[str, NodeModel]:
-    compute = random.choice(pool["compute"])
-    terminal = pool["terminal"] or pool["compute"]
+def _pick_fixed_or_random_endpoint(
+    terminal_nodes: list[NodeModel],
+    fixed_hostname: str | None,
+) -> NodeModel:
+    terminal_by_hostname = {node.hostname: node for node in terminal_nodes}
+    if fixed_hostname and fixed_hostname in terminal_by_hostname:
+        return terminal_by_hostname[fixed_hostname]
+    return random.choice(terminal_nodes)
+
+
+def _pick_benchmark_nodes(pool: dict[str, list[NodeModel]], order: TaskOrder | None = None) -> dict[str, NodeModel]:
+    compute_candidates = _prefer_gpu_nodes([node for node in pool["compute"] if _node_can_host_compute(node)])
+    if not compute_candidates:
+        raise RuntimeError("No compute-capable nodes available")
+    compute = random.choice(compute_candidates)
+    terminal = pool["terminal"] or compute_candidates
     return {
-        "source": random.choice(terminal),
+        "source": _pick_fixed_or_random_endpoint(terminal, order.source_name if order else None),
         "compute": compute,
-        "sink": random.choice(terminal),
+        "sink": _pick_fixed_or_random_endpoint(terminal, order.destination_name if order else None),
     }
 
 
@@ -1980,7 +2114,7 @@ async def auto_route_order(
     if not routing_pool["compute"]:
         raise HTTPException(status_code=400, detail="No stable baseline compute nodes available")
 
-    picked = _pick_benchmark_nodes(routing_pool)
+    picked = _pick_benchmark_nodes(routing_pool, order)
     await _do_auto_route(db, order, picked)
     await db.commit()
     return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

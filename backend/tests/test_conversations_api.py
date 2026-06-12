@@ -113,6 +113,19 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session)
     _node_ids, _template_id = await _seed_business_fixture(client)
+    terminal_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "aaa-terminal",
+            "agent_address": "http://127.0.0.1:7999",
+            "management_ip": "10.99.0.1",
+            "business_ip": "10.99.1.1",
+            "node_kind": "terminal",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert terminal_response.status_code == 200
 
     create_response = await client.post("/api/conversations", json={"title": "视频推理任务"}, headers=headers)
     assert create_response.status_code == 200

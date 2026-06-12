@@ -769,8 +769,11 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert [node["task_node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["task_role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["task_node_type"] for node in dag["nodes"]] == ["terminal", "worker", "terminal"]
-    assert dag["nodes"][0]["fixed_topology_node_id"] == "benchmark-video-source"
-    assert dag["nodes"][2]["fixed_topology_node_id"] == "benchmark-video-sink"
+    assert order.source_name == "worker-a"
+    assert order.destination_name == "worker-b"
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["source", "compute", "sink"]
+    assert dag["nodes"][0]["fixed_topology_node_id"] == "worker-a"
+    assert dag["nodes"][2]["fixed_topology_node_id"] == "worker-b"
     assert all("exec" not in node for node in dag["nodes"])
     edge_pairs = [(edge["from"], edge["to"], edge["data_mb"], edge["bandwidth_mbps"]) for edge in dag["edges"]]
     assert edge_pairs == [
@@ -925,6 +928,253 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
 
     instances = await db_session.execute(select(TaskInstance).where(TaskInstance.source_order_id == order.id))
     assert instances.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client, db_session):
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "terminal-without-agent",
+            "agent_address": "http://127.0.0.1:8301",
+            "management_ip": "10.11.0.1",
+            "business_ip": "10.11.1.1",
+            "node_kind": "terminal",
+            "is_schedulable": False,
+            "is_routable": True,
+        },
+    )
+    assert source_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "worker-sink",
+            "agent_address": "http://127.0.0.1:8302",
+            "management_ip": "10.11.0.2",
+            "business_ip": "10.11.1.2",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "worker-compute",
+            "agent_address": "http://127.0.0.1:8303",
+            "management_ip": "10.11.0.3",
+            "business_ip": "10.11.1.3",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "endpoint-validation-template",
+            "description": "source/sink endpoint validation",
+            "nodes": [
+                {
+                    "client_id": "source",
+                    "name": "source",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": sink_response.json()["id"],
+                },
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": compute_response.json()["id"],
+                },
+                {
+                    "client_id": "sink",
+                    "name": "sink",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": sink_response.json()["id"],
+                },
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="endpoint-validation-routing",
+        source_name="terminal-without-agent",
+        destination_name="worker-sink",
+        runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "endpoint-validation-routing",
+            "order_id": "endpoint-validation-routing",
+            "nodes": [
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-without-agent"},
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
+                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "worker-sink"},
+            ],
+            "edges": [{"from": "source", "to": "compute"}, {"from": "compute", "to": "sink"}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/orders/{order.id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-compute", "gpu_device": "0"},
+            ],
+        },
+    )
+    assert response.status_code == 422
+    assert "Endpoint role" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(client, db_session):
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "worker-source",
+            "agent_address": "http://127.0.0.1:8401",
+            "management_ip": "10.12.0.1",
+            "business_ip": "10.12.1.1",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert source_response.status_code == 200
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "worker-compute-2",
+            "agent_address": "http://127.0.0.1:8402",
+            "management_ip": "10.12.0.2",
+            "business_ip": "10.12.1.2",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "worker-sink-2",
+            "agent_address": "http://127.0.0.1:8403",
+            "management_ip": "10.12.0.3",
+            "business_ip": "10.12.1.3",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "worker-endpoints-template",
+            "description": "source/sink are fixed topology worker nodes",
+            "nodes": [
+                {
+                    "client_id": "source",
+                    "name": "source",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": source_response.json()["id"],
+                },
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": compute_response.json()["id"],
+                },
+                {
+                    "client_id": "sink",
+                    "name": "sink",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": sink_response.json()["id"],
+                },
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    start = datetime.now(UTC)
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="worker-endpoint-routing",
+        source_name="worker-source",
+        destination_name="worker-sink-2",
+        business_start_time=start,
+        business_end_time=start + timedelta(minutes=5),
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul", "data_profile": {}},
+            "platform_deployment": {"deployable_roles": ["source", "compute", "sink"]},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "worker-endpoint-routing",
+            "order_id": "worker-endpoint-routing",
+            "nodes": [
+                {
+                    "task_node_id": "source",
+                    "task_role": "source",
+                    "task_node_type": "terminal",
+                    "fixed_topology_node_id": "worker-source",
+                },
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
+                {
+                    "task_node_id": "sink",
+                    "task_role": "sink",
+                    "task_node_type": "terminal",
+                    "fixed_topology_node_id": "worker-sink-2",
+                },
+            ],
+            "edges": [{"from": "source", "to": "compute"}, {"from": "compute", "to": "sink"}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/orders/{order.id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-compute-2", "gpu_device": "0"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["instance_id"]
+
+    nodes = await db_session.execute(
+        select(TaskInstanceNode).where(TaskInstanceNode.instance_id == body["instance_id"])
+    )
+    placements = {node.name: node for node in nodes.scalars().all()}
+    assert set(placements) == {"source", "compute", "sink"}
+    assert placements["source"].node_id == source_response.json()["id"]
+    assert placements["compute"].node_id == compute_response.json()["id"]
+    assert placements["compute"].gpu_id == "0"
+    assert placements["sink"].node_id == sink_response.json()["id"]
 
 
 @pytest.mark.asyncio

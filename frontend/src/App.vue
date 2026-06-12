@@ -27,7 +27,7 @@
         </router-link>
         <router-link to="/nodes" class="nav-item">
           <el-icon><Monitor /></el-icon>
-          <span>工作节点</span>
+          <span>拓扑节点</span>
         </router-link>
         <router-link to="/templates" class="nav-item">
           <el-icon><Document /></el-icon>
