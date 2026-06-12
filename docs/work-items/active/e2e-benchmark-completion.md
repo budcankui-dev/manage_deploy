@@ -22,14 +22,14 @@ Last Updated: 2026-06-08
 - 本机快速测试脚本：backend/scripts/run_baseline_local.py（不依赖 Docker/节点）
 - POST /api/baselines/batch-run：对所有可调度节点批量跑基线
 
-### 批量压测
+### 批量测评
 - task_orders.is_benchmark 字段区分测试/功能性工单
 - matmul 模板端口改为 auto=true（范围 18800-19100），支持同节点并发多实例
 - POST /api/orders/batch-benchmark：一键创建 N 个测试工单
-- POST /api/orders/auto-route / batch-auto-route：内置随机路由策略（后续对接真实路由模块）
+- POST /api/orders/auto-route / batch-auto-route：内置验收路由流程（后续对接真实路由模块）
 
 ### 前端
-- 验收测试独立页面（/benchmark）：四步流程（基线管理/批量压测/路由启动/成功率统计）
+- 验收测试独立页面（/benchmark）：四步流程（基线管理/批量测评/路由启动/成功率统计）
 - 成功率统计：按任务类型展示，进度条 + 颜色（≥90% 绿/否则红）
 - 业务任务中心：工单列表显示 ID（不显示名称）、任务类型全中文
 - 用户工单中心：对齐管理员详情视图（tabs: 业务/路由/部署/结果）
@@ -58,7 +58,7 @@ Last Updated: 2026-06-08
 
 - [x] 视频AI推理 worker（source/compute/sink + Dockerfile，固定视频 + YOLOv5n ONNX + 带框预览）
 - [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=30，每个可调度节点重复 3 次取中位数
-- [x] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足节点历史基准 × 1.5，成功率达到 90%
+- [x] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足 `actual_p90 <= baseline_p90 / 0.8`（即不超过基线 1.25 倍），成功率达到 90%
 - [x] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情、结果摘要和带框预览图
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
@@ -70,9 +70,9 @@ Last Updated: 2026-06-08
 - [ ] 意图解析固定数据集继续保持 360 条口径，扩展样本覆盖多模态命名并加入模态标签
 
 ### 验收
-- matmul 批量压测 30 任务成功率 ≥ 90%（端口并发已支持）
+- matmul 批量测评 30 任务成功率 ≥ 90%（端口并发已支持）
 - 视频AI推理基本链路跑通：源节点按固定视频抽帧发送数据，推理节点统计有效帧时延并生成带框结果，目的节点或结果回调能够展示输出摘要
-- 视频AI推理批量压测 30 任务成功率 ≥ 90%
+- 视频AI推理批量测评 30 任务成功率 ≥ 90%
 - 意图解析准确率 ≥ 90%（需构建数据集）
 
 ## 近期执行顺序
@@ -111,7 +111,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"task_type":"low_latency_video_pipeline","count":30,"benchmark_run_id":"video-acceptance-001"}'
 
-# 内置随机路由策略；正式对接时由外部路由系统写回 placements
+# 内置验收路由流程；正式对接时由外部路由系统写回 placements
 curl -H "Authorization: Bearer $TOKEN" \
   -X POST http://127.0.0.1:8000/api/orders/batch-auto-route \
   -H 'Content-Type: application/json' \
@@ -127,5 +127,5 @@ curl -H "Authorization: Bearer $TOKEN" \
 风险记录：
 
 - `batch-auto-route` 是验收闭环 mock，不保证选中有 GPU 的 compute 节点；真实验收和外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"` 或 `gpu_indices`。
-- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline * 1.5` 判定，重点展示随路计算、GPU 分配、带框结果、指标上报和成功率统计闭环。该系数用于覆盖共享算力节点和并发压测下的视频 P90 时延波动。
+- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline / 0.8` 判定，即时延不超过节点同 profile 基线的 1.25 倍。该 25% 裕量用于覆盖容器化运行、网络转发和系统调度波动，不用于容忍同一 GPU 多任务争用；早期放宽口径已废弃。
 - 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。
