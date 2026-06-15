@@ -122,17 +122,16 @@ export function describeDataProfile(taskType, profile) {
   if (taskType === 'high_throughput_matmul') {
     const size = profile.matrix_size ?? '?'
     const batch = profile.batch_count ?? 1
-    const seed = profile.seed ?? '?'
-    return [
+    return compactRows([
       { label: '矩阵规模', value: `${size} × ${size}` },
       { label: '批次数', value: String(batch) },
-      { label: '随机种子', value: String(seed) },
-      { label: '画像 ID', value: profile.profile_id || '-' },
-    ]
+      { label: '随机种子', value: profile.seed },
+      { label: '画像 ID', value: profile.profile_id },
+    ])
   }
   if (taskType === 'low_latency_video_pipeline') {
-    return [
-      { label: '画像 ID', value: profile.profile_id || '-' },
+    return compactRows([
+      { label: '画像 ID', value: profile.profile_id },
       { label: '分辨率', value: profile.resolution || '-' },
       { label: '总帧数', value: String(profile.frame_count ?? '-') },
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
@@ -140,12 +139,19 @@ export function describeDataProfile(taskType, profile) {
       { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
       { label: '推理模型', value: profile.model_name || 'yolov5n' },
       { label: '测试视频', value: profile.video_asset || '-' },
-    ]
+    ])
   }
   return Object.entries(profile).map(([key, value]) => ({
     label: key,
     value: typeof value === 'object' ? JSON.stringify(value) : String(value),
   }))
+}
+
+function compactRows(rows) {
+  return rows.filter((row) => {
+    const value = row?.value
+    return value !== null && value !== undefined && value !== '' && value !== '?' && value !== '-'
+  }).map((row) => ({ ...row, value: String(row.value) }))
 }
 
 export function describeRuntimePlan(taskType, plan) {

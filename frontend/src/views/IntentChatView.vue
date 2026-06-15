@@ -569,8 +569,9 @@ function formatEndpoint(endpoint, fallback) {
   if (!fallback) return '-'
   if (!endpoint) return fallback
   const address = endpoint.business_ipv6 || endpoint.business_ip
-  const zone = endpoint.topology_zone ? ` / ${endpoint.topology_zone}` : ''
-  return address ? `${fallback}（${address}${zone}）` : fallback
+  const fullId = endpoint.topology_node_id || endpoint.display_name || ''
+  const idText = fullId && fullId !== fallback ? ` / ${fullId}` : ''
+  return address ? `${fallback}（${address}${idText}）` : fallback
 }
 
 function formatDraftEndpoint(role) {
