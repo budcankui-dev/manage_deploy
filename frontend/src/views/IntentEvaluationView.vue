@@ -542,7 +542,7 @@ const selectedModel = ref('')
 const selectedSampleId = ref('')
 const autoRefreshTimer = ref(null)
 const showRoutingDagJson = ref(false)
-const activeHelperTab = ref('dataset')
+const activeHelperTab = ref('process')
 const evaluationFlowSteps = [
   {
     no: '01',
