@@ -265,8 +265,8 @@
             </el-tag>
             <small class="raw-value">{{ parserResult.parse_status || '-' }}</small>
           </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('source_name')">{{ parserResult.source_name || '-' }}</el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('destination_name')">{{ parserResult.destination_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="fieldLabel('source_name')">{{ formatEndpoint(parserResult.source_endpoint, parserResult.source_name) }}</el-descriptions-item>
+          <el-descriptions-item :label="fieldLabel('destination_name')">{{ formatEndpoint(parserResult.destination_endpoint, parserResult.destination_name) }}</el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('business_start_time')">{{ formatDateText(parserResult.business_start_time) || '-' }}</el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('business_end_time')">{{ formatDateText(parserResult.business_end_time) || '-' }}</el-descriptions-item>
           <el-descriptions-item :label="fieldLabel('parser_name')">
@@ -755,6 +755,14 @@ function stringifyValue(value) {
   if (Array.isArray(value)) return value.length ? value.join(', ') : '[]'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function formatEndpoint(endpoint, fallback) {
+  if (!fallback) return '-'
+  if (!endpoint) return fallback
+  const address = endpoint.business_ipv6 || endpoint.business_ip
+  const zone = endpoint.topology_zone ? ` / ${endpoint.topology_zone}` : ''
+  return address ? `${fallback}（${address}${zone}）` : fallback
 }
 
 function buildParsedSummary(result) {

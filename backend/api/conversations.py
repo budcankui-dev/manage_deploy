@@ -54,6 +54,29 @@ def _prefer_gpu_nodes(nodes: list[Node]) -> list[Node]:
     return with_gpu or nodes
 
 
+def _node_endpoint_payload(node: Node | None) -> dict[str, str | None] | None:
+    if not node:
+        return None
+    return {
+        "hostname": node.hostname,
+        "display_name": node.display_name,
+        "topology_node_id": node.topology_node_id,
+        "topology_zone": node.topology_zone,
+        "management_ip": node.management_ip,
+        "business_ip": node.business_ip,
+        "business_ipv6": node.business_ipv6,
+        "node_kind": node.node_kind,
+    }
+
+
+async def _endpoint_map_for_names(db: AsyncSession, names: list[str | None]) -> dict[str, dict[str, str | None]]:
+    clean_names = sorted({name for name in names if name})
+    if not clean_names:
+        return {}
+    rows = await db.execute(select(Node).where(Node.hostname.in_(clean_names), Node.deleted_at.is_(None)))
+    return {node.hostname: _node_endpoint_payload(node) for node in rows.scalars().all()}
+
+
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
     payload: ConversationCreate,
@@ -696,6 +719,9 @@ async def _get_conversation_detail(
     draft_response = None
     if draft:
         draft_response = IntentDraftResponse.model_validate(draft)
+        endpoints = await _endpoint_map_for_names(db, [draft.source_name, draft.destination_name])
+        draft_response.source_endpoint = endpoints.get(draft.source_name or "")
+        draft_response.destination_endpoint = endpoints.get(draft.destination_name or "")
         if draft.parse_status == ParseStatus.VALID:
             runtime_settings = await get_runtime_settings(db)
             draft_response.routing_dag_preview = build_routing_payload(

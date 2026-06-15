@@ -17,9 +17,10 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
+from services.topology_catalog import INTENT_VALID_NODES
 
 
-NODES = ["compute-1", "compute-2", "compute-3"]
+NODES = INTENT_VALID_NODES
 STRATEGIES = [
     (
         "resource_guarantee",

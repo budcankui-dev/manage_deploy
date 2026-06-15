@@ -229,8 +229,10 @@ LIMIT 100;
 | 字段 | 用途 |
 |------|------|
 | `id` | 平台内部节点 ID。 |
-| `hostname` | 回写 `topology_node_id` 时使用这个值。 |
-| `display_name` | 展示名，可用于辅助匹配。 |
+| `hostname` | 平台和路由接口使用的统一节点名，回写 `placements[].topology_node_id` 必须使用这个值，如 `h1`、`compute-1`。 |
+| `display_name` | 真实主机名或展示名，如 `s15-Ubuntu-Host-1`。 |
+| `topology_node_id` | 实验拓扑或资产主机 ID，如 `h18001001`，仅用于展示和审计，不用于回写。 |
+| `topology_zone` | 拓扑区域，如 `h180`、`h400`、`h410`、`compute`。 |
 | `business_ip` / `business_ipv6` | 数据面地址。 |
 | `node_kind` | `worker`、`terminal`、`both`、`admin` 等。 |
 | `is_schedulable` | 是否可部署业务容器。 |
@@ -240,8 +242,8 @@ LIMIT 100;
 推荐查询：
 
 ```sql
-SELECT id, hostname, display_name, business_ip, business_ipv6, node_kind,
-       is_schedulable, is_routable
+SELECT id, hostname, display_name, topology_node_id, topology_zone,
+       business_ip, business_ipv6, node_kind, is_schedulable, is_routable
 FROM nodes
 WHERE deleted_at IS NULL
   AND is_routable = 1;
@@ -399,8 +401,10 @@ task_orders(
 -- 真实拓扑节点表
 nodes(
   id varchar(36) primary key,              -- 平台内部节点 ID
-  hostname varchar(255) unique,            -- topology_node_id 必须使用这个值
-  display_name varchar(255),
+  hostname varchar(255) unique,            -- 路由回写必须使用这个值，例如 h1 / compute-1
+  display_name varchar(255),               -- 真实主机名，例如 s15-Ubuntu-Host-1
+  topology_node_id varchar(255),           -- 拓扑/资产 ID，例如 h18001001
+  topology_zone varchar(64),               -- h180 / h400 / h410 / compute
   business_ip varchar(45),
   business_ipv6 varchar(64),
   node_kind varchar(50),                   -- worker / terminal / both / admin
@@ -445,7 +449,7 @@ routing_resource_events(
 字段使用原则：
 
 - 跨系统唯一 ID 只看 `task_orders.id`，它等于 DAG 里的 `job_id/order_id`。
-- 路由回写真实节点只用 `nodes.hostname`，不要回写 `nodes.id`。
+- 路由回写真实节点只用 `nodes.hostname`，不要回写 `nodes.id` 或 `nodes.topology_node_id`。
 - `node_baselines.node_id` 是平台内部外键，查询时通过 `JOIN nodes` 转成 `topology_node_id`。
 - `routing_resource_events.node_hostname` 对应 `nodes.hostname`，用于释放路由系统自己的 GPU 占用。
 

@@ -69,6 +69,8 @@ async def init_db() -> None:
         # Phase 1: Node 扩展
         await _ensure_column(conn, "nodes", "node_kind", "VARCHAR(50) DEFAULT 'worker'")
         await _ensure_column(conn, "nodes", "display_name", "VARCHAR(255)")
+        await _ensure_column(conn, "nodes", "topology_node_id", "VARCHAR(255)")
+        await _ensure_column(conn, "nodes", "topology_zone", "VARCHAR(64)")
         await _ensure_column(conn, "nodes", "is_schedulable", "BOOLEAN NOT NULL DEFAULT 1")
         await _ensure_column(conn, "nodes", "is_routable", "BOOLEAN NOT NULL DEFAULT 1")
         await _ensure_column(conn, "nodes", "gpu_count", "INTEGER NOT NULL DEFAULT 0")

@@ -47,6 +47,8 @@ class IntentDraftResponse(BaseModel):
     modality: Optional[str] = None
     source_name: Optional[str] = None
     destination_name: Optional[str] = None
+    source_endpoint: Optional[dict[str, Any]] = None
+    destination_endpoint: Optional[dict[str, Any]] = None
     business_start_time: Optional[datetime] = None
     business_end_time: Optional[datetime] = None
     data_profile: Optional[dict[str, Any]] = None

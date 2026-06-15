@@ -23,6 +23,7 @@ from config import settings
 from services.intent_parser import ParseResult, parse_intent
 from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _validate_and_clean
 from services.modality_catalog import normalize_modality
+from services.topology_catalog import INTENT_VALID_NODES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,7 +32,7 @@ REPORTS_DIR = REPO_ROOT / "reports"
 RULE_REPORT_PATH = REPORTS_DIR / "intent_eval.json"
 LLM_REPORT_PATH = REPORTS_DIR / "intent_eval_llm.json"
 BATCH_DIR = REPORTS_DIR / "intent_eval_batches"
-VALID_NODES = ["compute-1", "compute-2", "compute-3"]
+VALID_NODES = INTENT_VALID_NODES
 
 
 def available_eval_models() -> list[str]:

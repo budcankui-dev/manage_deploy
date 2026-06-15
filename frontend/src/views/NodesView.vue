@@ -38,6 +38,11 @@
           </div>
           <div class="node-info">
             <h3>{{ node.hostname }}</h3>
+            <small v-if="node.display_name || node.topology_node_id || node.topology_zone" class="node-subtitle">
+              {{ node.display_name || '未命名主机' }}
+              <template v-if="node.topology_node_id"> · {{ node.topology_node_id }}</template>
+              <template v-if="node.topology_zone"> · {{ node.topology_zone }}</template>
+            </small>
             <span class="status-badge" :class="node.status">
               已注册
             </span>
@@ -148,8 +153,17 @@
       <el-form :model="form" label-position="top" ref="formRef">
         <div class="form-section-title">基础连接</div>
         <div class="form-grid">
-          <el-form-item label="主机名" required>
-            <el-input v-model="form.hostname" placeholder="worker-1" />
+          <el-form-item label="节点别名 / 路由节点名" required>
+            <el-input v-model="form.hostname" placeholder="例如 h1、compute-1" />
+          </el-form-item>
+          <el-form-item label="真实主机名 / 展示名">
+            <el-input v-model="form.display_name" placeholder="例如 s15-Ubuntu-Host-1" />
+          </el-form-item>
+          <el-form-item label="拓扑主机 ID">
+            <el-input v-model="form.topology_node_id" placeholder="例如 h18001001" />
+          </el-form-item>
+          <el-form-item label="拓扑区域">
+            <el-input v-model="form.topology_zone" placeholder="例如 h180、h400、h410" />
           </el-form-item>
           <el-form-item label="节点类型">
             <el-select v-model="form.node_kind" placeholder="选择节点类型">
@@ -331,6 +345,9 @@ function nodeKindTagType(kind) {
 function defaultForm() {
   return {
     hostname: '',
+    display_name: '',
+    topology_node_id: '',
+    topology_zone: '',
     management_ip: '',
     business_ip: '',
     business_ipv6: '',
@@ -590,6 +607,14 @@ async function cleanupAllOrphans() {
   font-size: 15px;
   font-weight: 600;
   margin-bottom: 4px;
+}
+
+.node-subtitle {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 6px;
 }
 
 .status-badge {

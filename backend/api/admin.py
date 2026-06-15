@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from api.auth import get_current_user, hash_password, require_admin
 from database import get_db
 from enums import RoutingRequestStatus, UserRole
-from models import Conversation, ConversationMessage, IntentDraft, RoutingRequest, TaskOrder, User
+from models import Conversation, ConversationMessage, IntentDraft, Node, RoutingRequest, TaskOrder, User
 from schemas import UserResponse
 from schemas.conversation import (
     ConversationResponse,
@@ -73,6 +73,29 @@ def _parse_result_payload(result) -> dict[str, Any]:
         "parser_name": result.parser_name,
         "parser_version": result.parser_version,
     }
+
+
+def _node_endpoint_payload(node: Node | None) -> dict[str, Any] | None:
+    if not node:
+        return None
+    return {
+        "hostname": node.hostname,
+        "display_name": node.display_name,
+        "topology_node_id": node.topology_node_id,
+        "topology_zone": node.topology_zone,
+        "management_ip": node.management_ip,
+        "business_ip": node.business_ip,
+        "business_ipv6": node.business_ipv6,
+        "node_kind": node.node_kind,
+    }
+
+
+async def _endpoint_map_for_names(db: AsyncSession, names: list[str | None]) -> dict[str, dict[str, Any]]:
+    clean_names = sorted({name for name in names if name})
+    if not clean_names:
+        return {}
+    rows = await db.execute(select(Node).where(Node.hostname.in_(clean_names), Node.deleted_at.is_(None)))
+    return {node.hostname: _node_endpoint_payload(node) for node in rows.scalars().all()}
 
 
 def _routing_dag_preview(
@@ -361,6 +384,9 @@ async def parse_one(
     response["engine"] = trace.get("engine")
     response["runtime_settings"] = runtime_settings
     response["model"] = trace.get("model")
+    endpoints = await _endpoint_map_for_names(db, [result.source_name, result.destination_name])
+    response["source_endpoint"] = endpoints.get(result.source_name or "")
+    response["destination_endpoint"] = endpoints.get(result.destination_name or "")
     response["routing_dag"] = _routing_dag_preview(result, runtime_settings=runtime_settings)
     if isinstance(expected, dict):
         response["expected_result"] = expected

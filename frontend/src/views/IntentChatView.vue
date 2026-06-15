@@ -230,7 +230,7 @@
               <div class="confirm-params">
                 <p v-if="draft?.task_type"><span class="param-label">任务类型：</span>{{ taskTypeLabel(draft.task_type) }}</p>
                 <p v-if="draft?.modality"><span class="param-label">所属模态：</span>{{ modalityLabel(draft.modality) }}</p>
-                <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ draft.source_name || '-' }} → {{ draft.destination_name || '-' }}</p>
+                <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ formatDraftEndpoint('source') }} → {{ formatDraftEndpoint('destination') }}</p>
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-for="row in draftDataProfileRows" :key="row.label"><span class="param-label">{{ row.label }}：</span>{{ row.value }}</p>
               </div>
@@ -250,12 +250,23 @@
       </section>
 
       <footer class="composer">
+        <div class="node-hint-card">
+          <div class="node-hint-main">
+            <strong>可用拓扑节点</strong>
+            <span>源节点和目的节点请使用这些别名，系统会按数据库中的拓扑节点校验。</span>
+          </div>
+          <div class="node-hint-groups">
+            <span>终端节点：h1-h13</span>
+            <span>计算节点：compute-1、compute-2、compute-3</span>
+            <span>管理节点仅用于系统管理，不建议作为业务源/目的</span>
+          </div>
+        </div>
         <el-input
           v-model="utterance"
           type="textarea"
           :rows="4"
           :disabled="isStreaming || conversation?.status === 'submitted' || conversation?.status === 'awaiting_routing' || !!conversation?.materialized_order_id"
-          :placeholder="conversation?.materialized_order_id ? '任务已提交，如需新任务请新建对话' : '描述您的计算任务需求，例如：从 A 节点到 B 节点运行矩阵计算...'"
+          :placeholder="conversation?.materialized_order_id ? '任务已提交，如需新任务请新建对话' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 compute-1 做视频推理...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -314,8 +325,8 @@
         <el-descriptions v-if="draft" :column="1" border size="small">
           <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
           <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
-          <el-descriptions-item label="源节点">{{ draft.source_name || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="目的节点">{{ draft.destination_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="源节点">{{ formatDraftEndpoint('source') }}</el-descriptions-item>
+          <el-descriptions-item label="目的节点">{{ formatDraftEndpoint('destination') }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
           <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
@@ -455,11 +466,11 @@ const displayMessages = computed(() => {
 function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
-  '矩阵乘法任务，从 compute-1 到 compute-3，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
-  '视频AI推理任务，从 compute-1 到 compute-3，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
-  '从 compute-2 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
-  '从 compute-2 到 compute-1 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
-  '矩阵计算，源节点 compute-1 目的节点 compute-2，规模 512，80批次，马上开始跑3小时，负载均衡',
+  '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
+  '视频AI推理任务，从 h3 到 h4，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
+  '从 h5 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
+  '从 h6 到 h7 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
+  '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
@@ -553,6 +564,19 @@ function formatRoutingStrategy(strategy) {
     load_balance: '负载均衡',
     cost_priority: '成本优先',
   }[strategy] || strategy
+}
+
+function formatEndpoint(endpoint, fallback) {
+  if (!fallback) return '-'
+  if (!endpoint) return fallback
+  const address = endpoint.business_ipv6 || endpoint.business_ip
+  const zone = endpoint.topology_zone ? ` / ${endpoint.topology_zone}` : ''
+  return address ? `${fallback}（${address}${zone}）` : fallback
+}
+
+function formatDraftEndpoint(role) {
+  if (role === 'source') return formatEndpoint(draft.value?.source_endpoint, draft.value?.source_name)
+  return formatEndpoint(draft.value?.destination_endpoint, draft.value?.destination_name)
 }
 
 function orderStatusType(status) {
@@ -1576,6 +1600,46 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 18px 28px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
+}
+
+.node-hint-card {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.node-hint-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 240px;
+}
+
+.node-hint-main strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.node-hint-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-hint-groups span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
 }
 
 .composer-actions {

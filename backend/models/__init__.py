@@ -25,6 +25,8 @@ class Node(Base):
     business_ipv6: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     node_kind: Mapped[str] = mapped_column(String(50), default=NodeKind.WORKER)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    topology_node_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    topology_zone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     gpu_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     gpu_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gpu_memory_mb: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

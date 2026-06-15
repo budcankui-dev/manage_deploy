@@ -18,8 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.intent_parser import parse_intent
 from services.intent_batch_eval import score_parsed_result
+from services.topology_catalog import INTENT_VALID_NODES
 
-VALID_NODES = ["compute-1", "compute-2", "compute-3"]
+VALID_NODES = INTENT_VALID_NODES
 
 
 def _parsed_payload(parsed) -> dict:

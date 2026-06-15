@@ -5,6 +5,9 @@ from datetime import datetime
 
 class NodeBase(BaseModel):
     hostname: str
+    display_name: Optional[str] = None
+    topology_node_id: Optional[str] = None
+    topology_zone: Optional[str] = None
     agent_address: str
     management_ip: str
     business_ip: str
@@ -28,6 +31,9 @@ class NodeCreate(NodeBase):
 
 class NodeUpdate(BaseModel):
     hostname: Optional[str] = None
+    display_name: Optional[str] = None
+    topology_node_id: Optional[str] = None
+    topology_zone: Optional[str] = None
     agent_address: Optional[str] = None
     management_ip: Optional[str] = None
     business_ip: Optional[str] = None
@@ -51,6 +57,9 @@ class NodeResponse(NodeBase):
 
     id: str
     node_kind: Optional[str] = None
+    display_name: Optional[str] = None
+    topology_node_id: Optional[str] = None
+    topology_zone: Optional[str] = None
     is_schedulable: bool = True
     is_routable: bool = True
     created_at: datetime
@@ -62,6 +71,9 @@ class NodeSimple(BaseModel):
 
     id: str
     hostname: str
+    display_name: Optional[str] = None
+    topology_node_id: Optional[str] = None
+    topology_zone: Optional[str] = None
     agent_address: str
     management_ip: str
     business_ip: str
