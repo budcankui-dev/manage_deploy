@@ -446,25 +446,29 @@
                 <h3>评测证据说明</h3>
                 <div class="evidence-card-grid">
                   <article>
-                    <strong>样本定义</strong>
-                    <p>数据集中预先准备的自然语言输入和人工标注答案，用作评分基准。</p>
+                    <strong>样本输入</strong>
+                    <p>本条用例的自然语言输入、样本类型和编号，用于说明系统实际解析了什么。</p>
                   </article>
                   <article>
                     <strong>系统解析输出</strong>
                     <p>本次评测运行后系统实际提取出的任务类型、节点、模态和业务参数。</p>
                   </article>
                   <article>
+                    <strong>人工标注答案</strong>
+                    <p>数据集预先标好的标准答案，是字段判定和准确率统计的评分基准。</p>
+                  </article>
+                  <article>
                     <strong>字段判定</strong>
                     <p>逐字段比较人工标注值和系统解析值，全部关键字段匹配才计为成功。</p>
                   </article>
-                  <article>
+                  <article v-if="row.has_raw_response">
                     <strong>原始响应</strong>
-                    <p>用于技术排障。当前走统一意图解析流程时可能为空，不影响评分结果。</p>
+                    <p>仅在存在大模型或解析器原始返回时展示，主要用于技术排障。</p>
                   </article>
                 </div>
                 <el-collapse class="evidence-collapse">
-                  <el-collapse-item title="样本定义 JSON（输入 + 人工标注）" name="sample">
-                    <pre class="details-json">{{ JSON.stringify(row.sample_payload || {}, null, 2) }}</pre>
+                  <el-collapse-item title="样本输入 JSON（自然语言输入 + 样本元信息）" name="sample-input">
+                    <pre class="details-json">{{ JSON.stringify(row.sample_input_payload || {}, null, 2) }}</pre>
                   </el-collapse-item>
                   <el-collapse-item title="系统解析输出 JSON（本次实际结果）" name="parsed">
                     <pre class="details-json">{{ JSON.stringify(row.parsed_result || {}, null, 2) }}</pre>
@@ -472,7 +476,7 @@
                   <el-collapse-item title="人工标注答案 JSON（评分基准）" name="expected">
                     <pre class="details-json">{{ JSON.stringify(row.expected_result || {}, null, 2) }}</pre>
                   </el-collapse-item>
-                  <el-collapse-item title="原始响应 JSON（排障用）" name="raw">
+                  <el-collapse-item v-if="row.has_raw_response" title="原始响应 JSON（排障用）" name="raw">
                     <pre class="details-json">{{ JSON.stringify(row.raw_llm_response || {}, null, 2) }}</pre>
                   </el-collapse-item>
                 </el-collapse>
@@ -665,6 +669,12 @@ const sampleRows = computed(() => {
       utterance: item.utterance,
       expected: expectedResult,
     }
+    const sampleInputPayload = {
+      sample_id: item.sample_id,
+      case_type: item.case_type,
+      case_label: caseTypeLabel(item.case_type),
+      utterance: item.utterance,
+    }
     const modality = parsedResult?.modality || expectedResult?.modality || samplePayload?.expected?.modality
     const failed = Object.entries(details)
       .filter(([field, detail]) => !isDetailOk(detail, field))
@@ -680,7 +690,9 @@ const sampleRows = computed(() => {
       parsed_result: parsedResult,
       expected_result: expectedResult,
       raw_llm_response: rawLlmResponse,
+      has_raw_response: hasMeaningfulRawResponse(rawLlmResponse),
       sample_payload: samplePayload,
+      sample_input_payload: sampleInputPayload,
       parsed_summary: buildParsedSummary(parsedResult),
       modality,
       modality_label: modalityLabel(modality),
@@ -688,6 +700,14 @@ const sampleRows = computed(() => {
     }
   })
 })
+
+function hasMeaningfulRawResponse(value) {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') return Object.keys(value).length > 0
+  return true
+}
 
 const modalityExampleRows = computed(() => {
   const examples = dataset.value.modality_examples
