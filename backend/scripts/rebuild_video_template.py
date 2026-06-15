@@ -19,7 +19,14 @@ from rebuild_matmul_template import auto_port, get_compute_node_ids
 
 WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
 WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "manage-deploy/low-latency-video")
-VIDEO_IMAGE = f"{WORKER_IMAGE}:{WORKER_TAG}"
+
+# Role-specific image overrides let source/sink run on small terminal disks
+# while compute keeps the full CUDA/ONNX Runtime image. If no endpoint override
+# is provided, the legacy single-image template is preserved.
+COMPUTE_IMAGE_REPO = os.environ.get("VIDEO_COMPUTE_IMAGE", WORKER_IMAGE)
+ENDPOINT_IMAGE_REPO = os.environ.get("VIDEO_ENDPOINT_IMAGE", WORKER_IMAGE)
+VIDEO_COMPUTE_IMAGE = f"{COMPUTE_IMAGE_REPO}:{WORKER_TAG}"
+VIDEO_ENDPOINT_IMAGE = f"{ENDPOINT_IMAGE_REPO}:{WORKER_TAG}"
 
 SOURCE_PORT = 18811
 COMPUTE_PORT = 18812
@@ -42,7 +49,7 @@ async def rebuild_video_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "source",
                     "name": "source",
-                    "image": VIDEO_IMAGE,
+                    "image": VIDEO_ENDPOINT_IMAGE,
                     "command": "python /app/src/source_main.py",
                     "port_defs": [auto_port("source", "video source HTTP", SOURCE_PORT)],
                     "node_id": node_ids["compute-1"],
@@ -51,7 +58,7 @@ async def rebuild_video_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "compute",
                     "name": "compute",
-                    "image": VIDEO_IMAGE,
+                    "image": VIDEO_COMPUTE_IMAGE,
                     "command": "python /app/src/compute_main.py",
                     "port_defs": [auto_port("compute", "video compute HTTP", COMPUTE_PORT)],
                     "node_id": node_ids["compute-2"],
@@ -60,7 +67,7 @@ async def rebuild_video_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "sink",
                     "name": "sink",
-                    "image": VIDEO_IMAGE,
+                    "image": VIDEO_ENDPOINT_IMAGE,
                     "command": "python /app/src/sink_main.py",
                     "port_defs": [auto_port("sink", "video sink HTTP", SINK_PORT)],
                     "node_id": node_ids["compute-3"],
@@ -96,7 +103,8 @@ async def rebuild_video_template(base_url: str | None = None) -> dict:
         return {
             "node_ids": node_ids,
             "video_template_id": template_id,
-            "worker_image": VIDEO_IMAGE,
+            "compute_image": VIDEO_COMPUTE_IMAGE,
+            "endpoint_image": VIDEO_ENDPOINT_IMAGE,
         }
 
 

@@ -1,0 +1,19 @@
+# Lightweight source/sink image for the video pipeline.
+#
+# Compute still uses the CUDA/ONNX Runtime image from Dockerfile. This image
+# only needs to build video job metadata, receive results, and report metrics,
+# so it intentionally avoids model assets, OpenCV, ONNX Runtime, and CUDA libs.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    httpx==0.28.1
+
+COPY _common /app/_common
+COPY low-latency-video/src/source_main.py /app/src/source_main.py
+COPY low-latency-video/src/sink_main.py /app/src/sink_main.py
+
+ENV PYTHONPATH=/app/src:/app
+CMD ["python", "/app/src/source_main.py"]
