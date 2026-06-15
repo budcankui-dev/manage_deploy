@@ -113,7 +113,40 @@ def dataset_summary() -> dict[str, Any]:
         "task_counts": dict(task_counts),
         "modality_counts": dict(modality_counts),
         "valid_nodes": VALID_NODES,
+        "modality_examples": _dataset_modality_examples(rows),
     }
+
+
+def _dataset_modality_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return stable, compact examples for the acceptance UI."""
+    examples: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        expected = row.get("expected") or {}
+        modality = expected.get("modality")
+        if not modality:
+            continue
+        candidate = {
+            "modality": modality,
+            "task_type": expected.get("task_type"),
+            "source_name": expected.get("source_name"),
+            "destination_name": expected.get("destination_name"),
+            "data_profile": expected.get("data_profile") or {},
+            "runtime_plan": expected.get("runtime_plan") or {},
+            "business_objective": expected.get("business_objective") or {},
+            "utterance": row.get("utterance"),
+        }
+        current = examples.get(modality)
+        if current is None or (_uses_terminal_alias(candidate) and not _uses_terminal_alias(current)):
+            examples[modality] = candidate
+    return list(examples.values())
+
+
+def _uses_terminal_alias(example: dict[str, Any]) -> bool:
+    for key in ("source_name", "destination_name"):
+        value = str(example.get(key) or "")
+        if value.startswith("h") and value[1:].isdigit():
+            return True
+    return False
 
 
 def _field_value(parsed: ParseResult, key: str) -> Any:

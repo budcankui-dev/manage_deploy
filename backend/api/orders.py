@@ -966,6 +966,30 @@ def _compute_gpu_slots_from_placements(
     return slots
 
 
+def _normalize_effective_placement_resources(
+    order: TaskOrder,
+    placements: list[RoutingPlacement],
+) -> list[RoutingPlacement]:
+    """Persist the resources the platform will actually allocate.
+
+    Benchmark tasks default to one GPU per compute role when the router omits a
+    GPU id.  Normalizing before conflict checks keeps routing_result, conflict
+    detection, and release events consistent.
+    """
+    default_gpu = _default_compute_gpu_for_order(order) if order.is_benchmark else None
+    if default_gpu is None:
+        return placements
+
+    normalized: list[RoutingPlacement] = []
+    for placement in placements:
+        role = str(placement.task_node_id or "").lower()
+        if role in {"compute", "worker", "infer", "train"} and placement.gpu_device is None:
+            normalized.append(placement.model_copy(update={"gpu_device": default_gpu}))
+        else:
+            normalized.append(placement)
+    return normalized
+
+
 async def _resolve_topology_node(db: AsyncSession, raw: str) -> NodeModel:
     import re
 
@@ -1259,6 +1283,7 @@ async def receive_routing_result(
         payload.placements,
         dag_nodes_by_role,
     )
+    effective_placements = _normalize_effective_placement_resources(order, effective_placements)
     await _validate_deployable_placements(db, order, effective_placements, dag_nodes_by_role)
     await _ensure_no_active_gpu_slot_conflicts(db, order, effective_placements)
 

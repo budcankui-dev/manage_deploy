@@ -1538,6 +1538,46 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_routing_result_default_benchmark_gpu_participates_in_conflict_check(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-default-gpu-conflict-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 2,
+            "benchmark_run_id": "routing-default-gpu-conflict-run",
+        },
+    )
+    assert create_response.status_code == 200
+    first_id, second_id = create_response.json()["order_ids"]
+
+    payload_without_gpu = {
+        "strategy": "resource_guarantee",
+        "placements": [
+            {"task_node_id": "source", "topology_node_id": "worker-a"},
+            {"task_node_id": "compute", "topology_node_id": "worker-b"},
+            {"task_node_id": "sink", "topology_node_id": "worker-c"},
+        ],
+    }
+    first = await client.post(f"/api/routing-orders/{first_id}/result", json=payload_without_gpu)
+    assert first.status_code == 200, first.text
+
+    first_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == first_id))
+    ).scalar_one()
+    placements = first_order.runtime_config["routing_result"]["placements"]
+    compute = next(item for item in placements if item["task_node_id"] == "compute")
+    assert compute["gpu_device"] == "0"
+
+    second = await client.post(f"/api/routing-orders/{second_id}/result", json=payload_without_gpu)
+    assert second.status_code == 409
+    assert "GPU slot conflict" in second.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_routing_result_rejects_soft_deleted_order(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-deleted-user")
@@ -1634,6 +1674,52 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
         await db_session.execute(select(RoutingResourceEvent).where(RoutingResourceEvent.id == events[0]["id"]))
     ).scalar_one()
     assert event_row.router_ack_at is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-default-gpu-release-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-default-gpu-release-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    result_response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "source", "topology_node_id": "worker-a"},
+                {"task_node_id": "compute", "topology_node_id": "worker-b"},
+                {"task_node_id": "sink", "topology_node_id": "worker-c"},
+            ],
+            "external_routing_id": "route-default-gpu-release-001",
+        },
+    )
+    assert result_response.status_code == 200, result_response.text
+
+    delete_response = await client.delete(f"/api/orders/{order_id}")
+    assert delete_response.status_code == 200
+
+    events_response = await client.get(
+        "/api/routing-resource-events",
+        params={"benchmark_run_id": "routing-default-gpu-release-run"},
+    )
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert len(events) == 1
+    assert events[0]["node_hostname"] == "worker-b"
+    assert events[0]["resource_kind"] == "gpu"
+    assert events[0]["resource_id"] == "0"
 
 
 @pytest.mark.asyncio

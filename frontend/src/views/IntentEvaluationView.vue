@@ -47,10 +47,18 @@
     <el-alert
       v-if="latest && !dashscopeConfigured"
       class="top-alert"
+      type="info"
+      show-icon
+      :closable="false"
+      title="当前将使用与用户端一致的意图解析流程完成评测。"
+    />
+    <el-alert
+      v-if="hasStaleReport"
+      class="top-alert"
       type="warning"
       show-icon
       :closable="false"
-      title="当前未配置大模型服务，将使用系统内置解析流程完成评测。"
+      title="当前数据集已更新，历史评测报告不会作为当前准确率展示。请重新运行意图参数解析准确率评测。"
     />
 
     <section class="stat-grid">
@@ -81,6 +89,48 @@
     </section>
 
     <section class="content-grid">
+      <el-card class="panel-card dataset-intro-card">
+        <template #header>
+          <div class="card-header">
+            <span>数据集说明</span>
+            <el-tag size="small" type="success">八种模态</el-tag>
+          </div>
+        </template>
+        <p class="panel-hint">
+          固定评测数据集覆盖 {{ dataset.total || 0 }} 条样本，节点槽位使用
+          {{ validNodeText }}。每条样本包含任务类型、所属模态、业务源/目的节点、运行时间、路由策略倾向和业务参数。
+        </p>
+        <div class="node-chip-row">
+          <el-tag v-for="node in visibleValidNodes" :key="node" size="small" effect="plain">{{ node }}</el-tag>
+          <el-tag v-if="hiddenValidNodeCount > 0" size="small" type="info" effect="plain">
+            +{{ hiddenValidNodeCount }} 个节点
+          </el-tag>
+        </div>
+        <div class="modality-example-grid">
+          <article v-for="item in modalityExampleRows" :key="item.modality" class="modality-example-card">
+            <div class="modality-example-title">
+              <strong>{{ modalityLabel(item.modality) }}</strong>
+              <el-tag size="small" type="info" effect="plain">{{ taskTypeLabel(item.task_type) }}</el-tag>
+            </div>
+            <p class="example-utterance">{{ item.utterance }}</p>
+            <dl class="example-fields">
+              <div>
+                <dt>节点</dt>
+                <dd>{{ item.source_name || '-' }} → {{ item.destination_name || '-' }}</dd>
+              </div>
+              <div>
+                <dt>参数</dt>
+                <dd>{{ compactObjectText(item.data_profile) }}</dd>
+              </div>
+              <div>
+                <dt>策略倾向</dt>
+                <dd>{{ routeStrategyLabel(item.runtime_plan?.routing_strategy) }}</dd>
+              </div>
+            </dl>
+          </article>
+        </div>
+      </el-card>
+
       <el-card class="panel-card">
         <template #header>
           <div class="card-header">
@@ -518,10 +568,21 @@ const isLlmReportCurrent = computed(() => {
 const hasCurrentLlmReport = computed(() =>
   Boolean(llmReport.value && isReportDatasetCurrent(llmReport.value, dataset.value))
 )
+const hasCurrentRuleReport = computed(() =>
+  Boolean(ruleReport.value && isReportDatasetCurrent(ruleReport.value, dataset.value))
+)
+const hasStaleReport = computed(() =>
+  Boolean(
+    !officialReport.value &&
+    (
+      (ruleReport.value && !isReportDatasetCurrent(ruleReport.value, dataset.value)) ||
+      (llmReport.value && !isReportDatasetCurrent(llmReport.value, dataset.value))
+    )
+  )
+)
 const officialReportType = computed(() => {
   if (hasCurrentLlmReport.value) return 'llm'
-  if (ruleReport.value) return 'fallback'
-  if (llmReport.value) return 'llm'
+  if (hasCurrentRuleReport.value) return 'fallback'
   return ''
 })
 const officialReport = computed(() => {
@@ -531,13 +592,11 @@ const officialReport = computed(() => {
 })
 const activeReport = computed(() => officialReport.value)
 const officialSourceLabel = computed(() => {
-  if (officialReportType.value === 'llm') return '智能体解析流程'
-  if (officialReportType.value === 'fallback') return '系统解析流程'
+  if (officialReportType.value) return '意图解析流程'
   return '尚未评测'
 })
 const officialSourceHint = computed(() => {
-  if (officialReportType.value === 'llm') return '与用户端对话解析链路一致'
-  if (officialReportType.value === 'fallback') return '大模型不可用时自动启用'
+  if (officialReportType.value) return '与用户端对话解析链路一致'
   return '运行评测后生成'
 })
 const activeReportMeta = computed(() => {
@@ -611,6 +670,37 @@ const sampleRows = computed(() => {
       failed_fields: failed,
     }
   })
+})
+
+const modalityExampleRows = computed(() => {
+  const examples = dataset.value.modality_examples
+  if (Array.isArray(examples) && examples.length) return examples
+  const byModality = new Map()
+  for (const item of sampleRows.value) {
+    const expected = item.expected_result || item.sample_payload?.expected || {}
+    const modality = expected.modality || item.modality
+    if (!modality || byModality.has(modality)) continue
+    byModality.set(modality, {
+      modality,
+      task_type: expected.task_type,
+      source_name: expected.source_name,
+      destination_name: expected.destination_name,
+      data_profile: expected.data_profile || {},
+      runtime_plan: expected.runtime_plan || {},
+      business_objective: expected.business_objective || {},
+      utterance: item.utterance,
+    })
+  }
+  return [...byModality.values()]
+})
+const visibleValidNodes = computed(() => (dataset.value.valid_nodes || []).slice(0, 16))
+const hiddenValidNodeCount = computed(() => Math.max(0, (dataset.value.valid_nodes || []).length - visibleValidNodes.value.length))
+const validNodeText = computed(() => {
+  const nodes = dataset.value.valid_nodes || []
+  if (!nodes.length) return '当前配置的有效节点'
+  const terminalCount = nodes.filter(node => /^h\d+$/.test(node)).length
+  const computeCount = nodes.filter(node => /^compute-\d+$/.test(node)).length
+  return `${terminalCount} 个终端节点 h1-h${terminalCount}，以及 ${computeCount} 个计算节点 compute-1-compute-${computeCount}`
 })
 
 const filteredSampleRows = computed(() => {
@@ -755,6 +845,21 @@ function stringifyValue(value) {
   if (Array.isArray(value)) return value.length ? value.join(', ') : '[]'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function compactObjectText(value) {
+  const entries = Object.entries(value || {})
+  if (!entries.length) return '-'
+  return entries.map(([key, val]) => `${fieldLabel(key)}=${stringifyValue(val)}`).join('，')
+}
+
+function routeStrategyLabel(value) {
+  return {
+    resource_guarantee: '资源保障',
+    fastest_completion: '性能优先',
+    load_balance: '负载均衡',
+    cost_priority: '成本优先',
+  }[value] || value || '-'
 }
 
 function formatEndpoint(endpoint, fallback) {
@@ -1205,6 +1310,10 @@ onUnmounted(stopAutoRefresh)
   grid-column: 1 / -1;
 }
 
+.dataset-intro-card {
+  grid-column: 1 / -1;
+}
+
 .panel-card {
   margin-bottom: 16px;
 }
@@ -1320,6 +1429,68 @@ onUnmounted(stopAutoRefresh)
   line-height: 1.7;
 }
 
+.node-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.modality-example-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.modality-example-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #e3ebf2;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
+}
+
+.modality-example-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modality-example-title strong {
+  color: #1e3142;
+}
+
+.example-utterance {
+  margin: 0;
+  color: #445467;
+  line-height: 1.6;
+}
+
+.example-fields {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.example-fields div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.example-fields dt {
+  color: #7a8794;
+  font-weight: 700;
+}
+
+.example-fields dd {
+  margin: 0;
+  color: #2f3e4f;
+  word-break: break-word;
+}
+
 .file-download-list {
   display: grid;
   gap: 10px;
@@ -1373,6 +1544,7 @@ onUnmounted(stopAutoRefresh)
   .stat-grid,
   .case-bars,
   .json-grid,
+  .modality-example-grid,
   .expand-json-grid {
     grid-template-columns: 1fr;
   }
