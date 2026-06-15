@@ -465,37 +465,120 @@ def parse_intent(
 def validate_draft_fields(draft: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     task_type = draft.get("task_type")
-    if not task_type:
-        errors.append("task_type 不能为空")
+    blank_values = {None, "", "?", "-", "未知", "null", "None"}
+
+    def _is_blank(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str) and value.strip() in blank_values:
+            return True
+        return False
+
+    def _as_int(value: Any) -> int | None:
+        if _is_blank(value) or isinstance(value, bool):
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not numeric.is_integer():
+            return None
+        return int(numeric)
+
+    def _require_int_range(
+        value: Any,
+        missing_message: str,
+        invalid_message: str,
+        *,
+        min_value: int,
+        max_value: int,
+    ) -> None:
+        if _is_blank(value):
+            errors.append(missing_message)
+            return
+        number = _as_int(value)
+        if number is None or number < min_value or number > max_value:
+            errors.append(invalid_message)
+
+    if _is_blank(task_type):
+        errors.append("任务类型不能为空")
     dp = draft.get("data_profile") or {}
     if task_type == "high_throughput_matmul":
-        if not dp.get("matrix_size"):
-            errors.append("矩阵规模(matrix_size)不能为空")
-        if not dp.get("batch_count"):
-            errors.append("批次数(batch_count)不能为空")
+        _require_int_range(
+            dp.get("matrix_size"),
+            "矩阵规模不能为空（例如：1024阶矩阵）",
+            "矩阵规模需要是 128-32768 之间的整数",
+            min_value=128,
+            max_value=32768,
+        )
+        _require_int_range(
+            dp.get("batch_count"),
+            "批次数不能为空（例如：50批）",
+            "批次数需要是 1-10000 之间的整数",
+            min_value=1,
+            max_value=10000,
+        )
     elif task_type == "low_latency_video_pipeline":
-        if not dp.get("frame_count"):
-            errors.append("视频帧数(frame_count)不能为空")
-        if not dp.get("resolution"):
-            errors.append("分辨率(resolution)不能为空")
-        if not dp.get("fps"):
-            errors.append("帧率(fps)不能为空")
+        _require_int_range(
+            dp.get("frame_count"),
+            "视频帧数不能为空（例如：100帧）",
+            "视频帧数需要是 1-100000 之间的整数",
+            min_value=1,
+            max_value=100000,
+        )
+        resolution = dp.get("resolution")
+        if _is_blank(resolution):
+            errors.append("视频分辨率不能为空（例如：720p 或 1080p）")
+        elif str(resolution).lower() not in {"480p", "720p", "1080p", "2k", "4k", "8k"}:
+            errors.append("视频分辨率请使用 480p、720p、1080p、2k、4k 或 8k")
+        _require_int_range(
+            dp.get("fps"),
+            "帧率不能为空（例如：30fps）",
+            "fps 需要是 1-240 之间的整数",
+            min_value=1,
+            max_value=240,
+        )
     elif task_type == "llm_text_generation":
-        if not dp.get("prompt_tokens"):
-            errors.append("输入token数(prompt_tokens)不能为空")
-        if not dp.get("max_new_tokens"):
-            errors.append("生成token数(max_new_tokens)不能为空")
-        if not dp.get("batch_size"):
-            errors.append("批大小(batch_size)不能为空")
-    if not draft.get("source_name"):
+        _require_int_range(
+            dp.get("prompt_tokens"),
+            "输入 token 数不能为空（例如：prompt 512 tokens）",
+            "输入 token 数需要是 1-1000000 之间的整数",
+            min_value=1,
+            max_value=1_000_000,
+        )
+        _require_int_range(
+            dp.get("max_new_tokens"),
+            "生成 token 数不能为空（例如：生成 256 tokens）",
+            "生成 token 数需要是 1-1000000 之间的整数",
+            min_value=1,
+            max_value=1_000_000,
+        )
+        _require_int_range(
+            dp.get("batch_size"),
+            "批大小不能为空（例如：batch 2）",
+            "批大小需要是 1-10000 之间的整数",
+            min_value=1,
+            max_value=10000,
+        )
+    if _is_blank(draft.get("source_name")):
         errors.append("源节点不能为空")
-    if not draft.get("destination_name"):
+    if _is_blank(draft.get("destination_name")):
         errors.append("目的节点不能为空")
-    if not draft.get("business_start_time"):
+    start_time = draft.get("business_start_time")
+    end_time = draft.get("business_end_time")
+    if _is_blank(start_time):
         errors.append("开始时间不能为空")
-    if not draft.get("business_end_time"):
+    if _is_blank(end_time):
         errors.append("结束时间不能为空")
+    if not _is_blank(start_time) and not _is_blank(end_time):
+        try:
+            parsed_start = datetime.fromisoformat(start_time) if isinstance(start_time, str) else start_time
+            parsed_end = datetime.fromisoformat(end_time) if isinstance(end_time, str) else end_time
+            if parsed_end <= parsed_start:
+                errors.append("结束时间需要晚于开始时间")
+        except (TypeError, ValueError):
+            errors.append("开始时间和结束时间格式不正确")
     rp = draft.get("runtime_plan") or {}
-    if not rp.get("routing_strategy"):
+    if _is_blank(rp.get("routing_strategy")):
         errors.append("路由策略不能为空")
     return errors

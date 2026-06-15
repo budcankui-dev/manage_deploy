@@ -221,7 +221,20 @@
           </template>
         </div>
 
-        <div v-if="draft?.parse_status === 'valid'" class="confirm-card">
+        <div v-if="draft && draft.parse_status !== 'rejected' && !conversation?.materialized_order_id && !isStreaming && !isDraftSubmittable" class="confirm-card pending-card">
+          <div class="confirm-card-inner">
+            <el-icon class="pending-icon"><WarningFilled /></el-icon>
+            <div class="confirm-text">
+              <strong>参数待补充</strong>
+              <p>请继续在对话框里补充以下信息，补全后系统才会允许提交任务。</p>
+              <div class="missing-list">
+                <span v-for="item in draftValidationErrors" :key="item">{{ item }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="isDraftSubmittable" class="confirm-card">
           <div v-if="!conversation?.materialized_order_id && !isStreaming" class="confirm-card-inner">
             <el-icon class="confirm-icon"><CircleCheck /></el-icon>
             <div class="confirm-text">
@@ -249,27 +262,34 @@
       </section>
 
       <footer class="composer">
-        <div class="node-hint-card">
-          <div class="node-hint-main">
-            <strong>可用拓扑节点</strong>
-            <span>源节点和目的节点请使用这些别名，系统会按数据库中的拓扑节点校验。</span>
-          </div>
-          <div class="node-hint-groups">
-            <span>终端节点：h1-h13</span>
-            <span>计算节点：compute-1、compute-2、compute-3</span>
-            <span>管理节点仅用于系统管理，不建议作为业务源/目的</span>
-          </div>
-        </div>
         <el-input
           v-model="utterance"
           type="textarea"
-          :rows="4"
+          :autosize="{ minRows: 2, maxRows: 4 }"
           :disabled="isStreaming || conversation?.status === 'submitted' || conversation?.status === 'awaiting_routing' || !!conversation?.materialized_order_id"
           :placeholder="conversation?.materialized_order_id ? '任务已提交，如需新任务请新建对话' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 compute-1 做视频推理...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
-          <span class="composer-hint">Ctrl + Enter 发送</span>
+          <div class="composer-tools">
+            <span class="composer-hint">Ctrl + Enter 发送</span>
+            <el-popover placement="top-start" width="340" trigger="click" popper-class="node-popover">
+              <template #reference>
+                <el-button size="small" plain>
+                  <el-icon><List /></el-icon>
+                  可用节点
+                </el-button>
+              </template>
+              <div class="node-popover-body">
+                <strong>可用拓扑节点</strong>
+                <p>源节点和目的节点请使用这些别名，系统会按数据库中的拓扑节点校验。</p>
+                <div class="node-popover-tags">
+                  <span>终端节点：h1-h13</span>
+                  <span>计算节点：compute-1、compute-2、compute-3</span>
+                </div>
+              </div>
+            </el-popover>
+          </div>
           <div class="composer-btns">
             <el-button v-if="isStreaming" type="danger" @click="stopStreaming">
               <el-icon><VideoPause /></el-icon>
@@ -332,8 +352,8 @@
           <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
-        <div v-if="draft?.validation_errors?.length" class="errors">
-          <el-alert v-for="(item, index) in draft.validation_errors" :key="index" :title="item" type="warning" show-icon :closable="false" />
+        <div v-if="draftValidationErrors.length" class="errors">
+          <el-alert v-for="(item, index) in draftValidationErrors" :key="index" :title="item" type="warning" show-icon :closable="false" />
         </div>
         <el-collapse v-if="showRoutingDagJson && draft?.routing_dag_preview" class="raw-collapse">
           <el-collapse-item title="路由 DAG JSON 预览" name="draft-dag">
@@ -390,6 +410,7 @@
         </div>
         <div class="actions">
           <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
+          <el-tag v-else-if="draft && !conversation?.materialized_order_id && conversation?.status === 'drafting'" type="warning">请先补全参数</el-tag>
           <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
@@ -413,7 +434,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled } from '@element-plus/icons-vue'
+import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled, WarningFilled } from '@element-plus/icons-vue'
 import { adminApi, conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
@@ -475,7 +496,13 @@ const exampleChips = [
 const draft = computed(() => conversation.value?.latest_draft || null)
 const routing = computed(() => conversation.value?.latest_routing_request || null)
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
-const canConfirm = computed(() => draft.value && draft.value.parse_status === 'valid' && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id)
+const draftValidationErrors = computed(() => getDraftValidationErrors(draft.value))
+const isDraftSubmittable = computed(() =>
+  draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
+)
+const canConfirm = computed(() =>
+  isDraftSubmittable.value && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id
+)
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 const conversationStatusLabel = computed(() => {
   const s = conversation.value?.status
@@ -563,6 +590,73 @@ function formatRoutingStrategy(strategy) {
     load_balance: '负载均衡',
     cost_priority: '成本优先',
   }[strategy] || strategy
+}
+
+function isBlankValue(value) {
+  if (value === null || value === undefined) return true
+  if (typeof value === 'string') {
+    return ['', '?', '-', '未知', 'null', 'None'].includes(value.trim())
+  }
+  return false
+}
+
+function asInteger(value) {
+  if (isBlankValue(value) || typeof value === 'boolean') return null
+  const number = Number(value)
+  if (!Number.isInteger(number)) return null
+  return number
+}
+
+function pushRangeError(errors, value, missingMessage, invalidMessage, minValue, maxValue) {
+  const pushOnce = (message) => {
+    if (!errors.includes(message)) errors.push(message)
+  }
+  if (isBlankValue(value)) {
+    pushOnce(missingMessage)
+    return
+  }
+  const number = asInteger(value)
+  if (number === null || number < minValue || number > maxValue) {
+    pushOnce(invalidMessage)
+  }
+}
+
+function getDraftValidationErrors(currentDraft) {
+  if (!currentDraft) return []
+  const errors = [...(currentDraft.validation_errors || [])]
+  const add = (message) => {
+    if (!errors.includes(message)) errors.push(message)
+  }
+  const dp = currentDraft.data_profile || {}
+  if (isBlankValue(currentDraft.task_type)) add('任务类型不能为空')
+  if (currentDraft.task_type === 'high_throughput_matmul') {
+    pushRangeError(errors, dp.matrix_size, '矩阵规模不能为空（例如：1024阶矩阵）', '矩阵规模需要是 128-32768 之间的整数', 128, 32768)
+    pushRangeError(errors, dp.batch_count, '批次数不能为空（例如：50批）', '批次数需要是 1-10000 之间的整数', 1, 10000)
+  } else if (currentDraft.task_type === 'low_latency_video_pipeline') {
+    pushRangeError(errors, dp.frame_count, '视频帧数不能为空（例如：100帧）', '视频帧数需要是 1-100000 之间的整数', 1, 100000)
+    if (isBlankValue(dp.resolution)) {
+      add('视频分辨率不能为空（例如：720p 或 1080p）')
+    } else if (!['480p', '720p', '1080p', '2k', '4k', '8k'].includes(String(dp.resolution).toLowerCase())) {
+      add('视频分辨率请使用 480p、720p、1080p、2k、4k 或 8k')
+    }
+    pushRangeError(errors, dp.fps, '帧率不能为空（例如：30fps）', 'fps 需要是 1-240 之间的整数', 1, 240)
+  } else if (currentDraft.task_type === 'llm_text_generation') {
+    pushRangeError(errors, dp.prompt_tokens, '输入 token 数不能为空（例如：prompt 512 tokens）', '输入 token 数需要是 1-1000000 之间的整数', 1, 1000000)
+    pushRangeError(errors, dp.max_new_tokens, '生成 token 数不能为空（例如：生成 256 tokens）', '生成 token 数需要是 1-1000000 之间的整数', 1, 1000000)
+    pushRangeError(errors, dp.batch_size, '批大小不能为空（例如：batch 2）', '批大小需要是 1-10000 之间的整数', 1, 10000)
+  }
+  if (isBlankValue(currentDraft.source_name)) add('源节点不能为空')
+  if (isBlankValue(currentDraft.destination_name)) add('目的节点不能为空')
+  if (isBlankValue(currentDraft.business_start_time)) add('开始时间不能为空')
+  if (isBlankValue(currentDraft.business_end_time)) add('结束时间不能为空')
+  if (!isBlankValue(currentDraft.business_start_time) && !isBlankValue(currentDraft.business_end_time)) {
+    const start = new Date(currentDraft.business_start_time).getTime()
+    const end = new Date(currentDraft.business_end_time).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(end)) add('开始时间和结束时间格式不正确')
+    else if (end <= start) add('结束时间需要晚于开始时间')
+  }
+  if (isBlankValue(currentDraft.runtime_plan?.routing_strategy)) add('路由策略不能为空')
+  return errors
 }
 
 function formatEndpoint(endpoint, fallback) {
@@ -930,6 +1024,13 @@ function stopStreaming() {
 
 async function confirmIntent() {
   if (isConfirming.value) return
+  if (!canConfirm.value) {
+    const hint = draftValidationErrors.value.length
+      ? draftValidationErrors.value.join('；')
+      : '请先补全任务参数'
+    ElMessage.warning(hint)
+    return
+  }
   isConfirming.value = true
   try {
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
@@ -1093,12 +1194,12 @@ onBeforeUnmount(stopRoutingPolling)
   justify-content: space-between;
   padding: 0 20px;
   font-size: 11px;
-  color: var(--text-muted);
+  color: #b8c0d6;
 }
 
 .intent-workspace {
   display: grid;
-  grid-template-columns: 260px minmax(420px, 1fr) 380px;
+  grid-template-columns: 260px minmax(520px, 1fr) 340px;
   flex: 1;
   min-height: 0;
   background: var(--bg-primary);
@@ -1167,7 +1268,7 @@ onBeforeUnmount(stopRoutingPolling)
 
 .username-label {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: #d7dded;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1176,7 +1277,7 @@ onBeforeUnmount(stopRoutingPolling)
 .logout-btn {
   width: 100%;
   justify-content: flex-start;
-  color: var(--text-secondary) !important;
+  color: #d7dded !important;
   font-size: 13px;
 }
 
@@ -1203,7 +1304,7 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 10px 16px;
   cursor: pointer;
   border-radius: 8px;
-  color: rgba(255,255,255,0.7);
+  color: rgba(255,255,255,0.82);
   transition: all 0.2s;
 }
 
@@ -1218,7 +1319,7 @@ onBeforeUnmount(stopRoutingPolling)
   justify-content: space-between;
   padding: 8px 0 4px;
   font-size: 12px;
-  color: rgba(255,255,255,0.5);
+  color: rgba(255,255,255,0.78);
   margin: 18px 0 6px;
 }
 
@@ -1263,7 +1364,7 @@ onBeforeUnmount(stopRoutingPolling)
 }
 .conversation-item-body small {
   margin-top: 4px;
-  color: var(--text-muted);
+  color: #bcc5da;
 }
 
 .delete-btn { flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
@@ -1382,11 +1483,11 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 22px 28px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--border-subtle);
 }
-.chat-header h1 { font-size: 22px; margin-bottom: 6px; }
-.chat-header p { color: var(--text-secondary); font-size: 13px; }
+.chat-header h1 { font-size: 20px; margin-bottom: 4px; }
+.chat-header p { color: #d7dded; font-size: 13px; }
 
 .messages {
   flex: 1;
@@ -1394,8 +1495,8 @@ onBeforeUnmount(stopRoutingPolling)
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 24px 28px;
+  gap: 12px;
+  padding: 18px 24px;
 }
 
 /* ── Empty state ── */
@@ -1405,7 +1506,7 @@ onBeforeUnmount(stopRoutingPolling)
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 28px 24px;
   text-align: center;
   gap: 12px;
 }
@@ -1433,7 +1534,7 @@ onBeforeUnmount(stopRoutingPolling)
 
 .empty-subtitle {
   font-size: 14px;
-  color: var(--text-secondary);
+  color: #d7dded;
   margin: 0;
 }
 
@@ -1451,7 +1552,7 @@ onBeforeUnmount(stopRoutingPolling)
   border-radius: 20px;
   padding: 6px 14px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: #d7dded;
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
 }
@@ -1506,7 +1607,7 @@ onBeforeUnmount(stopRoutingPolling)
 
 .bubble-name {
   font-size: 11px;
-  color: var(--text-muted);
+  color: #bdc6dd;
   padding: 0 4px;
 }
 
@@ -1537,7 +1638,7 @@ onBeforeUnmount(stopRoutingPolling)
 
 .bubble-time {
   font-size: 11px;
-  color: var(--text-muted);
+  color: #aeb8d0;
   padding: 0 4px;
 }
 
@@ -1559,8 +1660,8 @@ onBeforeUnmount(stopRoutingPolling)
 
 /* ── Confirm card ── */
 .confirm-card {
-  margin: 16px 28px;
-  padding: 16px 20px;
+  margin: 10px 24px;
+  padding: 14px 18px;
   background: #f0fdf4;
   border: 1px solid #86efac;
   border-radius: 12px;
@@ -1582,76 +1683,69 @@ onBeforeUnmount(stopRoutingPolling)
 .confirm-text p {
   margin: 4px 0 0;
   font-size: 13px;
-  color: #666;
+  color: #334155;
 }
 .confirm-params {
   margin: 8px 0;
   font-size: 13px;
-  color: #606266;
+  color: #243447;
   line-height: 1.8;
 }
 .confirm-params .param-label {
-  color: #909399;
+  color: #475569;
+  font-weight: 600;
+}
+
+.pending-card {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.pending-icon {
+  color: #ea580c;
+  font-size: 24px;
+}
+
+.missing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.missing-list span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fed7aa;
+  color: #7c2d12;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* ── Composer ── */
 .composer {
   flex-shrink: 0;
-  padding: 18px 28px;
+  padding: 12px 24px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
 }
 
-.node-hint-card {
+.composer-actions {
+  margin-top: 8px;
   display: flex;
-  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 10px 16px;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(59, 130, 246, 0.22);
-  border-radius: 12px;
-  background: rgba(59, 130, 246, 0.08);
-  color: var(--text-secondary);
-  font-size: 12px;
+  align-items: center;
 }
 
-.node-hint-main {
+.composer-tools {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 240px;
-}
-
-.node-hint-main strong {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-
-.node-hint-groups {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.node-hint-groups span {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
-
-.composer-actions {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 .composer-hint {
   font-size: 12px;
-  color: var(--text-muted);
+  color: #bdc6dd;
 }
 
 .composer-btns {
@@ -1659,15 +1753,52 @@ onBeforeUnmount(stopRoutingPolling)
   gap: 8px;
 }
 
+:global(.node-popover) {
+  color: #1f2937;
+}
+
+:global(.node-popover .node-popover-body) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  line-height: 1.55;
+}
+
+:global(.node-popover .node-popover-body strong) {
+  color: #111827;
+  font-size: 14px;
+}
+
+:global(.node-popover .node-popover-body p) {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+:global(.node-popover .node-popover-tags) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+:global(.node-popover .node-popover-tags span) {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* ── Right panel ── */
 .intent-panel {
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-subtle);
-  padding: 20px;
+  padding: 14px;
   overflow-y: auto;
 }
 
-.panel-card { margin-bottom: 16px; }
+.panel-card { margin-bottom: 12px; }
 .panel-card.valid-border { border-color: var(--el-color-success); }
 
 .actions {
@@ -1688,13 +1819,13 @@ onBeforeUnmount(stopRoutingPolling)
 
 .file-hint {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: #d7dded;
   margin-top: 8px;
 }
 
 .upload-tip {
   font-size: 13px;
-  color: var(--el-text-color-placeholder);
+  color: #475569;
   padding: 8px 0;
 }
 
@@ -1719,7 +1850,7 @@ onBeforeUnmount(stopRoutingPolling)
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--text-secondary);
+  color: #d7dded;
   padding: 12px 0;
   font-size: 13px;
 }

@@ -206,13 +206,52 @@ test('intent chat parses video task and demo-routes deployment', async ({ page, 
 
   await page.getByRole('button', { name: '确认提交任务' }).first().click()
   await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByRole('button', { name: '随机路由并部署' }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '执行部署流程' }).first()).toBeVisible()
 
-  await page.getByRole('button', { name: '随机路由并部署' }).first().click()
+  await page.getByRole('button', { name: '执行部署流程' }).first().click()
   await expect(page.locator('.confirm-card').getByText('已部署')).toBeVisible({ timeout: 20_000 })
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-video-demo-routed.png'),
     fullPage: true,
+  })
+})
+
+test('intent chat keeps incomplete video draft unsubmitted and compactly shows node help', async ({ page, request }, testInfo) => {
+  const auth = await loginByApi(request)
+  const conversation = await createConversation(request, auth.access_token)
+
+  await page.addInitScript(({ token, role, username, conversationId }) => {
+    window.localStorage.setItem('access_token', token)
+    window.localStorage.setItem('role', role)
+    window.localStorage.setItem('username', username)
+    window.localStorage.setItem('lastConversationId', conversationId)
+  }, {
+    token: auth.access_token,
+    role: auth.role,
+    username,
+    conversationId: conversation.id,
+  })
+
+  await page.goto('/intent-chat')
+  await expect(page.getByPlaceholder(/描述您的计算任务需求/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /可用节点/ })).toBeVisible()
+  await expect(page.getByText('终端节点：h1-h13')).toBeHidden()
+
+  await page.getByRole('button', { name: /可用节点/ }).click()
+  await expect(page.getByText('终端节点：h1-h13')).toBeVisible()
+  await expect(page.getByText('计算节点：compute-1、compute-2、compute-3')).toBeVisible()
+
+  await page.getByPlaceholder(/描述您的计算任务需求/).fill('视频AI推理任务，从 h3 到 h4，720p视频，100帧，现在开始跑2小时，低时延策略')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByText('参数待补充')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText('帧率不能为空（例如：30fps）').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '确认提交任务' })).toHaveCount(0)
+  await expect(page.getByText('请先补全参数')).toBeVisible()
+
+  await page.screenshot({
+    path: testInfo.outputPath('intent-chat-incomplete-video.png'),
+    fullPage: false,
   })
 })

@@ -210,3 +210,71 @@ async def test_conversation_ignores_user_supplied_video_latency_threshold(client
         "operator": "<=",
         "unit": "ms",
     }
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_rejects_missing_video_fps(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session)
+
+    create_response = await client.post("/api/conversations", json={"title": "缺参数视频任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，现在开始跑2小时，低时延策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    body = message_response.json()
+    assert body["latest_draft"]["task_type"] == "low_latency_video_pipeline"
+    assert body["latest_draft"]["parse_status"] == "incomplete"
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 400
+    assert "帧率" in "；".join(confirm_response.json()["detail"]["validation_errors"])
+
+    detail_response = await client.get(f"/api/conversations/{conversation_id}", headers=headers)
+    assert detail_response.status_code == 200
+    detail_body = detail_response.json()
+    assert detail_body["status"] == "drafting"
+    assert detail_body["materialized_order_id"] is None
+    assert detail_body["latest_draft"]["parse_status"] == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_rejects_invalid_video_fps(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session)
+
+    create_response = await client.post("/api/conversations", json={"title": "非法参数视频任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    assert message_response.json()["latest_draft"]["parse_status"] == "valid"
+
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"data_profile": {"frame_count": 100, "resolution": "720p", "fps": 0}},
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["latest_draft"]["parse_status"] == "incomplete"
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 400
+    assert "fps" in "；".join(confirm_response.json()["detail"]["validation_errors"])
+    assert "1-240" in "；".join(confirm_response.json()["detail"]["validation_errors"])
