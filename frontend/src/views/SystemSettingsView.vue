@@ -3,31 +3,31 @@
     <section class="settings-hero">
       <div>
         <p class="eyebrow">系统设置</p>
-        <h1>运行环境与系统配置</h1>
+        <h1>运行配置与系统参数</h1>
         <p>
-          在这里区分开发环境和真实环境，并统一管理意图解析、业务测评路由方式与模态优先级。
-          面向专家的页面只展示正式流程和结果，配置项集中放在后台维护。
+          在这里统一管理意图解析、业务测评路由方式、页面展示和模态优先级。
+          业务页面只展示运行入口、结果和工单证据，配置项集中放在后台维护。
         </p>
       </div>
-      <el-tag size="large" type="success">{{ settings.labels?.environment_mode || '真实环境' }}</el-tag>
+      <el-tag size="large" type="success">{{ settings.labels?.environment_mode || '标准模式' }}</el-tag>
     </section>
 
     <el-card class="settings-card" v-loading="loading">
       <template #header>
         <div class="card-header">
-          <span>运行模式</span>
+          <span>运行配置</span>
           <el-button type="primary" :loading="saving" @click="saveSettings">保存设置</el-button>
         </div>
       </template>
 
       <el-form label-position="top" class="settings-form">
-        <el-form-item label="当前环境">
+        <el-form-item label="配置分组">
           <el-radio-group v-model="form.environment_mode">
-            <el-radio-button label="production">真实环境</el-radio-button>
-            <el-radio-button label="development">开发环境</el-radio-button>
+            <el-radio-button label="production">标准模式</el-radio-button>
+            <el-radio-button label="development">调试模式</el-radio-button>
           </el-radio-group>
           <p class="form-hint">
-            真实环境用于专家验收和外部路由联调；开发环境用于本地验证、排障和快速回归。
+            配置分组用于区分常规运行和联调排障场景；实际链路由下方解析、路由、展示开关控制。
           </p>
         </el-form-item>
 
@@ -36,13 +36,13 @@
             <h3>意图解析</h3>
             <el-radio-group v-model="form.intent_parser_mode" class="vertical-radio">
               <el-radio label="llm">大模型/智能体解析</el-radio>
-              <el-radio label="rule">规则解析（开发）</el-radio>
+              <el-radio label="rule">系统解析流程</el-radio>
             </el-radio-group>
             <el-checkbox v-model="form.intent_rule_fallback_enabled">
-              大模型不可用时允许规则解析接管
+              主解析不可用时允许系统解析流程接管
             </el-checkbox>
             <p class="form-hint">
-              验收页面统一展示“意图参数解析准确率”。规则解析仅用于开发验证和异常排查，不在专家页面单独暴露为另一套指标。
+              意图测评页统一展示“意图参数解析准确率”。该设置会影响用户端对话解析和管理端单条解析。
             </p>
           </el-card>
 
@@ -53,7 +53,7 @@
               <el-radio label="external">外部路由系统</el-radio>
             </el-radio-group>
             <p class="form-hint">
-              自动路由用于演示部署与评估闭环；外部路由系统用于联调真实路由算法回写节点和 GPU 分配结果。
+              自动路由由系统完成节点放置；外部路由系统由对接服务回写节点和 GPU 分配结果。
               业务测评页只展示统一的“运行测评”入口，由系统按当前配置执行。
             </p>
           </el-card>
@@ -62,17 +62,17 @@
             <h3>页面展示</h3>
             <el-switch
               v-model="form.expert_mode"
-              active-text="正式展示视图"
-              inactive-text="开发调试视图"
+              active-text="简洁展示视图"
+              inactive-text="调试展示视图"
             />
             <el-checkbox v-model="form.show_internal_controls">
-              显示内部调试信息
+              显示调试控制项
             </el-checkbox>
             <el-checkbox v-model="form.show_routing_dag_json">
               显示路由 DAG 调试信息
             </el-checkbox>
             <p class="form-hint">
-              建议正式验收时开启正式展示视图，并关闭内部调试信息和 DAG JSON，让页面聚焦业务目标成功率、参数解析和工单证据。
+              简洁展示视图会隐藏调试控制项和 DAG JSON，让业务页面聚焦运行结果、参数解析和工单证据。
             </p>
           </el-card>
         </div>
@@ -112,7 +112,7 @@
             v-model="form.notes"
             type="textarea"
             :rows="3"
-            placeholder="记录当前环境、联调对象、演示前置条件等"
+            placeholder="记录当前配置说明、联调对象、运行前置条件等"
           />
         </el-form-item>
       </el-form>
@@ -120,20 +120,20 @@
 
     <el-card class="settings-card">
       <template #header>
-        <span>正式验收建议</span>
+        <span>运行建议</span>
       </template>
       <div class="advice-list">
         <div>
           <strong>业务测评页</strong>
-          <span>只展示基线、工单创建、运行测评、成功率统计和任务详情证据，不出现内部实现细节。</span>
+          <span>只展示基线、工单创建、运行测评、成功率统计和任务详情证据，减少与操作无关的信息。</span>
         </div>
         <div>
           <strong>基线差距解释</strong>
           <span>若测试值和旧基线差距很大，优先检查 CPU/GPU 口径、镜像版本、节点旧容器和同 GPU 并发争用。</span>
         </div>
         <div>
-          <strong>正式截图前</strong>
-          <span>清理旧测评实例，按当前业务 profile 重跑 3 次基线，再创建新的验收轮次，确保截图只对应最新轮次。</span>
+          <strong>截图前</strong>
+          <span>清理旧测评实例，按当前业务 profile 重跑基线，再创建新的测评轮次，确保截图只对应最新轮次。</span>
         </div>
       </div>
     </el-card>
@@ -201,6 +201,10 @@ function modalityPriorityHint(modality) {
 
 function applySettings(data) {
   settings.value = data || {}
+  const legacyNotes = '真实环境用于专家验收和外部路由联调；开发环境用于本地验证和调试。'
+  const notes = data?.notes === legacyNotes
+    ? '标准模式用于常规运行；调试模式用于联调、排障和快速回归。'
+    : data?.notes || ''
   Object.assign(form, {
     environment_mode: data?.environment_mode || 'production',
     intent_parser_mode: data?.intent_parser_mode || 'llm',
@@ -210,7 +214,7 @@ function applySettings(data) {
     show_internal_controls: data?.show_internal_controls ?? false,
     show_routing_dag_json: data?.show_routing_dag_json ?? false,
     modality_priority_map: normalizePriorityMap(data?.modality_priority_map),
-    notes: data?.notes || '',
+    notes,
   })
 }
 

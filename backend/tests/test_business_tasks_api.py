@@ -178,7 +178,7 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     assert default_response.status_code == 200
     defaults = default_response.json()
     assert defaults["environment_mode"] == "production"
-    assert defaults["labels"]["environment_mode"] == "真实环境"
+    assert defaults["labels"]["environment_mode"] == "标准模式"
     assert defaults["benchmark_routing_mode"] == "external"
     assert defaults["expert_mode"] is True
     assert defaults["labels"]["benchmark_routing_mode"] == "外部路由系统"
@@ -212,7 +212,7 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     assert body["show_internal_controls"] is True
     assert body["notes"] == "联调路由系统"
     assert body["labels"]["benchmark_routing_mode"] == "外部路由系统"
-    assert body["labels"]["environment_mode"] == "真实环境"
+    assert body["labels"]["environment_mode"] == "标准模式"
     assert body["modality_priority_map"]["低时延转发模态"] == 2
     assert body["modality_priority_map"]["高通量计算模态"] == 4
     assert len(body["modality_priority_rows"]) == 8

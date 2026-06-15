@@ -1,4 +1,4 @@
-"""Runtime system settings for development and production modes."""
+"""Runtime system settings for standard and debug modes."""
 
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "show_internal_controls": False,
     "show_routing_dag_json": False,
     "modality_priority_map": normalize_modality_priority_map(),
-    "notes": "真实环境用于专家验收和外部路由联调；开发环境用于本地验证和调试。",
+    "notes": "标准模式用于常规运行；调试模式用于联调、排障和快速回归。",
 }
 
 ENVIRONMENT_MODE_LABELS = {
-    PRODUCTION_MODE: "真实环境",
-    DEVELOPMENT_MODE: "开发环境",
+    PRODUCTION_MODE: "标准模式",
+    DEVELOPMENT_MODE: "调试模式",
 }
 
 LEGACY_ENVIRONMENT_MODES = {

@@ -2,13 +2,13 @@
   <div class="benchmark-page">
     <section class="hero-card">
       <div>
-        <p class="eyebrow">业务目标验收</p>
+        <p class="eyebrow">业务目标测评</p>
         <h1>业务目标成功率闭环验证</h1>
-        <p class="hero-subtitle">按基线、创建验收工单、运行测评、成功率统计四步完成专家验收演示；正式判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
+        <p class="hero-subtitle">按基线、创建测试工单、运行测评、成功率统计四步完成业务目标成功率验证；判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
         <div class="run-strip">
-          <span>当前验收轮次</span>
+          <span>当前测评轮次</span>
           <strong>{{ currentBenchmarkRunId || '历史全部数据' }}</strong>
-          <small>{{ currentBenchmarkRunId ? '本页列表、运行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史验收工单统计。' }}</small>
+          <small>{{ currentBenchmarkRunId ? '本页列表、运行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史测试工单统计。' }}</small>
         </div>
       </div>
       <div class="hero-actions">
@@ -106,10 +106,7 @@
         </el-table-column>
       </el-table>
       <div v-if="excludedNodeRows.length" class="excluded-node-note">
-        <strong>未纳入基线的节点：</strong>
-        <span v-for="node in excludedNodeRows" :key="node.id">
-          {{ node.hostname }}（{{ excludedNodeReason(node) }}）
-        </span>
+        非计算节点不纳入计算类业务基线测试。
       </div>
       <p v-if="baselineHintText" class="status-note">{{ baselineHintText }}</p>
     </el-card>
@@ -120,7 +117,7 @@
           <span class="step-num">2</span>
           <div>
             <div class="step-title">创建测评工单</div>
-            <div class="step-desc">创建带 is_benchmark 标记的验收工单。</div>
+            <div class="step-desc">创建用于业务目标测评的测试工单。</div>
           </div>
         </div>
       </template>
@@ -153,7 +150,7 @@
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
-      <p class="status-note">创建测评工单会生成新的验收轮次 ID，后续运行、统计和测试工单列表默认只针对这一轮，避免历史数据影响验收截图。</p>
+      <p class="status-note">创建测评工单会生成新的测评轮次 ID，后续运行、统计和测试工单列表默认只针对这一轮，避免历史数据影响当前结果。</p>
     </el-card>
 
     <el-card class="step-card">
@@ -195,7 +192,7 @@
         <el-input-number v-model="executionForm.max_parallel" :min="1" :max="10" controls-position="right" />
         <span>同一GPU并发数</span>
         <el-input-number v-model="executionForm.per_compute_slot_limit" :min="1" :max="4" controls-position="right" />
-        <span class="muted">GPU任务默认每个工单只使用 1 张 GPU；正式测评建议同一 GPU 并发数设为 1。</span>
+        <span class="muted">GPU 任务默认每个工单只使用 1 张 GPU；建议同一 GPU 并发数设为 1。</span>
       </div>
       <div class="status-grid">
         <div class="status-cell waiting">
@@ -363,7 +360,7 @@
         <div class="result-meta-grid">
           <div>
             <span>统计口径</span>
-            <strong>{{ currentBenchmarkRunId ? '当前验收轮次' : '全部历史验收工单' }}</strong>
+            <strong>{{ currentBenchmarkRunId ? '当前测评轮次' : '全部历史测试工单' }}</strong>
           </div>
           <div>
             <span>总工单数</span>
@@ -396,7 +393,7 @@
           </span>
         </div>
         <div v-if="!hasEnoughEvaluations" class="sample-warning">
-          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足正式验收所需 {{ formalEvaluationCount }} 个；请完成本轮测评后再截图作为最终结果。
+          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足判定所需 {{ formalEvaluationCount }} 个；请完成本轮测评后再查看最终结果。
         </div>
       </div>
     </el-card>
@@ -530,10 +527,15 @@ const showInternalControls = computed(() => Boolean(settingsForm.show_internal_c
 const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_json))
 
 const routeModeLabel = computed(() =>
-  routeMode.value === 'external' ? '外部路由系统' : '自动路由'
+  showInternalControls.value
+    ? (routeMode.value === 'external' ? '外部路由系统' : '自动路由')
+    : '按系统配置执行'
 )
 
 const routeModeDescription = computed(() => {
+  if (!showInternalControls.value) {
+    return '系统按当前配置完成路由、部署校验和结果统计。'
+  }
   if (routeMode.value === 'external') {
     return '当前轮次将等待外部路由系统回写节点和 GPU 分配结果；平台负责部署校验、执行和结果统计。'
   }
@@ -693,7 +695,7 @@ const resultProgressStatus = computed(() =>
 )
 
 const resultVerdictText = computed(() =>
-  hasEnoughEvaluations.value ? (isPassing.value ? '验收通过' : '未达标') : '样本不足'
+  hasEnoughEvaluations.value ? (isPassing.value ? '判定通过' : '未达标') : '样本不足'
 )
 
 const detailTaskType = computed(() => selectedOrderDetail.value?.business_task?.task_type || selectedOrderDetail.value?.task_type || '')
@@ -968,13 +970,6 @@ function formatDiagnosticGpuError(diagnostics) {
   const errors = diagnostics?.gpu_errors || []
   if (!errors.length) return ''
   return `GPU 诊断：${errors[0]}`
-}
-
-function excludedNodeReason(node) {
-  if (node.node_kind === 'admin') return '管理节点不参与业务调度'
-  if (node.node_kind === 'terminal') return '终端节点只作为源/目的节点，不做计算基线'
-  if (node.is_schedulable === false) return '不可调度或 Node Agent 不可达'
-  return '未纳入当前业务调度'
 }
 
 function handleOrderSelectionChange(rows) {
@@ -1256,10 +1251,10 @@ async function cleanupSelectedOrderInstances() {
 async function deleteSelectedOrders() {
   if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
   const deletingCurrentRun = !selectedOrderIds.value.length
-  const countText = deletingCurrentRun ? '当前验收轮次的全部' : `选中的 ${selectedOrderIds.value.length} 个`
+  const countText = deletingCurrentRun ? '当前测评轮次的全部' : `选中的 ${selectedOrderIds.value.length} 个`
   try {
     await ElMessageBox.confirm(
-      `将删除${countText}验收工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
+      `将删除${countText}测试工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
       '确认删除工单',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -1310,7 +1305,7 @@ async function refreshExternalRoutingStatus() {
     } else if (orders.value.length) {
       ElMessage.success('当前轮次工单已全部完成路由，可继续运行测评。')
     } else {
-      ElMessage.warning('当前没有验收工单，请先创建测评工单。')
+      ElMessage.warning('当前没有测试工单，请先创建测评工单。')
     }
   } finally {
     routeLoading.value = false
@@ -1319,7 +1314,7 @@ async function refreshExternalRoutingStatus() {
 
 async function runEvaluationFlow() {
   if (!currentBenchmarkRunId.value) {
-    ElMessage.warning('请先创建或选择一个验收轮次，再运行测评。')
+    ElMessage.warning('请先创建或选择一个测评轮次，再运行测评。')
     return null
   }
   if (routeMode.value === 'external') {
@@ -1336,11 +1331,11 @@ async function runEvaluationFlow() {
 
 async function doStartAll() {
   if (!currentBenchmarkRunId.value) {
-    ElMessage.warning('请先创建或选择一个验收轮次，再启动执行。')
+    ElMessage.warning('请先创建或选择一个测评轮次，再启动执行。')
     return null
   }
   startLoading.value = true
-  controlledStartStatus.value = '正在按小批次运行验收任务...'
+  controlledStartStatus.value = '正在按小批次运行测评任务...'
   try {
     let latest = null
     for (let round = 1; round <= 180; round += 1) {
@@ -1361,11 +1356,11 @@ async function doStartAll() {
       controlledStartStatus.value = `测评运行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
 
       if (total > 0 && evaluated >= total) {
-        ElMessage.success(`本轮 ${evaluated} 个验收任务已全部完成评估`)
+        ElMessage.success(`本轮 ${evaluated} 个测评任务已全部完成评估`)
         break
       }
       if (!started && !active && !Number(data.pending_to_start || 0)) {
-        ElMessage.warning('当前没有可继续启动的验收任务，请检查失败原因或重新路由。')
+        ElMessage.warning('当前没有可继续启动的测评任务，请检查失败原因或重新路由。')
         break
       }
       await sleep(started ? 2500 : 5000)
