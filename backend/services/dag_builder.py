@@ -13,6 +13,7 @@ SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 POLICY_TYPE_MAP = {
     "resource_guarantee": "RESOURCE_GUARANTEE",
     "fastest_completion": "TIME_CONSTRAINED",
+    "low_latency_forwarding": "LATENCY_CONSTRAINED",
     "load_balance": "LOAD_BALANCE",
     "cost_priority": "COST_CONSTRAINED",
 }

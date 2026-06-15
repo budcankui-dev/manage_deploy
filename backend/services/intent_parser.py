@@ -204,7 +204,9 @@ def _extract_llm_batch_size(text: str) -> int | None:
 
 def _extract_routing_strategy(text: str) -> str:
     lower = text.lower()
-    if any(k in lower for k in ("最快", "更快", "尽快", "完成时间", "高性能", "性能更高", "性能优先", "处理速度", "吞吐性能", "少排队", "尽早跑完", "低时延", "fast")):
+    if any(k in lower for k in ("低时延转发", "低延时转发", "低时延策略", "低延时策略", "低时延选路", "低延时选路", "低时延路由", "低延时路由", "latency")):
+        return "low_latency_forwarding"
+    if any(k in lower for k in ("最快", "更快", "尽快", "完成时间", "高性能", "性能更高", "性能优先", "处理速度", "吞吐性能", "少排队", "尽早跑完", "fast")):
         return "fastest_completion"
     if any(k in lower for k in ("负载", "空闲", "均衡", "竞争少", "低负载", "避开高负载", "抢资源", "均摊", "更平衡", "load")):
         return "load_balance"
@@ -399,6 +401,10 @@ def parse_intent(
         result.parse_status = "incomplete"
         result.assistant_message = "当前可解析矩阵计算、视频推理和八类模态测试样本。请说明任务类型、源节点、目的节点和开始/结束时间。"
         return result
+
+    fixed_modality = modality_for_task_type(result.task_type)
+    if fixed_modality:
+        result.modality = fixed_modality
 
     # 必填字段检查
     missing = []

@@ -5,7 +5,7 @@
         <p class="eyebrow">意图解析评测</p>
         <h1>数据集意图解析参数提取准确率</h1>
         <p class="subtitle">
-          数据集由模板和槽位替换构造，覆盖八类模态、四种路由策略倾向、口语化表达、缺字段、错误节点和噪声文本。
+          数据集由模板和槽位替换构造，覆盖八类模态、多种路由策略倾向、口语化表达、缺字段、错误节点和噪声文本。
           页面按统一解析流程展示一个正式准确率，便于专家按测试方案核对结果。
         </p>
       </div>
@@ -525,6 +525,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adminApi } from '@/api'
 import { modalityLabel, taskTypeLabel } from '@/constants/businessTaskDisplay'
+import { routingPolicyLabel } from '@/constants/routingPolicy'
 
 const latest = ref(null)
 const loading = ref(false)
@@ -891,12 +892,7 @@ function compactObjectText(value) {
 }
 
 function routeStrategyLabel(value) {
-  return {
-    resource_guarantee: '资源保障',
-    fastest_completion: '性能优先',
-    load_balance: '负载均衡',
-    cost_priority: '成本优先',
-  }[value] || value || '-'
+  return routingPolicyLabel(value)
 }
 
 function formatEndpoint(endpoint, fallback) {

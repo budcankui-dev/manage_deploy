@@ -19,13 +19,22 @@
 | 变量 | 说明 |
 |------|------|
 | `BUSINESS_TASK_ID` | 外部任务 ID |
+| `ORDER_ID` | 平台工单 ID；用户端工单、DAG `job_id/order_id` 与跨系统交互统一使用该值 |
+| `CONVERSATION_ID` | 用户端对话 ID；普通用户提交的工单通常与 `ORDER_ID` 相同 |
 | `TASK_TYPE` | 如 `high_throughput_matmul` |
+| `TASK_MODALITY` | 中文模态名，如 `低时延转发模态` |
+| `MODALITY` | 同 `TASK_MODALITY`，保留给历史 Worker 使用 |
+| `ROUTING_STRATEGY` | 路由策略，如 `resource_guarantee`、`low_latency_forwarding` |
 | `TASK_ROLE` | `source` / `compute` / `sink` |
 | `DATA_PROFILE` | JSON 字符串，synthetic 数据画像 |
 | `INPUT_OBJECTS` | JSON array，S3 URI 列表，下载并合并到 DATA_PROFILE |
 | `INPUT_MANIFEST_URI` | MinIO URI（如 `s3://bucket/path/manifest.json`），包含 profile 和 objects |
 | `BUSINESS_OBJECTIVE` | JSON 字符串 |
 | `RUNTIME_PLAN` | JSON 字符串 |
+| `RESOURCE_REQUIREMENT` | JSON 字符串，平台估算或用户指定的资源需求 |
+| `ROUTING_RESULT` | JSON 字符串，已回写的节点/GPU 放置结果 |
+| `RESULT_STORAGE` | JSON 字符串，结果归档配置 |
+| `BUSINESS_TASK_JSON` | JSON 字符串，完整业务任务上下文；新增 Worker 可优先读取该变量 |
 
 ### INPUT_OBJECTS 与 INPUT_MANIFEST_URI 优先级
 

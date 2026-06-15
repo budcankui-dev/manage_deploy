@@ -25,6 +25,7 @@ def build_routing_payload(
     resource_requirement: dict[str, Any] | None = None,
     template_nodes: list[dict[str, Any]] | None = None,
     modality_priority_map: dict[str, Any] | None = None,
+    routing_strategy: str | None = None,
 ) -> dict[str, Any]:
     """生成外部路由系统可消费的 DAG JSON。
 
@@ -58,7 +59,8 @@ def build_routing_payload(
         "modal": modal,
         "priority": priority,
         "_comment": modal,
-        "policy_type": _infer_policy_type(task_type),
+        "routing_strategy": routing_strategy or "resource_guarantee",
+        "policy_type": _policy_type_for(routing_strategy, task_type),
         "submit_ts_ms": submit_ts_ms,
         "business_start_ts_ms": submit_ts_ms,
         "business_end_ts_ms": int(business_end_time.timestamp() * 1000),
@@ -76,7 +78,17 @@ def _task_type_to_job_name(task_type: str) -> str:
     return mapping.get(task_type, task_type)
 
 
-def _infer_policy_type(task_type: str) -> str:
+def _policy_type_for(routing_strategy: str | None, task_type: str) -> str:
+    strategy_mapping = {
+        "resource_guarantee": "RESOURCE_GUARANTEE",
+        "fastest_completion": "TIME_CONSTRAINED",
+        "low_latency_forwarding": "LATENCY_CONSTRAINED",
+        "load_balance": "LOAD_BALANCE",
+        "cost_priority": "COST_CONSTRAINED",
+    }
+    if routing_strategy in strategy_mapping:
+        return strategy_mapping[routing_strategy]
+
     mapping = {
         "high_throughput_matmul": "COST_CONSTRAINED",
         "low_latency_video_pipeline": "LATENCY_CONSTRAINED",

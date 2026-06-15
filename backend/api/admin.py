@@ -123,6 +123,7 @@ def _routing_dag_preview(
         data_profile=result.data_profile,
         resource_requirement=result.resource_requirement,
         modality_priority_map=modality_priority_map_from_settings(runtime_settings),
+        routing_strategy=(result.runtime_plan or {}).get("routing_strategy"),
     )
 
 

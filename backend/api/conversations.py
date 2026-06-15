@@ -455,6 +455,7 @@ async def confirm_intent(
         data_profile=draft.data_profile,
         resource_requirement=draft.resource_requirement,
         modality_priority_map=modality_priority_map,
+        routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
     )
     order.routing_input_dag = input_payload
 
@@ -463,7 +464,7 @@ async def confirm_intent(
         conversation_id=conversation.id,
         order_id=order.id,
         intent_draft_id=draft.id,
-        strategy="resource_guarantee",
+        strategy=(draft.runtime_plan or {}).get("routing_strategy") or "resource_guarantee",
         status=RoutingRequestStatus.PENDING,
         source_name=draft.source_name,
         destination_name=draft.destination_name,
@@ -736,6 +737,7 @@ async def _get_conversation_detail(
                 data_profile=draft.data_profile,
                 resource_requirement=draft.resource_requirement,
                 modality_priority_map=modality_priority_map_from_settings(runtime_settings),
+                routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
             )
     return ConversationResponse(
         id=conversation.id,

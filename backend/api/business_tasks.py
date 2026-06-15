@@ -1,4 +1,3 @@
-import json
 import re
 from datetime import timedelta
 from typing import Any
@@ -35,6 +34,7 @@ from schemas import (
 )
 from services.time_utils import business_now
 from services.business_evaluator import evaluate_business_objective
+from services.business_env import build_business_env, json_env
 from services.business_task_query import (
     BusinessTaskListFilters,
     list_business_tasks,
@@ -69,19 +69,13 @@ async def build_instance_create_from_business_task(
     template_id: str,
     role_node_names: dict[str, str],
 ) -> TaskInstanceCreate:
-    shared_env = {
-        "BUSINESS_TASK_ID": payload.external_task_id,
-        "TASK_TYPE": payload.task_type,
-        "MODALITY": payload.modality or "",
-        "DATA_PROFILE": _json_env(payload.data_profile),
-        "BUSINESS_OBJECTIVE": payload.business_objective.model_dump_json(),
-        "RUNTIME_PLAN": _json_env(payload.runtime_plan),
-        "RESOURCE_REQUIREMENT": _json_env(payload.resource_requirement),
-        "ROUTING_RESULT": payload.routing_result.model_dump_json(),
-        "RESULT_STORAGE": _json_env(payload.result_storage),
-    }
-    if payload.task_type in {"high_throughput_matmul", "low_latency_video_pipeline"}:
-        shared_env["USE_GPU"] = "true"
+    shared_env = build_business_env(
+        business_task=payload.model_dump(mode="json"),
+        task_instance_id=payload.external_task_id,
+        resource_requirement=payload.resource_requirement,
+        result_storage=payload.result_storage,
+        routing_result=payload.routing_result.model_dump(mode="json"),
+    )
     overrides: list[TaskInstanceNodeOverride] = []
     gpu_roles = set()
     if payload.task_type == "high_throughput_matmul":
@@ -524,7 +518,7 @@ async def _get_order_for_instance(db: AsyncSession, instance_id: str) -> TaskOrd
 
 
 def _json_env(value: dict[str, Any]) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json_env(value)
 
 
 def _extract_objects(tags: dict[str, Any] | None) -> list[dict[str, str]]:

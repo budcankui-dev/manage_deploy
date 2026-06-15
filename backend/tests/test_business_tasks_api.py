@@ -778,6 +778,7 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
             "task_type": "low_latency_video_pipeline",
             "count": 2,
             "benchmark_run_id": "video-run-a",
+            "routing_strategy": "low_latency_forwarding",
             "data_profile": {
                 "frame_count": 150,
                 "frame_stride": 30,
@@ -813,6 +814,8 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["order_id"] == order.id
     assert dag["job_name"] == "视频AI推理"
     assert dag["task_type"] == "low_latency_video_pipeline"
+    assert dag["routing_strategy"] == "low_latency_forwarding"
+    assert dag["policy_type"] == "LATENCY_CONSTRAINED"
     assert dag["priority"] == 1
     assert "constraints" not in dag
     assert [node["task_node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]

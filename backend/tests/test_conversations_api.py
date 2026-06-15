@@ -182,6 +182,8 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     ).scalars().all()
     by_role = {node.env["TASK_ROLE"]: node for node in inst_nodes}
     assert by_role["compute"].env["TASK_TYPE"] == "low_latency_video_pipeline"
+    assert by_role["compute"].env["TASK_MODALITY"] == "低时延转发模态"
+    assert by_role["compute"].env["ROUTING_STRATEGY"] == "low_latency_forwarding"
     assert by_role["compute"].env["USE_GPU"] == "true"
     assert by_role["compute"].env["GPU_DEVICE"] == "0"
     assert by_role["compute"].gpu_id == "0"

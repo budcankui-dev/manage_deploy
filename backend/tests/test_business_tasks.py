@@ -22,7 +22,7 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
             target_value=200,
             unit="ms",
         ),
-        runtime_plan={"codec": "h264", "preset": "ultrafast"},
+        runtime_plan={"routing_strategy": "low_latency_forwarding", "codec": "h264", "preset": "ultrafast"},
         routing_result=RoutingResult(
             strategy="completion_time_first",
             placements={
@@ -77,8 +77,11 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
     assert overrides["compute"].node_id == uuid_b
     assert overrides["sink"].node_id == uuid_c
     assert overrides["compute"].env["TASK_TYPE"] == "low_latency_video_pipeline"
+    assert overrides["compute"].env["TASK_MODALITY"] == "低时延转发模态"
+    assert overrides["compute"].env["ROUTING_STRATEGY"] == "low_latency_forwarding"
     assert overrides["compute"].env["BUSINESS_OBJECTIVE"] == payload.business_objective.model_dump_json()
-    assert overrides["compute"].env["RUNTIME_PLAN"] == '{"codec":"h264","preset":"ultrafast"}'
+    assert overrides["compute"].env["RUNTIME_PLAN"] == '{"routing_strategy":"low_latency_forwarding","codec":"h264","preset":"ultrafast"}'
+    assert overrides["compute"].env["BUSINESS_TASK_JSON"]
 
 
 def test_evaluate_business_objective_handles_lower_is_better():

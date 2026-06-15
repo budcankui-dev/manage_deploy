@@ -477,6 +477,7 @@ routing_resource_events(
   "destination_name": "terminal-b",
   "modal": "低时延转发模态",
   "priority": 1,
+  "routing_strategy": "low_latency_forwarding",
   "policy_type": "LATENCY_CONSTRAINED",
   "business_start_ts_ms": 1777341600000,
   "business_end_ts_ms": 1777345200000,
@@ -687,7 +688,17 @@ Content-Type: application/json
 }
 ```
 
-路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态和路由系统自身策略处理。
+路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态、`priority`、`routing_strategy` 和路由系统自身策略处理。
+
+策略字段约定：
+
+| `routing_strategy` | `policy_type` | 含义 |
+|------|------|------|
+| `resource_guarantee` | `RESOURCE_GUARANTEE` | 默认资源保障 |
+| `fastest_completion` | `TIME_CONSTRAINED` | 完成时间优先 |
+| `low_latency_forwarding` | `LATENCY_CONSTRAINED` | 低时延转发策略 |
+| `load_balance` | `LOAD_BALANCE` | 负载均衡 |
+| `cost_priority` | `COST_CONSTRAINED` | 成本优先 |
 
 ## 9.1 网络就绪确认
 

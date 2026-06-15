@@ -362,63 +362,6 @@
         </el-collapse>
       </el-card>
 
-      <el-card class="panel-card">
-        <template #header>路由策略</template>
-        <div v-if="draft?.runtime_plan?.routing_strategy" class="objective-editor">
-          <el-descriptions :column="1" size="small">
-            <el-descriptions-item label="当前策略">{{ formatRoutingStrategy(draft.runtime_plan.routing_strategy) }}</el-descriptions-item>
-          </el-descriptions>
-        </div>
-        <el-empty v-else description="从对话中提取路由策略" :image-size="60" />
-      </el-card>
-
-      <el-card class="panel-card">
-        <template #header>输入文件（可选）</template>
-        <el-upload
-          :action="uploadAction"
-          :headers="uploadHeaders"
-          :on-success="onUploadSuccess"
-          :file-list="uploadedFiles"
-          :disabled="!conversation"
-          drag
-          multiple
-        >
-          <div class="upload-tip">拖拽文件到此处，或点击上传</div>
-        </el-upload>
-        <p class="file-hint">文件将作为 Worker 输入数据，不影响业务目标和路由决策。</p>
-      </el-card>
-
-      <el-card class="panel-card">
-        <template #header>
-          操作
-          <el-tag v-if="routing" :type="routingStatusType(routing.status)" size="small" style="margin-left:8px">{{ formatRoutingStatus(routing.status) }}</el-tag>
-        </template>
-        <div v-if="routing" class="routing-summary">
-          <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="策略">{{ routing.selected_strategy || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="节点分配">{{ formatRoutingPlacements(routing.placements) }}</el-descriptions-item>
-          </el-descriptions>
-          <el-collapse v-if="showRoutingDagJson && routing.input_payload" class="raw-collapse">
-            <el-collapse-item title="提交给路由系统的 DAG JSON" name="routing-input">
-              <pre class="json-block">{{ pretty(routing.input_payload) }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-        <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>等待节点分配...</span>
-        </div>
-        <div class="actions">
-          <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
-          <el-tag v-else-if="draft && !conversation?.materialized_order_id && conversation?.status === 'drafting'" type="warning">请先补全参数</el-tag>
-          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
-          <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
-          <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
-          <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待分配</el-tag>
-          <el-tag v-else-if="conversation?.status === 'ready_to_submit'" type="info">待部署</el-tag>
-          <el-tag v-else-if="conversation?.status === 'cancelled'" type="danger">已取消</el-tag>
-        </div>
-      </el-card>
     </aside>
   </div>
 
@@ -457,7 +400,6 @@ const isStreaming = ref(false)
 const isConfirming = ref(false)
 const isDemoRouting = ref(false)
 const messagesRef = ref(null)
-const uploadedFiles = ref([])
 const myOrders = ref([])
 const ordersLoading = ref(false)
 const showOrders = ref(false)
@@ -494,7 +436,6 @@ const exampleChips = [
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
-const routing = computed(() => conversation.value?.latest_routing_request || null)
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
 const draftValidationErrors = computed(() => getDraftValidationErrors(draft.value))
 const isDraftSubmittable = computed(() =>
@@ -503,7 +444,6 @@ const isDraftSubmittable = computed(() =>
 const canConfirm = computed(() =>
   isDraftSubmittable.value && conversation.value?.status === 'drafting' && !conversation.value?.materialized_order_id
 )
-const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 const conversationStatusLabel = computed(() => {
   const s = conversation.value?.status
   return { drafting: '草稿', awaiting_routing: '待分配', ready_to_submit: '待部署', submitted: '已部署', failed: '失败', cancelled: '已取消' }[s] || s || ''
@@ -515,12 +455,6 @@ const canCancelOrder = computed(() => {
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
-
-const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
-const uploadHeaders = computed(() => {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-})
 
 function formatTime(value) {
   if (!value) return '-'
@@ -539,57 +473,12 @@ function pretty(value) {
   return JSON.stringify(value, null, 2)
 }
 
-function placementName(value) {
-  if (!value) return '-'
-  if (typeof value === 'string') return value
-  const host = value.topology_node_id || value.worker_host || value.hostname || value.node_name || value.node_id || '-'
-  const gpu = value.gpu_device ?? (Array.isArray(value.gpu_indices) ? value.gpu_indices[0] : null)
-  return gpu !== null && gpu !== undefined ? `${host} (GPU ${gpu})` : host
-}
-
-function formatRoutingPlacements(placements) {
-  if (!placements) return '-'
-  if (Array.isArray(placements)) {
-    return placements.map(item => `${item.task_node_id || item.node_id || item.role || 'node'}=${placementName(item)}`).join('，')
-  }
-  if (typeof placements === 'object') {
-    const source = placementName(placements.source)
-    const compute = placementName(placements.compute || placements.worker)
-    const sink = placementName(placements.sink)
-    if (source !== '-' || compute !== '-' || sink !== '-') {
-      return `${source} → ${compute} → ${sink}`
-    }
-    return Object.entries(placements).map(([role, value]) => `${role}=${placementName(value)}`).join('，')
-  }
-  return String(placements)
-}
-
 function parseStatusType(status) {
   return { valid: 'success', incomplete: 'warning', rejected: 'danger' }[status] || 'info'
 }
 
-function routingStatusType(status) {
-  return {
-    pending: 'warning',
-    computing: 'warning',
-    network_binding_ready: 'primary',
-    completed: 'success',
-    failed: 'danger',
-  }[status] || 'info'
-}
-
-function formatRoutingStatus(status) {
-  return ROUTING_STATUS_LABEL[status] || status || '-'
-}
-
 function formatRoutingStrategy(strategy) {
-  if (!strategy) return '-'
-  return {
-    resource_guarantee: '资源保障',
-    fastest_completion: '完成时间优先',
-    load_balance: '负载均衡',
-    cost_priority: '成本优先',
-  }[strategy] || strategy
+  return routingPolicyLabel(strategy)
 }
 
 function isBlankValue(value) {
@@ -695,14 +584,6 @@ const ORDER_STATUS_LABEL = {
   orphaned: '孤立',
 }
 
-const ROUTING_STATUS_LABEL = {
-  pending: '待分配',
-  computing: '分配中',
-  network_binding_ready: '网络准备中',
-  completed: '已完成分配',
-  failed: '分配失败',
-}
-
 const TASK_STATUS_LABEL = {
   pending: '待启动',
   scheduled: '已调度',
@@ -754,11 +635,6 @@ function deploymentStatusTag(status) {
 
 function formatParseStatus(status) {
   return PARSE_STATUS_LABEL[status] || status || '-'
-}
-
-function onUploadSuccess(response) {
-  uploadedFiles.value.push({ name: response.filename, url: response.uri })
-  ElMessage.success(`${response.filename} 上传成功`)
 }
 
 function formatStatus(status) {
@@ -1089,21 +965,9 @@ async function demoRoute() {
   }
 }
 
-async function submitTask() {
-  const { data: result } = await conversationApi.submit(conversation.value.id, { auto_start: false })
-  await refreshConversation()
-  if (showOrders.value) loadOrders()
-  if (auth.isAdmin && result.order_id) {
-    ElMessage.success('任务已提交，正在打开业务任务中心…')
-    await router.push({ path: '/business-tasks', query: { orderId: result.order_id } })
-    return
-  }
-  ElMessage.success(`任务已提交（order=${result.order_id || '-'}，instance=${result.instance_id || '-'}）`)
-}
-
 function updateRoutingPolling() {
   stopRoutingPolling()
-  const status = routing.value?.status
+  const status = conversation.value?.latest_routing_request?.status
   if (status === 'pending' || status === 'computing') {
     routingTimer = setInterval(refreshConversation, 3000)
   }
@@ -1801,35 +1665,12 @@ onBeforeUnmount(stopRoutingPolling)
 .panel-card { margin-bottom: 12px; }
 .panel-card.valid-border { border-color: var(--el-color-success); }
 
-.actions {
-  margin-top: 12px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .errors {
   margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-
-.objective-editor { padding: 4px 0; }
-
-.file-hint {
-  font-size: 12px;
-  color: #d7dded;
-  margin-top: 8px;
-}
-
-.upload-tip {
-  font-size: 13px;
-  color: #475569;
-  padding: 8px 0;
-}
-
-.routing-summary { margin-bottom: 12px; }
 
 .raw-collapse {
   margin-top: 12px;
@@ -1844,15 +1685,6 @@ onBeforeUnmount(stopRoutingPolling)
   color: #dbeafe;
   font-size: 12px;
   line-height: 1.55;
-}
-
-.routing-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #d7dded;
-  padding: 12px 0;
-  font-size: 13px;
 }
 
 .verdict-block.success { background: var(--el-color-success-light-9); border: 1px solid var(--el-color-success-light-5); }

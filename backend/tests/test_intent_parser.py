@@ -13,6 +13,23 @@ def test_parse_video_pipeline_uses_baseline_objective_even_when_user_mentions_la
     assert result.parse_status == "valid"
 
 
+def test_parse_low_latency_forwarding_strategy_is_distinct_from_fastest_completion():
+    result = parse_intent("视频AI推理任务，从 compute-1 到 compute-2，处理90帧，720p，30fps，现在开始跑2小时，低时延策略")
+
+    assert result.task_type == "low_latency_video_pipeline"
+    assert result.modality == "低时延转发模态"
+    assert result.runtime_plan["routing_strategy"] == "low_latency_forwarding"
+    assert result.parse_status == "valid"
+
+
+def test_task_type_forces_modality_mapping_even_if_user_mentions_other_modality():
+    result = parse_intent("我想按高通量计算模态做一个视频AI推理任务，从 compute-1 到 compute-2，100帧，720p，30fps，现在开始跑2小时")
+
+    assert result.task_type == "low_latency_video_pipeline"
+    assert result.modality == "低时延转发模态"
+    assert result.parse_status == "valid"
+
+
 def test_parse_llm_text_generation_extracts_tokens():
     result = parse_intent("大模型文本生成任务，从 compute-2 到 compute-3，prompt 512 tokens，生成 256 tokens，batch 2，现在开始跑2小时，成本优先")
     assert result.task_type == "llm_text_generation"

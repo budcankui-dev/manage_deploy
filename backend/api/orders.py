@@ -50,6 +50,7 @@ from schemas import (
     TaskOrderResponse,
 )
 from services.business_task_query import get_order_detail_context
+from services.business_env import build_business_env
 from services.dag_executor import DAGExecutor
 from services.order_materialize import _resolve_node_id
 from services.instance_lifecycle import cleanup_instance_runtime
@@ -1347,22 +1348,14 @@ async def receive_routing_result(
             resolved_node_id = await _resolve_node_id(db, placement.topology_node_id)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        env: dict[str, str] = {
-            "TASK_ROLE": role,
-            "SOURCE_NAME": order.source_name or "",
-            "DESTINATION_NAME": order.destination_name or "",
-        }
-        # Inject business task env vars from runtime_config
         bt = (order.runtime_config or {}).get("business_task", {})
-        if bt:
-            import json
-            env["TASK_TYPE"] = bt.get("task_type") or ""
-            env["DATA_PROFILE"] = json.dumps(bt.get("data_profile") or {})
-            env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
-            env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
-            env["TASK_INSTANCE_ID"] = order.id  # will be updated after instance creation
-            if bt.get("task_type") in {"high_throughput_matmul", "low_latency_video_pipeline", "llm_text_generation"} and role in ("compute", "worker"):
-                env["USE_GPU"] = "true"
+        env = build_business_env(
+            order=order,
+            business_task=bt,
+            task_role=role,
+            task_instance_id=order.id,  # updated after instance creation
+            routing_result=routing_result,
+        )
         if placement.gpu_device is not None:
             env["GPU_DEVICE"] = placement.gpu_device
         elif order.is_benchmark and role in ("compute", "worker"):
@@ -1565,6 +1558,7 @@ async def create_batch_benchmark(
             business_end_time=business_end_time,
             data_profile=data_profile,
             modality_priority_map=modality_priority_map,
+            routing_strategy=payload.routing_strategy,
         )
         order_ids.append(order.id)
 
@@ -1996,21 +1990,13 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     overrides: list[TaskInstanceNodeOverride] = []
     for role, node in picked.items():
         template_node_name = role_node_names.get(role) or role
-        env: dict[str, str] = {
-            "TASK_ROLE": role,
-            "SOURCE_NAME": order.source_name or "",
-            "DESTINATION_NAME": order.destination_name or "",
-        }
         bt = (order.runtime_config or {}).get("business_task", {})
-        if bt:
-            import json
-            env["TASK_TYPE"] = bt.get("task_type") or ""
-            env["DATA_PROFILE"] = json.dumps(bt.get("data_profile") or {})
-            env["BUSINESS_OBJECTIVE"] = json.dumps(bt.get("business_objective") or {})
-            env["RUNTIME_PLAN"] = json.dumps(bt.get("runtime_plan") or {})
-            env["TASK_INSTANCE_ID"] = order.id
-            if bt.get("task_type") in {"high_throughput_matmul", "low_latency_video_pipeline", "llm_text_generation"} and role in ("compute", "worker"):
-                env["USE_GPU"] = "true"
+        env = build_business_env(
+            order=order,
+            business_task=bt,
+            task_role=role,
+            task_instance_id=order.id,
+        )
         gpu_id = _default_compute_gpu_for_order(order) if role == "compute" else None
         if gpu_id is not None:
             env["GPU_DEVICE"] = gpu_id

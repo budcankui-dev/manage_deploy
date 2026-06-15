@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -21,6 +20,7 @@ from config import settings
 from enums import DeploymentMode, OrderStatus
 from models import BusinessTemplateCatalog, Node as NodeModel, RoutingRequest, TaskOrder
 from schemas import TaskInstanceCreate, TaskInstanceNodeOverride
+from services.business_env import build_business_env
 from services.time_utils import business_now
 
 logger = logging.getLogger(__name__)
@@ -121,17 +121,12 @@ async def _build_overrides(
     overrides: list[TaskInstanceNodeOverride] = []
 
     business_task = (order.runtime_config or {}).get("business_task") or {}
-    shared_env = {
-        "TASK_TYPE": business_task.get("task_type") or order.name,
-        "SOURCE_NAME": order.source_name or "",
-        "DESTINATION_NAME": order.destination_name or "",
+    routing_result = {
+        "strategy": routing.selected_strategy or routing.strategy,
+        "placements": placements,
+        "estimated_metric": routing.estimated_metric,
+        "external_routing_id": routing.external_routing_id,
     }
-    if business_task.get("data_profile"):
-        shared_env["DATA_PROFILE"] = json.dumps(business_task["data_profile"])
-    if business_task.get("business_objective"):
-        shared_env["BUSINESS_OBJECTIVE"] = json.dumps(business_task["business_objective"])
-    if business_task.get("runtime_plan"):
-        shared_env["RUNTIME_PLAN"] = json.dumps(business_task["runtime_plan"])
 
     for role, template_node_name in role_node_names.items():
         placement = placements.get(role)
@@ -142,9 +137,13 @@ async def _build_overrides(
             continue
 
         node_id = await _resolve_node_id(db, raw_node_id)
-        env = dict(shared_env)
-        env["TASK_ROLE"] = role
-        env["TASK_INSTANCE_ID"] = order.id
+        env = build_business_env(
+            order=order,
+            business_task=business_task,
+            task_role=role,
+            task_instance_id=order.id,
+            routing_result=routing_result,
+        )
         gpu_id = _placement_gpu_id(placement)
         if gpu_id is not None:
             env["GPU_DEVICE"] = gpu_id

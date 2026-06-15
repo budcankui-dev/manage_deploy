@@ -3,6 +3,7 @@ export const ROUTING_POLICY_LABELS = {
   fastest_completion: '完成时间优先',
   completion_time_first: '完成时间优先',
   completion_time: '完成时间优先',
+  low_latency_forwarding: '低时延转发策略',
   load_balance: '负载均衡',
   cost_priority: '成本优先',
 }
