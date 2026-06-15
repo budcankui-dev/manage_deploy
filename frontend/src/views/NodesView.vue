@@ -12,9 +12,6 @@
           <el-option label="终端节点" value="terminal" />
           <el-option label="计算+终端" value="both" />
           <el-option label="管理节点" value="admin" />
-          <el-option label="路由设备" value="router" />
-          <el-option label="交换机" value="switch" />
-          <el-option label="存储节点" value="storage" />
         </el-select>
         <span class="selected-count" v-if="selectedIds.length">已选 {{ selectedIds.length }} 项</span>
         <el-button type="danger" plain :disabled="!selectedIds.length" @click="batchDeleteNodes">批量删除</el-button>
@@ -171,9 +168,6 @@
               <el-option label="终端节点" value="terminal" />
               <el-option label="计算+终端" value="both" />
               <el-option label="管理节点" value="admin" />
-              <el-option label="路由设备" value="router" />
-              <el-option label="交换机" value="switch" />
-              <el-option label="存储节点" value="storage" />
             </el-select>
           </el-form-item>
           <el-form-item label="管理 IP" required>
@@ -322,7 +316,10 @@ const paginatedNodes = computed(() => {
 })
 
 const filteredNodes = computed(() => {
-  const list = nodes.value || []
+  const list = (nodes.value || [])
+    .filter(node => !['router', 'switch', 'storage'].includes(node.node_kind))
+    .slice()
+    .sort(compareNodesByName)
   if (nodeKindFilter.value === 'all') return list
   if (nodeKindFilter.value === 'worker') {
     return list.filter(node => ['worker', 'both'].includes(node.node_kind || 'worker'))
@@ -332,6 +329,20 @@ const filteredNodes = computed(() => {
   }
   return list.filter(node => node.node_kind === nodeKindFilter.value)
 })
+
+function compareNodesByName(a, b) {
+  return nodeSortKey(a).localeCompare(nodeSortKey(b), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+}
+
+function nodeSortKey(node) {
+  const name = String(node.hostname || node.display_name || '')
+  const hMatch = name.match(/^h(\d+)$/i)
+  if (hMatch) return `1-h-${hMatch[1].padStart(4, '0')}`
+  const computeMatch = name.match(/^compute[-_]?(\d+)$/i)
+  if (computeMatch) return `2-compute-${computeMatch[1].padStart(4, '0')}`
+  if ((node.node_kind || '') === 'admin') return `0-admin-${name}`
+  return `9-${name}`
+}
 
 function nodeKindLabel(kind) {
   const labels = { worker: '计算节点', terminal: '终端节点', both: '计算+终端', admin: '管理节点', router: '路由设备', switch: '交换机', storage: '存储节点' }

@@ -88,149 +88,278 @@
       </el-card>
     </section>
 
-    <section class="content-grid">
-      <el-card class="panel-card dataset-intro-card">
-        <template #header>
-          <div class="card-header">
-            <span>数据集说明</span>
-            <el-tag size="small" type="success">八种模态</el-tag>
+    <el-card class="panel-card helper-workbench">
+      <template #header>
+        <div class="card-header">
+          <div>
+            <span>评测辅助信息</span>
+            <small class="report-caption">核心准确率和样本列表保持在主页面，说明、单条检测和过程文件按页内标签查看。</small>
           </div>
-        </template>
-        <p class="panel-hint">
-          固定评测数据集覆盖 {{ dataset.total || 0 }} 条样本，节点槽位使用
-          {{ validNodeText }}。每条样本包含任务类型、所属模态、业务源/目的节点、运行时间、路由策略倾向和业务参数。
-        </p>
-        <div class="node-chip-row">
-          <el-tag v-for="node in visibleValidNodes" :key="node" size="small" effect="plain">{{ node }}</el-tag>
-          <el-tag v-if="hiddenValidNodeCount > 0" size="small" type="info" effect="plain">
-            +{{ hiddenValidNodeCount }} 个节点
-          </el-tag>
+          <el-tag size="small" type="info">辅助功能</el-tag>
         </div>
-        <div class="modality-example-grid">
-          <article v-for="item in modalityExampleRows" :key="item.modality" class="modality-example-card">
-            <div class="modality-example-title">
-              <strong>{{ modalityLabel(item.modality) }}</strong>
-              <el-tag size="small" type="info" effect="plain">{{ taskTypeLabel(item.task_type) }}</el-tag>
+      </template>
+      <el-tabs v-model="activeHelperTab" class="helper-tabs">
+        <el-tab-pane label="数据集说明" name="dataset">
+          <div class="dataset-breadcrumb">
+            <span>固定数据集</span>
+            <span>八种模态</span>
+            <span>节点槽位 h1-h13 / compute-1~3</span>
+            <span>字段完全匹配评分</span>
+          </div>
+          <p class="panel-hint">
+            固定评测数据集覆盖 {{ dataset.total || 0 }} 条样本，节点槽位使用
+            {{ validNodeText }}。每条样本包含任务类型、所属模态、业务源/目的节点、运行时间、路由策略倾向和业务参数。
+          </p>
+          <div class="node-chip-row">
+            <el-tag v-for="node in visibleValidNodes" :key="node" size="small" effect="plain">{{ node }}</el-tag>
+            <el-tag v-if="hiddenValidNodeCount > 0" size="small" type="info" effect="plain">
+              +{{ hiddenValidNodeCount }} 个节点
+            </el-tag>
+          </div>
+          <div class="modality-example-grid">
+            <article v-for="item in modalityExampleRows" :key="item.modality" class="modality-example-card">
+              <div class="modality-example-title">
+                <strong>{{ modalityLabel(item.modality) }}</strong>
+                <el-tag size="small" type="info" effect="plain">{{ taskTypeLabel(item.task_type) }}</el-tag>
+              </div>
+              <p class="example-utterance">{{ item.utterance }}</p>
+              <dl class="example-fields">
+                <div>
+                  <dt>节点</dt>
+                  <dd>{{ item.source_name || '-' }} → {{ item.destination_name || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>参数</dt>
+                  <dd>{{ compactObjectText(item.data_profile) }}</dd>
+                </div>
+                <div>
+                  <dt>策略倾向</dt>
+                  <dd>{{ routeStrategyLabel(item.runtime_plan?.routing_strategy) }}</dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+          <div class="coverage-grid">
+            <section>
+              <h3 class="subsection-title">样本类型覆盖</h3>
+              <el-table :data="caseCountRows" size="small" border>
+                <el-table-column label="样本类型" min-width="230" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span>{{ row.case_label }}</span>
+                    <small class="raw-value">{{ row.case_type }}</small>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="count" label="数量" width="100" />
+                <el-table-column label="占比" width="180">
+                  <template #default="{ row }">
+                    <el-progress :percentage="percentage(row.count, dataset.total)" :show-text="false" />
+                  </template>
+                </el-table-column>
+              </el-table>
+            </section>
+            <section>
+              <h3 class="subsection-title">模态覆盖</h3>
+              <el-table :data="modalityCountRows" size="small" border>
+                <el-table-column prop="modality_label" label="所属模态" min-width="180" />
+                <el-table-column prop="count" label="数量" width="100" />
+                <el-table-column label="占比" width="180">
+                  <template #default="{ row }">
+                    <el-progress :percentage="percentage(row.count, dataset.total)" :show-text="false" />
+                  </template>
+                </el-table-column>
+              </el-table>
+            </section>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="单条检测" name="single">
+          <div class="parser-check">
+            <el-select
+              v-model="selectedSampleId"
+              filterable
+              clearable
+              placeholder="可选：从评测样本中选择一条用例"
+              class="sample-select"
+              @change="applySelectedSample"
+            >
+              <el-option
+                v-for="sample in sampleRows"
+                :key="sample.sample_id"
+                :label="`${sample.sample_id} · ${sample.modality_label} · ${sample.utterance.slice(0, 42)}`"
+                :value="sample.sample_id"
+              />
+            </el-select>
+            <el-input
+              v-model="parserInput"
+              type="textarea"
+              :rows="3"
+              placeholder="输入一句业务需求，例如：创建视频AI推理任务，从 h1 到 h2，处理 720p 视频 100 帧，立即运行60分钟"
+            />
+            <div class="parser-actions">
+              <el-button type="primary" :loading="parserLoading" @click="testParse">解析这一条</el-button>
+              <small class="report-caption">用于抽查单个样本或手工输入；页面会展示中文字段、字段判定和必要的原始数据。</small>
             </div>
-            <p class="example-utterance">{{ item.utterance }}</p>
-            <dl class="example-fields">
-              <div>
-                <dt>节点</dt>
-                <dd>{{ item.source_name || '-' }} → {{ item.destination_name || '-' }}</dd>
-              </div>
-              <div>
-                <dt>参数</dt>
-                <dd>{{ compactObjectText(item.data_profile) }}</dd>
-              </div>
-              <div>
-                <dt>策略倾向</dt>
-                <dd>{{ routeStrategyLabel(item.runtime_plan?.routing_strategy) }}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
-      </el-card>
-
-      <el-card class="panel-card">
-        <template #header>
-          <div class="card-header">
-            <span>数据集覆盖</span>
-            <el-tag size="small" type="info">固定数据集</el-tag>
           </div>
-        </template>
-        <el-table :data="caseCountRows" size="small" border>
-          <el-table-column label="样本类型" min-width="230" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span>{{ row.case_label }}</span>
-              <small class="raw-value">{{ row.case_type }}</small>
-            </template>
-          </el-table-column>
-          <el-table-column prop="count" label="数量" width="100" />
-          <el-table-column label="占比" width="180">
-            <template #default="{ row }">
-              <el-progress :percentage="percentage(row.count, dataset.total)" :show-text="false" />
-            </template>
-          </el-table-column>
-        </el-table>
-        <h3 class="subsection-title">模态覆盖</h3>
-        <el-table :data="modalityCountRows" size="small" border>
-          <el-table-column prop="modality_label" label="所属模态" min-width="180" />
-          <el-table-column prop="count" label="数量" width="100" />
-          <el-table-column label="占比" width="180">
-            <template #default="{ row }">
-              <el-progress :percentage="percentage(row.count, dataset.total)" :show-text="false" />
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-
-      <el-card class="panel-card">
-        <template #header>
-          <div class="card-header">
-          <span>大模型/智能体异步评测进度</span>
-          <el-tag v-if="batchJob" size="small" :type="batchStatusType(batchJob.status)">
-            {{ batchStatusLabel(batchJob.status) }}
-          </el-tag>
-            <el-tag v-else size="small" type="info">未提交</el-tag>
+          <div v-if="parserResult" class="parser-result">
+            <el-descriptions :column="2" size="small" border>
+              <el-descriptions-item label="解析流程">{{ parserEngineLabel(parserResult.engine) }}</el-descriptions-item>
+              <el-descriptions-item label="模型/版本">{{ parserResult.model || parserResult.parser_version || '-' }}</el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('task_type')">
+                {{ taskTypeLabel(parserResult.task_type) }}
+                <small class="raw-value">{{ parserResult.task_type || '-' }}</small>
+              </el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('modality')">
+                <el-tag size="small" type="success">{{ modalityLabel(parserResult.modality) }}</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('source_name')">{{ formatEndpoint(parserResult.source_endpoint, parserResult.source_name) }}</el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('destination_name')">{{ formatEndpoint(parserResult.destination_endpoint, parserResult.destination_name) }}</el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('business_start_time')">{{ formatDateText(parserResult.business_start_time) || '-' }}</el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('business_end_time')">{{ formatDateText(parserResult.business_end_time) || '-' }}</el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('parse_status')">
+                <el-tag :type="parseStatusType(parserResult.parse_status)" size="small">
+                  {{ parseStatusLabel(parserResult.parse_status) }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item :label="fieldLabel('assistant_message')">{{ parserResult.assistant_message || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <div v-if="parserResult.validation_errors?.length" class="validation-errors">
+              <el-alert
+                v-for="(item, index) in parserResult.validation_errors"
+                :key="index"
+                type="warning"
+                show-icon
+                :closable="false"
+                :title="item"
+              />
+            </div>
+            <div class="json-grid">
+              <section v-if="parserResult.scoring">
+                <h3>单样本字段判定</h3>
+                <el-table :data="parserScoringRows" size="small" border>
+                  <el-table-column label="字段" width="150">
+                    <template #default="{ row }">
+                      {{ fieldLabel(row.field) }}
+                      <small class="raw-value">{{ row.field }}</small>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="人工标注值" min-width="160">
+                    <template #default="{ row }">{{ stringifyValue(row.expected) }}</template>
+                  </el-table-column>
+                  <el-table-column label="系统解析值" min-width="160">
+                    <template #default="{ row }">{{ stringifyValue(row.got) }}</template>
+                  </el-table-column>
+                  <el-table-column label="是否正确" width="100">
+                    <template #default="{ row }">
+                      <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '正确' : '错误' }}</el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </section>
+              <section>
+                <h3>{{ fieldLabel('data_profile') }}</h3>
+                <el-table :data="parserProfileRows" size="small" border>
+                  <el-table-column label="字段" width="150">
+                    <template #default="{ row }">
+                      {{ row.label }}
+                      <small class="raw-value">{{ row.key }}</small>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="value" label="值" show-overflow-tooltip />
+                </el-table>
+              </section>
+              <section>
+                <h3>{{ fieldLabel('runtime_plan') }}</h3>
+                <el-table :data="parserPlanRows" size="small" border>
+                  <el-table-column label="字段" width="150">
+                    <template #default="{ row }">
+                      {{ row.label }}
+                      <small class="raw-value">{{ row.key }}</small>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="value" label="值" show-overflow-tooltip />
+                </el-table>
+              </section>
+              <section>
+                <h3>{{ fieldLabel('business_objective') }}</h3>
+                <el-table :data="parserObjectiveRows" size="small" border>
+                  <el-table-column label="字段" width="150">
+                    <template #default="{ row }">
+                      {{ row.label }}
+                      <small class="raw-value">{{ row.key }}</small>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="value" label="值" show-overflow-tooltip />
+                </el-table>
+              </section>
+            </div>
+            <el-collapse class="evidence-collapse">
+              <el-collapse-item title="查看单条解析原始 JSON（排障用）" name="single-json">
+                <pre class="details-json">{{ JSON.stringify(parserResult || {}, null, 2) }}</pre>
+              </el-collapse-item>
+              <el-collapse-item v-if="showRoutingDagJson && parserResult.routing_dag" title="查看路由 DAG JSON（管理员调试）" name="single-dag">
+                <pre class="details-json">{{ JSON.stringify(parserResult.routing_dag || {}, null, 2) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
           </div>
-        </template>
-        <el-descriptions :column="1" size="small" border>
-          <el-descriptions-item label="评测编号">{{ batchJob?.job_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="本次评测模型">{{ batchJob?.model || config.dashscope_model || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="项目默认模型">{{ config.dashscope_model || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="提交时间">{{ formatDateText(batchJob?.created_at) || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">{{ formatDateText(batchJob?.updated_at) || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Batch ID">{{ batchJob?.batch_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Batch 请求计数">{{ batchRequestCountsText }}</el-descriptions-item>
-          <el-descriptions-item label="输入文件">{{ batchJob?.input_jsonl_path || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="输出文件">{{ batchJob?.output_jsonl_path || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="报告">{{ batchJob?.report_path || '-' }}</el-descriptions-item>
-        </el-descriptions>
-        <el-alert
-          v-if="officialReportType === 'llm' && llmReport && batchJob && !isLlmReportCurrent"
-          class="panel-alert"
-          type="warning"
-          show-icon
-          :closable="false"
-          title="当前大模型报告与最新 Batch 任务或当前数据集不一致，请同步进度或重新运行评测后再作为验收截图。"
-        />
-        <div class="download-row">
-          <el-button size="small" type="warning" plain @click="refreshBatch" :loading="batchRefreshing" :disabled="!batchJob">
-            同步大模型评测进度
-          </el-button>
-          <el-button size="small" type="danger" plain @click="cancelBatch" :loading="batchCancelling" :disabled="!isBatchActive">
-            取消当前评测
-          </el-button>
-          <el-button size="small" plain @click="downloadEvalFile('batch-job')" :disabled="!batchJob">
-            下载评测任务状态
-          </el-button>
-          <el-button size="small" plain @click="downloadEvalFile('batch-input')" :disabled="!batchJob">
-            下载评测请求文件
-          </el-button>
-          <el-button size="small" plain @click="downloadEvalFile('batch-output')" :disabled="!batchJob?.output_jsonl_path">
-            下载大模型返回文件
-          </el-button>
-        </div>
-      </el-card>
+        </el-tab-pane>
 
-      <el-card class="panel-card">
-        <template #header>
-          <div class="card-header">
-            <span>评测文件下载</span>
-            <el-tag size="small" type="success">验收留档</el-tag>
+        <el-tab-pane label="评测流程与文件" name="process">
+          <div class="process-grid">
+            <article v-for="step in evaluationFlowSteps" :key="step.title" class="process-step-card">
+              <span>{{ step.no }}</span>
+              <strong>{{ step.title }}</strong>
+              <p>{{ step.detail }}</p>
+            </article>
           </div>
-        </template>
-        <p class="panel-hint">
-          用于专家复核数据集来源、当前评测结果和大模型批处理过程文件。
-        </p>
-        <div class="file-download-list">
-          <el-button plain @click="downloadEvalFile('dataset')">下载原始数据集</el-button>
-          <el-button type="success" plain @click="downloadCurrentReport" :disabled="!officialReport">
-            下载意图解析评测结果
-          </el-button>
-        </div>
-      </el-card>
-    </section>
+          <div class="content-grid compact-grid">
+            <el-card class="inner-card">
+              <template #header>
+                <div class="card-header">
+                  <span>异步评测进度</span>
+                  <el-tag v-if="batchJob" size="small" :type="batchStatusType(batchJob.status)">
+                    {{ batchStatusLabel(batchJob.status) }}
+                  </el-tag>
+                  <el-tag v-else size="small" type="info">未提交</el-tag>
+                </div>
+              </template>
+              <el-descriptions :column="1" size="small" border>
+                <el-descriptions-item label="评测编号">{{ batchJob?.job_id || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="本次评测模型">{{ batchJob?.model || config.dashscope_model || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="提交时间">{{ formatDateText(batchJob?.created_at) || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="更新时间">{{ formatDateText(batchJob?.updated_at) || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="请求计数">{{ batchRequestCountsText }}</el-descriptions-item>
+              </el-descriptions>
+              <div class="download-row">
+                <el-button size="small" type="warning" plain @click="refreshBatch" :loading="batchRefreshing" :disabled="!batchJob">
+                  同步评测进度
+                </el-button>
+                <el-button size="small" type="danger" plain @click="cancelBatch" :loading="batchCancelling" :disabled="!isBatchActive">
+                  取消当前评测
+                </el-button>
+              </div>
+            </el-card>
+            <el-card class="inner-card">
+              <template #header>
+                <div class="card-header">
+                  <span>评测文件下载</span>
+                  <el-tag size="small" type="success">验收留档</el-tag>
+                </div>
+              </template>
+              <p class="panel-hint">用于复核数据集来源、当前评测结果和批处理过程文件。</p>
+              <div class="file-download-list">
+                <el-button plain @click="downloadEvalFile('dataset')">下载原始数据集</el-button>
+                <el-button type="success" plain @click="downloadCurrentReport" :disabled="!officialReport">
+                  下载意图解析评测结果
+                </el-button>
+                <el-button plain @click="downloadEvalFile('batch-job')" :disabled="!batchJob">下载评测任务状态</el-button>
+                <el-button plain @click="downloadEvalFile('batch-input')" :disabled="!batchJob">下载评测请求文件</el-button>
+                <el-button plain @click="downloadEvalFile('batch-output')" :disabled="!batchJob?.output_jsonl_path">下载模型返回文件</el-button>
+              </div>
+            </el-card>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
 
     <el-card class="panel-card">
       <template #header>
@@ -254,158 +383,6 @@
         </div>
       </div>
       <el-empty v-else description="暂无评测报告，请先运行意图参数解析准确率评测" :image-size="80" />
-    </el-card>
-
-    <el-card class="panel-card">
-      <template #header>
-        <div class="card-header">
-          <span>单条意图解析检测</span>
-          <el-tag v-if="parserResult" size="small" :type="parseStatusType(parserResult.parse_status)">
-            {{ parseStatusLabel(parserResult.parse_status) }}
-          </el-tag>
-        </div>
-      </template>
-      <div class="parser-check">
-        <el-select
-          v-model="selectedSampleId"
-          filterable
-          clearable
-          placeholder="可选：从评测样本中选择一条用例"
-          class="sample-select"
-          @change="applySelectedSample"
-        >
-          <el-option
-            v-for="sample in sampleRows"
-            :key="sample.sample_id"
-            :label="`${sample.sample_id} · ${sample.modality_label} · ${sample.utterance.slice(0, 42)}`"
-            :value="sample.sample_id"
-          />
-        </el-select>
-        <el-input
-          v-model="parserInput"
-          type="textarea"
-          :rows="3"
-          placeholder="输入一句业务需求，例如：跑一个文本生成任务，从 nodeA 到 nodeB，吞吐不低于 80 tokens/s"
-        />
-        <div class="parser-actions">
-          <el-button type="primary" :loading="parserLoading" @click="testParse">解析这一条</el-button>
-          <small class="report-caption">默认走与用户端对话一致的智能体解析流程；大模型不可用时自动使用系统解析流程。</small>
-        </div>
-      </div>
-      <div v-if="parserResult" class="parser-result">
-        <el-descriptions :column="2" size="small" border>
-          <el-descriptions-item label="解析流程">
-            {{ parserEngineLabel(parserResult.engine) }}
-            <small class="raw-value">{{ parserResult.engine || '-' }}</small>
-          </el-descriptions-item>
-          <el-descriptions-item label="大模型">
-            {{ parserResult.model || '系统解析流程' }}
-          </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('task_type')">
-            {{ taskTypeLabel(parserResult.task_type) }}
-            <small class="raw-value">{{ parserResult.task_type || '-' }}</small>
-          </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('modality')">
-            <el-tag size="small" type="success">{{ modalityLabel(parserResult.modality) }}</el-tag>
-            <small class="raw-value">{{ parserResult.modality || '-' }}</small>
-          </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('parse_status')">
-            <el-tag :type="parseStatusType(parserResult.parse_status)" size="small">
-              {{ parseStatusLabel(parserResult.parse_status) }}
-            </el-tag>
-            <small class="raw-value">{{ parserResult.parse_status || '-' }}</small>
-          </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('source_name')">{{ formatEndpoint(parserResult.source_endpoint, parserResult.source_name) }}</el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('destination_name')">{{ formatEndpoint(parserResult.destination_endpoint, parserResult.destination_name) }}</el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('business_start_time')">{{ formatDateText(parserResult.business_start_time) || '-' }}</el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('business_end_time')">{{ formatDateText(parserResult.business_end_time) || '-' }}</el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('parser_name')">
-            {{ parserResult.parser_name || '-' }} v{{ parserResult.parser_version || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item :label="fieldLabel('assistant_message')">{{ parserResult.assistant_message || '-' }}</el-descriptions-item>
-        </el-descriptions>
-        <div v-if="parserResult.validation_errors?.length" class="validation-errors">
-          <el-alert
-            v-for="(item, index) in parserResult.validation_errors"
-            :key="index"
-            type="warning"
-            show-icon
-            :closable="false"
-            :title="item"
-          />
-        </div>
-        <div class="json-grid">
-          <section v-if="parserResult.scoring">
-            <h3>单样本字段判定</h3>
-            <el-table :data="parserScoringRows" size="small" border>
-              <el-table-column label="字段" width="150">
-                <template #default="{ row }">
-                  {{ fieldLabel(row.field) }}
-                  <small class="raw-value">{{ row.field }}</small>
-                </template>
-              </el-table-column>
-              <el-table-column label="期望值" min-width="160">
-                <template #default="{ row }">{{ stringifyValue(row.expected) }}</template>
-              </el-table-column>
-              <el-table-column label="解析值" min-width="160">
-                <template #default="{ row }">{{ stringifyValue(row.got) }}</template>
-              </el-table-column>
-              <el-table-column label="是否正确" width="100">
-                <template #default="{ row }">
-                  <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '正确' : '错误' }}</el-tag>
-                </template>
-              </el-table-column>
-            </el-table>
-          </section>
-          <section>
-            <h3>{{ fieldLabel('data_profile') }}</h3>
-            <el-table :data="parserProfileRows" size="small" border>
-              <el-table-column label="字段" width="150">
-                <template #default="{ row }">
-                  {{ row.label }}
-                  <small class="raw-value">{{ row.key }}</small>
-                </template>
-              </el-table-column>
-              <el-table-column prop="value" label="值" show-overflow-tooltip />
-            </el-table>
-            <pre class="details-json">{{ JSON.stringify(parserResult.data_profile || {}, null, 2) }}</pre>
-          </section>
-          <section>
-            <h3>{{ fieldLabel('runtime_plan') }}</h3>
-            <el-table :data="parserPlanRows" size="small" border>
-              <el-table-column label="字段" width="150">
-                <template #default="{ row }">
-                  {{ row.label }}
-                  <small class="raw-value">{{ row.key }}</small>
-                </template>
-              </el-table-column>
-              <el-table-column prop="value" label="值" show-overflow-tooltip />
-            </el-table>
-            <pre class="details-json">{{ JSON.stringify(parserResult.runtime_plan || {}, null, 2) }}</pre>
-          </section>
-          <section>
-            <h3>{{ fieldLabel('business_objective') }}</h3>
-            <el-table :data="parserObjectiveRows" size="small" border>
-              <el-table-column label="字段" width="150">
-                <template #default="{ row }">
-                  {{ row.label }}
-                  <small class="raw-value">{{ row.key }}</small>
-                </template>
-              </el-table-column>
-              <el-table-column prop="value" label="值" show-overflow-tooltip />
-            </el-table>
-            <pre class="details-json">{{ JSON.stringify(parserResult.business_objective || {}, null, 2) }}</pre>
-          </section>
-          <section v-if="showRoutingDagJson && parserResult.routing_dag">
-            <h3>路由 DAG JSON</h3>
-            <pre class="details-json">{{ JSON.stringify(parserResult.routing_dag || {}, null, 2) }}</pre>
-          </section>
-          <section v-if="showRoutingDagJson && parserResult.trace">
-            <h3>解析流程原始信息</h3>
-            <pre class="details-json">{{ JSON.stringify(parserResult.trace || {}, null, 2) }}</pre>
-          </section>
-        </div>
-      </div>
     </el-card>
 
     <el-card class="panel-card">
@@ -465,23 +442,40 @@
                   <el-descriptions-item label="所属模态">{{ row.modality_label }}</el-descriptions-item>
                 </el-descriptions>
               </section>
-              <section class="expand-json-grid">
-                <div>
-                  <h3>样本原始 JSON</h3>
-                  <pre class="details-json">{{ JSON.stringify(row.sample_payload || {}, null, 2) }}</pre>
+              <section class="sample-evidence">
+                <h3>评测证据说明</h3>
+                <div class="evidence-card-grid">
+                  <article>
+                    <strong>样本定义</strong>
+                    <p>数据集中预先准备的自然语言输入和人工标注答案，用作评分基准。</p>
+                  </article>
+                  <article>
+                    <strong>系统解析输出</strong>
+                    <p>本次评测运行后系统实际提取出的任务类型、节点、模态和业务参数。</p>
+                  </article>
+                  <article>
+                    <strong>字段判定</strong>
+                    <p>逐字段比较人工标注值和系统解析值，全部关键字段匹配才计为成功。</p>
+                  </article>
+                  <article>
+                    <strong>原始响应</strong>
+                    <p>用于技术排障。当前走统一意图解析流程时可能为空，不影响评分结果。</p>
+                  </article>
                 </div>
-                <div>
-                  <h3>大模型原始 JSON</h3>
-                  <pre class="details-json">{{ JSON.stringify(row.raw_llm_response || {}, null, 2) }}</pre>
-                </div>
-                <div>
-                  <h3>解析结果</h3>
-                  <pre class="details-json">{{ JSON.stringify(row.parsed_result || {}, null, 2) }}</pre>
-                </div>
-                <div>
-                  <h3>期望结果</h3>
-                  <pre class="details-json">{{ JSON.stringify(row.expected_result || {}, null, 2) }}</pre>
-                </div>
+                <el-collapse class="evidence-collapse">
+                  <el-collapse-item title="样本定义 JSON（输入 + 人工标注）" name="sample">
+                    <pre class="details-json">{{ JSON.stringify(row.sample_payload || {}, null, 2) }}</pre>
+                  </el-collapse-item>
+                  <el-collapse-item title="系统解析输出 JSON（本次实际结果）" name="parsed">
+                    <pre class="details-json">{{ JSON.stringify(row.parsed_result || {}, null, 2) }}</pre>
+                  </el-collapse-item>
+                  <el-collapse-item title="人工标注答案 JSON（评分基准）" name="expected">
+                    <pre class="details-json">{{ JSON.stringify(row.expected_result || {}, null, 2) }}</pre>
+                  </el-collapse-item>
+                  <el-collapse-item title="原始响应 JSON（排障用）" name="raw">
+                    <pre class="details-json">{{ JSON.stringify(row.raw_llm_response || {}, null, 2) }}</pre>
+                  </el-collapse-item>
+                </el-collapse>
               </section>
             </div>
           </template>
@@ -544,6 +538,29 @@ const selectedModel = ref('')
 const selectedSampleId = ref('')
 const autoRefreshTimer = ref(null)
 const showRoutingDagJson = ref(false)
+const activeHelperTab = ref('dataset')
+const evaluationFlowSteps = [
+  {
+    no: '01',
+    title: '准备固定数据集',
+    detail: '数据集覆盖八种模态、有效节点槽位、路由策略倾向和异常表达，作为验收时固定输入。',
+  },
+  {
+    no: '02',
+    title: '运行统一解析流程',
+    detail: '点击评测按钮后，系统按用户端同一套意图解析链路逐条生成结构化参数。',
+  },
+  {
+    no: '03',
+    title: '逐字段评分',
+    detail: '将系统解析输出与人工标注答案逐字段比较，关键字段全部匹配才计为该样本成功。',
+  },
+  {
+    no: '04',
+    title: '查看证据与留档',
+    detail: '在样本列表展开查看字段判定和 JSON 证据，也可以下载数据集与评测结果文件。',
+  },
+]
 
 const dataset = computed(() => latest.value?.dataset || {})
 const config = computed(() => latest.value?.config || {})
@@ -1300,30 +1317,8 @@ onUnmounted(stopAutoRefresh)
   line-height: 1.5;
 }
 
-.content-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.content-grid .panel-card:last-child {
-  grid-column: 1 / -1;
-}
-
-.dataset-intro-card {
-  grid-column: 1 / -1;
-}
-
 .panel-card {
   margin-bottom: 16px;
-}
-
-.panel-alert {
-  margin-top: 12px;
-}
-
-.panel-alert {
-  margin-top: 12px;
 }
 
 .card-header {
@@ -1340,6 +1335,101 @@ onUnmounted(stopAutoRefresh)
   font-size: 12px;
   font-weight: 400;
   line-height: 1.5;
+}
+
+.helper-workbench :deep(.el-card__body) {
+  padding-top: 8px;
+}
+
+.helper-tabs :deep(.el-tabs__header) {
+  margin-bottom: 18px;
+}
+
+.helper-tabs :deep(.el-tabs__item) {
+  font-weight: 700;
+}
+
+.dataset-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.dataset-breadcrumb span {
+  position: relative;
+  padding: 7px 12px;
+  border: 1px solid #d9e7f1;
+  border-radius: 999px;
+  background: #f7fbff;
+  color: #31536d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dataset-breadcrumb span:not(:last-child)::after {
+  content: '>';
+  margin-left: 10px;
+  color: #91a4b5;
+}
+
+.coverage-grid,
+.content-grid,
+.compact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.coverage-grid {
+  margin-top: 16px;
+}
+
+.subsection-title {
+  margin: 0 0 10px;
+  color: #24384a;
+  font-size: 15px;
+}
+
+.process-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.process-step-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #e0e9f1;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
+}
+
+.process-step-card span {
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eaf4ff;
+  color: #1e6da8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.process-step-card strong {
+  color: #203447;
+}
+
+.process-step-card p {
+  margin: 0;
+  color: #687786;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.inner-card {
+  min-height: 100%;
 }
 
 .case-bars {
@@ -1506,16 +1596,45 @@ onUnmounted(stopAutoRefresh)
   gap: 8px;
 }
 
+.sample-evidence {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-card-grid article {
+  padding: 12px;
+  border: 1px solid #e4edf4;
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.evidence-card-grid strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #24384a;
+}
+
+.evidence-card-grid p {
+  margin: 0;
+  color: #687786;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.evidence-collapse {
+  border-top: 1px solid #e8eef4;
+}
+
 .sample-expand h3 {
   margin: 0 0 8px;
   color: #344254;
   font-size: 14px;
-}
-
-.expand-json-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
 }
 
 .pagination-row {
@@ -1536,7 +1655,9 @@ onUnmounted(stopAutoRefresh)
 
 @media (max-width: 980px) {
   .page-hero,
-  .content-grid {
+  .content-grid,
+  .compact-grid,
+  .coverage-grid {
     grid-template-columns: 1fr;
     display: grid;
   }
@@ -1545,7 +1666,8 @@ onUnmounted(stopAutoRefresh)
   .case-bars,
   .json-grid,
   .modality-example-grid,
-  .expand-json-grid {
+  .process-grid,
+  .evidence-card-grid {
     grid-template-columns: 1fr;
   }
 
