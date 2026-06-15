@@ -8,6 +8,7 @@ from api.business_tasks import _extract_result_metadata
 from enums import OrderStatus, RoutingStatus, UserRole
 from models import (
     BusinessObjectiveEvaluation,
+    Node,
     NodeBaseline,
     RoutingResourceEvent,
     SystemSetting,
@@ -127,6 +128,29 @@ async def _seed_stable_baselines(db_session, node_ids, task_type: str = "high_th
     await db_session.flush()
 
 
+async def _set_runtime_settings(db_session, **overrides):
+    value = {
+        "environment_mode": "production",
+        "intent_parser_mode": "llm",
+        "intent_rule_fallback_enabled": True,
+        "benchmark_routing_mode": "external",
+        "expert_mode": True,
+        "show_internal_controls": False,
+        "show_routing_dag_json": False,
+        **overrides,
+    }
+    row = (
+        await db_session.execute(select(SystemSetting).where(SystemSetting.key == "runtime_modes"))
+    ).scalar_one_or_none()
+    if row is None:
+        row = SystemSetting(key="runtime_modes", value=value)
+        db_session.add(row)
+    else:
+        row.value = value
+    await db_session.flush()
+    return value
+
+
 @pytest.mark.asyncio
 async def test_auth_bootstrap_and_login(client, db_session):
     bootstrap = await client.post(
@@ -242,12 +266,35 @@ async def test_admin_parse_one_uses_runtime_settings(client, db_session):
             "benchmark_routing_mode": "internal_auto",
         },
     )
+    db_session.add_all(
+        [
+            Node(
+                hostname="h99",
+                agent_address="http://127.0.0.1:8999",
+                management_ip="10.99.0.1",
+                business_ip="10.99.1.1",
+                node_kind="terminal",
+                is_schedulable=True,
+                is_routable=True,
+            ),
+            Node(
+                hostname="h100",
+                agent_address="http://127.0.0.1:8100",
+                management_ip="10.100.0.1",
+                business_ip="10.100.1.1",
+                node_kind="terminal",
+                is_schedulable=True,
+                is_routable=True,
+            ),
+        ]
+    )
+    await db_session.commit()
 
     response = await client.post(
         "/api/admin/intent-parser/parse-one",
         headers=headers,
         json={
-            "utterance": "矩阵乘法任务，从 compute-1 到 compute-2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"
+            "utterance": "矩阵乘法任务，从 h99 到 h100，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"
         },
     )
 
@@ -256,8 +303,10 @@ async def test_admin_parse_one_uses_runtime_settings(client, db_session):
     assert body["engine"] == "rule_parser"
     assert body["runtime_settings"]["intent_parser_mode"] == "rule"
     assert body["task_type"] == "high_throughput_matmul"
-    assert body["source_name"] == "compute-1"
-    assert body["destination_name"] == "compute-2"
+    assert body["source_name"] == "h99"
+    assert body["destination_name"] == "h100"
+    assert body["source_endpoint"]["business_ip"] == "10.99.1.1"
+    assert body["destination_endpoint"]["business_ip"] == "10.100.1.1"
     assert body["routing_dag"]["job_id"] == "preview"
     assert body["routing_dag"]["priority"] == 5
     assert body["routing_dag"]["edges"][0]["flow"]["priority"] == 5
@@ -1461,6 +1510,37 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
 
 
 @pytest.mark.asyncio
+async def test_routing_order_result_requires_claim(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-claim-required-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-claim-required-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    result_response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            ],
+        },
+    )
+
+    assert result_response.status_code == 409
+    assert result_response.json()["detail"] == "Please claim this order before submitting routing result"
+
+
+@pytest.mark.asyncio
 async def test_router_can_requeue_and_fail_routing_order_without_service_token(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-status-user")
@@ -1727,6 +1807,7 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
     node_ids, template_id = await _seed_business_fixture(client)
     await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
     headers, _user = await _auth_headers(client, db_session, username="benchmark-scope-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
     catalog_response = await client.post(
         "/api/business-template-catalog",
         json={
@@ -1813,6 +1894,7 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session):
     node_ids, template_id = await _seed_business_fixture(client)
     await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
     headers, _user = await _auth_headers(client, db_session, username="benchmark-routable-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
 
     catalog_response = await client.post(
         "/api/business-template-catalog",
@@ -1864,9 +1946,53 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_batch_auto_route_rejected_when_external_routing_configured(client, db_session):
+    node_ids, template_id = await _seed_business_fixture(client)
+    await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-external-route-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
+
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 1,
+            "benchmark_run_id": "external-route-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "external-route-run"},
+    )
+    assert route_response.status_code == 409
+
+    single_response = await client.post(f"/api/orders/{order_id}/auto-route", headers=headers)
+    assert single_response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_mock_auto_route_single_order_is_benchmark_only(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     headers, user = await _auth_headers(client, db_session, username="benchmark-single-route-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
     order = TaskOrder(
         template_id=template_id,
         name="normal pending order",
@@ -1881,7 +2007,7 @@ async def test_mock_auto_route_single_order_is_benchmark_only(client, db_session
     response = await client.post(f"/api/orders/{order.id}/auto-route", headers=headers)
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "自动路由仅支持业务测评工单"
+    assert response.json()["detail"] == "系统自动分配仅支持业务测评工单"
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,7 @@
 | 子任务节点 ID | `routing_input_dag.nodes[].task_node_id`，常见为 `source`、`compute`、`sink` |
 | 固定拓扑节点 | `routing_input_dag.nodes[].fixed_topology_node_id`，表示用户已指定源/目的真实节点 |
 | 算力选择 | 路由系统回写 `placements[].task_node_id=compute`、`topology_node_id=<nodes.hostname>`、可选 `gpu_device` |
-| 端点部署 | 正式业务默认由平台在 `source/sink` 固定拓扑节点部署端点容器；路由系统通常不需要回写 source/sink placement |
+| 端点部署 | 业务工单默认由平台在 `source/sink` 固定拓扑节点部署端点容器；路由系统通常不需要回写 source/sink placement |
 | GPU 独占 | 同一 `topology_node_id + gpu_device` 同一时刻只能分配给一个未释放任务 |
 | 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
 | 扩展信息 | 算法版本、路径、成本、租金、解释等统一放到 `metadata` 字典 |
@@ -81,17 +81,28 @@ ROUTER_PORT=8190
 ROUTER_HTTP_TIMEOUT_SEC=120
 ```
 
+当前管理节点联调状态：
+
+| 项 | 当前值 |
+|----|--------|
+| 平台后端 | `http://10.112.244.94:8181`，路由服务部署在管理节点时使用 `http://127.0.0.1:8181` |
+| 平台前端 | `http://10.112.244.94:8182` |
+| 路由模式 | 系统设置已切换为 `外部路由系统`，平台不会自动消费 pending 工单 |
+| 清理状态 | 历史测评工单、任务实例、未确认 release 事件已清理；可直接创建新工单联调 |
+
 ## 4. 平台已提供的 HTTP 接口
 
 这些接口是验收演示用内部接口，当前不需要 token 或签名。路由服务只要能访问平台后端地址即可。
 
 建议路由系统把 HTTP 超时设置为 **不少于 60 秒，推荐 120 秒**。`/result` 会物化实例并预分配端口，偶尔比普通查询慢；如果请求超时，先查询该工单状态，看到已进入 `network_binding_ready` 或 `completed` 就不要重复扣资源。
 
+平台系统设置中“业务测评路由”应选择 **外部路由系统**。该模式下平台会等待路由系统回写结果，并拒绝内置自动路由接口，避免测评工单绕过外部路由服务。
+
 | 动作 | 方法与路径 | 说明 |
 |------|------------|------|
 | 获取待路由工单 | `GET /api/routing-orders?status=pending&limit=100` | 平台返回 pending 工单和 DAG。也可以直接读 MySQL，但推荐先用接口联调。 |
 | 领取工单 | `PATCH /api/routing-orders/{order_id}/claim` | 平台把 `pending -> computing`，并发时只有一个路由进程能成功。 |
-| 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例，并返回实际端口绑定 `network_bindings`。 |
+| 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例，并返回实际端口绑定 `network_bindings`。该接口要求先 claim，pending 工单直接回写会返回 409。 |
 | 确认网络就绪 | `POST /api/routing-orders/{order_id}/network-ready` | 路由系统下发流表/QoS 后调用，平台才启动或注册启动计划。 |
 | 临时资源不足 | `PATCH /api/routing-orders/{order_id}/requeue` | 把 `computing -> pending`，稍后重试，不要丢工单。 |
 | 确定无法路由 | `PATCH /api/routing-orders/{order_id}/fail` | 把工单标记为 `failed`，需要写清失败原因。 |
@@ -938,7 +949,7 @@ curl -sS -X POST \
 硬性约定：
 1. 统一任务 ID 是 task_orders.id，也等于 routing_input_dag.job_id 和 routing_input_dag.order_id。
 2. 路由系统只负责选择 compute 节点、GPU 和路径解释，不要判断平台是否给 source/sink/compute 部署容器。
-3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改；正式业务中平台会在这些节点部署端点容器。
+3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改；业务工单中平台会在这些节点部署端点容器。
 4. GPU 任务必须独占 GPU，同一 topology_node_id + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
@@ -951,7 +962,7 @@ curl -sS -X POST \
 2. 调 GET /api/routing-orders?status=pending&limit=100 获取待路由工单。
 3. 对每个工单调 PATCH /api/routing-orders/{order_id}/claim，409 表示别人抢到了，跳过。
 4. 解析 routing_input_dag，读取 nodes 和 node_baselines，选择 compute 的 topology_node_id/gpu_device。
-5. 成功时调 POST /api/routing-orders/{order_id}/result，正式业务 placements 只需要回写 compute；平台会补齐 source/sink。
+5. 成功时调 POST /api/routing-orders/{order_id}/result，业务 placements 只需要回写 compute；平台会补齐 source/sink。未 claim 直接回写会返回 409。
 6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
 7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。
 8. 根据 network_bindings 下发流表；如需要 QoS，可由路由系统结合业务模态自行决定。
@@ -1010,10 +1021,10 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 
 | 模式 | 用途 |
 |------|------|
-| 外部路由系统 | 正式联调和验收模式，平台只创建 pending 工单，等待外部路由回写。 |
-| 开发调试路由流程 | 仅开发调试使用，可通过系统设置页切换，用于外部路由系统接入前验证部署闭环。 |
+| 外部路由系统 | 平台只创建 pending 工单，等待外部路由回写。该模式用于与路由服务联调。 |
+| 系统自动路由 | 平台内置的节点放置流程，可通过系统设置页切换，用于快速验证部署闭环。 |
 
-开发调试路由流程不是正式路由算法，不用于证明路由策略效果；正式材料和验收截图应明确使用外部路由系统模式，或在联调说明中标注“仅开发调试”。
+系统自动路由不是外部路由算法，不用于验证路由策略效果；与路由同学联调时请使用“外部路由系统”配置。
 
 ## 17. 业务目标成功率和路由的关系
 
@@ -1038,6 +1049,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 
 - `task_orders` 保存了 `routing_input_dag`。
 - 平台提供 pending 查询、claim、requeue、fail、result 回写、network-ready 确认接口，且这些演示接口不需要 token。
+- 平台系统设置为“外部路由系统”时，会拒绝 `/api/orders/batch-auto-route` 和 `/api/orders/{order_id}/auto-route` 内置自动路由接口。
 - 平台接收路由结果后会校验 GPU 冲突。
 - 平台会在 result 回写后返回实际 `network_bindings`，供路由系统下发流表/QoS。
 - 平台会等待 `network-ready` 后才启动外部路由模式的任务。
@@ -1051,7 +1063,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 2. 平台创建 3 个外部路由模式 benchmark 工单。
 3. 路由系统 claim 并回写结果，拿到 `network_bindings`。
 4. 路由系统下发网络规则后调用 `network-ready`。
-5. 前端确认工单变为已路由，能看到 compute/GPU。
+5. 前端确认工单变为已分配，能看到 compute/GPU。
 6. 平台启动任务并完成业务指标评估。
 7. 清理实例，确认路由系统能处理 release 事件。
 8. 扩展到 30 个工单的正式业务目标成功率测评。

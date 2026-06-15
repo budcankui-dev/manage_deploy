@@ -516,10 +516,10 @@ async def demo_route_conversation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Use the internal automatic routing path for a single user order demo."""
+    """Use the platform-managed routing path for a single user order."""
     conversation = await _get_owned_conversation(db, conversation_id, current_user.id)
     if conversation.status not in {ConversationStatus.AWAITING_ROUTING, ConversationStatus.READY_TO_SUBMIT}:
-        raise HTTPException(status_code=400, detail=f"当前状态不可演示路由：{conversation.status}")
+        raise HTTPException(status_code=400, detail=f"当前状态不可执行部署流程：{conversation.status}")
     if not conversation.materialized_order_id:
         raise HTTPException(status_code=400, detail="请先确认意图并创建工单")
 
@@ -552,7 +552,7 @@ async def demo_route_conversation(
     ).scalars().all()
     compute_nodes = [node for node in nodes if _is_demo_compute_candidate(node)]
     if not compute_nodes:
-        raise HTTPException(status_code=400, detail="没有可用计算节点，无法执行自动路由部署")
+        raise HTTPException(status_code=400, detail="没有可用计算节点，无法执行部署流程")
 
     source_destination = {name for name in (order.source_name, order.destination_name) if name}
     preferred_compute = [node for node in compute_nodes if node.hostname not in source_destination]
@@ -565,9 +565,9 @@ async def demo_route_conversation(
     await receive_order_routing_result(
         order_id=order.id,
         payload=RoutingResultPayload(
-            strategy="random_demo",
-            selected_strategy="自动路由",
-            external_routing_id=f"demo-route-{conversation.id[:8]}",
+            strategy="platform_managed",
+            selected_strategy="系统自动分配",
+            external_routing_id=f"platform-route-{conversation.id[:8]}",
             placements=[
                 RoutingPlacement(
                     task_node_id="compute",
@@ -576,8 +576,8 @@ async def demo_route_conversation(
                 )
             ],
             metadata={
-                "mode": "frontend_demo_random_route",
-                "description": "用户端演示兜底：随机选择一个可调度计算节点并复用正式工单路由回写逻辑。",
+                "mode": "platform_managed_route",
+                "description": "平台按当前可调度节点完成一次部署流程。",
             },
             require_network_ready=False,
         ),

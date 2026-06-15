@@ -130,6 +130,15 @@ BENCHMARK_TASK_CONFIGS = {
 }
 
 
+async def _ensure_internal_benchmark_routing_enabled(db: AsyncSession) -> None:
+    runtime_settings = await get_runtime_settings(db)
+    if runtime_settings.get("benchmark_routing_mode") != "internal_auto":
+        raise HTTPException(
+            status_code=409,
+            detail="当前系统配置为等待外部节点分配结果，请在系统设置中切换路由方式后再使用系统自动分配。",
+        )
+
+
 def _benchmark_run_id(order: TaskOrder) -> str | None:
     config = order.runtime_config or {}
     benchmark = config.get("benchmark")
@@ -1582,6 +1591,7 @@ async def batch_auto_route(
     current_user: User = Depends(get_current_user),
 ):
     """Auto-route all pending benchmark orders."""
+    await _ensure_internal_benchmark_routing_enabled(db)
     rows = await db.execute(
         select(TaskOrder).where(
             TaskOrder.status == OrderStatus.PENDING.value,
@@ -2134,6 +2144,7 @@ async def auto_route_order(
     current_user: User = Depends(get_current_user),
 ):
     """Built-in automatic routing strategy for evaluation orders."""
+    await _ensure_internal_benchmark_routing_enabled(db)
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
@@ -2141,7 +2152,7 @@ async def auto_route_order(
     if current_user.role != UserRole.ADMIN and order.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Cannot route orders owned by another user")
     if not order.is_benchmark:
-        raise HTTPException(status_code=400, detail="自动路由仅支持业务测评工单")
+        raise HTTPException(status_code=400, detail="系统自动分配仅支持业务测评工单")
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=400, detail=f"Order routing_status is '{order.routing_status}', expected 'pending'")
 

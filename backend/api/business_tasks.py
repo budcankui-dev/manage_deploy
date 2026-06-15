@@ -499,7 +499,7 @@ def _apply_video_gpu_success_guard(
         return
     evaluation.business_success = False
     reason = (
-        "视频AI推理正式验收要求 GPU+YOLO 推理路径，"
+        "视频AI推理要求 GPU+YOLO 推理路径，"
         f"当前 actual_backend={backend or '-'}, device={device or '-'}"
     )
     gpu_error = result_metadata.get("gpu_error") or result_metadata.get("detector_fallback_reason")

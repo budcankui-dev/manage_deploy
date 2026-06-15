@@ -220,6 +220,15 @@ async def receive_routing_order_result(
     db: AsyncSession = Depends(get_db),
 ):
     """Receive placements from an external router for a TaskOrder."""
+    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.materialized_instance_id and order.routing_status != RoutingStatus.COMPUTING.value:
+        raise HTTPException(
+            status_code=409,
+            detail="Please claim this order before submitting routing result",
+        )
     return await receive_order_routing_result(order_id=order_id, payload=payload, db=db)
 
 

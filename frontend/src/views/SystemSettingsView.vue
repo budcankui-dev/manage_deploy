@@ -49,11 +49,11 @@
           <el-card shadow="never" class="mode-card">
             <h3>业务测评路由</h3>
             <el-radio-group v-model="form.benchmark_routing_mode" class="vertical-radio">
-              <el-radio label="internal_auto">自动路由</el-radio>
+              <el-radio label="internal_auto">系统自动分配</el-radio>
               <el-radio label="external">外部路由系统</el-radio>
             </el-radio-group>
             <p class="form-hint">
-              自动路由由系统完成节点放置；外部路由系统由对接服务回写节点和 GPU 分配结果。
+              系统自动分配由平台完成节点放置；外部路由系统由对接服务回写节点和 GPU 分配结果。
               业务测评页只展示统一的“运行测评”入口，由系统按当前配置执行。
             </p>
           </el-card>
@@ -201,10 +201,11 @@ function modalityPriorityHint(modality) {
 
 function applySettings(data) {
   settings.value = data || {}
-  const legacyNotes = '真实环境用于专家验收和外部路由联调；开发环境用于本地验证和调试。'
-  const notes = data?.notes === legacyNotes
+  const loadedNotes = data?.notes || ''
+  const hasLegacyEnvironmentNote = ['真实', '开发'].some((word) => loadedNotes.includes(`${word}环境`))
+  const notes = hasLegacyEnvironmentNote
     ? '标准模式用于常规运行；调试模式用于联调、排障和快速回归。'
-    : data?.notes || ''
+    : loadedNotes
   Object.assign(form, {
     environment_mode: data?.environment_mode || 'production',
     intent_parser_mode: data?.intent_parser_mode || 'llm',

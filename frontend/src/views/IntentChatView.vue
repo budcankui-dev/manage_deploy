@@ -9,7 +9,7 @@
         <span v-if="conversation?.title" class="top-conv-title">{{ conversation.title }}</span>
       </div>
       <div class="top-bar-right">
-        <el-tag size="small" type="info" class="model-badge">Qwen (通义千问)</el-tag>
+        <el-tag size="small" type="info" class="model-badge">智能解析服务</el-tag>
         <div class="user-chip">{{ auth.username || 'user' }}</div>
       </div>
     </header>
@@ -56,7 +56,6 @@
       </div>
 
       <div class="sidebar-bottom">
-        <el-tag v-if="auth.isBypass" size="small" type="warning">开发绕过登录</el-tag>
         <div class="user-info">
           <div class="user-avatar-sm">{{ (auth.username || 'U')[0].toUpperCase() }}</div>
           <span class="username-label">{{ auth.username || 'user' }}</span>
@@ -88,7 +87,7 @@
           <div class="orders-toolbar-right">
             <el-select v-model="orderStatusFilter" placeholder="全部" clearable size="small" style="width: 130px">
               <el-option label="全部" value="" />
-              <el-option label="待路由" value="pending" />
+              <el-option label="待分配" value="pending" />
               <el-option label="已部署" value="materialized" />
               <el-option label="已完成" value="completed" />
               <el-option label="失败" value="failed" />
@@ -243,7 +242,7 @@
               <strong>任务已提交</strong>
               <p>{{ conversationStatusLabel }}</p>
             </div>
-            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">自动路由部署</el-button>
+            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
@@ -387,15 +386,15 @@
         </div>
         <div v-if="routing?.status === 'pending' || routing?.status === 'computing'" class="routing-waiting">
           <el-icon class="is-loading"><Loading /></el-icon>
-          <span>等待路由计算...</span>
+          <span>等待节点分配...</span>
         </div>
         <div class="actions">
           <el-button v-if="canConfirm" type="primary" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
-          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">自动路由部署</el-button>
+          <el-button v-if="canDemoRoute" type="primary" plain :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
           <el-button v-if="canSubmit" type="success" @click="submitTask">确认部署</el-button>
           <el-tag v-if="conversation?.status === 'submitted'" type="success">已部署</el-tag>
-          <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待路由</el-tag>
-          <el-tag v-else-if="conversation?.status === 'ready_to_submit'" type="info">路由完成</el-tag>
+          <el-tag v-else-if="conversation?.status === 'awaiting_routing'" type="warning">待分配</el-tag>
+          <el-tag v-else-if="conversation?.status === 'ready_to_submit'" type="info">待部署</el-tag>
           <el-tag v-else-if="conversation?.status === 'cancelled'" type="danger">已取消</el-tag>
         </div>
       </el-card>
@@ -404,8 +403,8 @@
 
     <!-- Bottom status bar -->
     <footer class="bottom-bar">
-      <span class="bottom-left">智联计算系统意图解析模块 v1.0</span>
-      <span class="bottom-right">模型: qwen-plus · DashScope API</span>
+      <span class="bottom-left">智联计算系统</span>
+      <span class="bottom-right">服务状态：在线</span>
     </footer>
   </div>
 </template>
@@ -480,14 +479,14 @@ const canConfirm = computed(() => draft.value && draft.value.parse_status === 'v
 const canSubmit = computed(() => conversation.value?.status === 'ready_to_submit')
 const conversationStatusLabel = computed(() => {
   const s = conversation.value?.status
-  return { drafting: '草稿', awaiting_routing: '待路由', ready_to_submit: '路由完成', submitted: '已部署', failed: '失败', cancelled: '已取消' }[s] || s || ''
+  return { drafting: '草稿', awaiting_routing: '待分配', ready_to_submit: '待部署', submitted: '已部署', failed: '失败', cancelled: '已取消' }[s] || s || ''
 })
 const canCancelOrder = computed(() => {
   const s = conversation.value?.status
   return s === 'awaiting_routing' || s === 'ready_to_submit'
 })
 const canDemoRoute = computed(() =>
-  conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
+  auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
 
 const uploadAction = computed(() => conversation.value ? `/api/uploads?conversation_id=${conversation.value.id}` : '')
@@ -592,8 +591,8 @@ function orderStatusType(status) {
 }
 
 const ORDER_STATUS_LABEL = {
-  pending: '待路由',
-  awaiting_routing: '路由中',
+  pending: '待分配',
+  awaiting_routing: '待分配',
   materialized: '已部署',
   completed: '已完成',
   failed: '失败',
@@ -602,11 +601,11 @@ const ORDER_STATUS_LABEL = {
 }
 
 const ROUTING_STATUS_LABEL = {
-  pending: '待路由',
-  computing: '路由计算中',
-  network_binding_ready: '等待网络确认',
-  completed: '路由完成',
-  failed: '路由失败',
+  pending: '待分配',
+  computing: '分配中',
+  network_binding_ready: '网络准备中',
+  completed: '已完成分配',
+  failed: '分配失败',
 }
 
 const TASK_STATUS_LABEL = {
@@ -645,9 +644,9 @@ function combinedStatusLabel(row) {
   if (row.status === 'completed') return '已完成'
   if (row.status === 'failed') return '失败'
   if (row.status === 'cancelled') return '已取消'
-  if (row.routing_status === 'network_binding_ready') return '等待网络确认'
-  if (row.routing_status === 'computing') return '路由计算中'
-  return '待路由'
+  if (row.routing_status === 'network_binding_ready') return '网络准备中'
+  if (row.routing_status === 'computing') return '分配中'
+  return '待分配'
 }
 
 function formatTaskStatus(status) {
@@ -670,8 +669,8 @@ function onUploadSuccess(response) {
 function formatStatus(status) {
   return ({
     drafting: '草稿中',
-    awaiting_routing: '待路由',
-    ready_to_submit: '可提交',
+    awaiting_routing: '待分配',
+    ready_to_submit: '待部署',
     submitted: '已提交',
     rejected: '已拒绝',
     failed: '失败',
@@ -935,11 +934,11 @@ async function confirmIntent() {
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
     await refreshList()
-    ElMessage.success('任务已提交，等待路由系统分配计算节点')
+    ElMessage.success('任务已提交，系统将继续处理')
     localMessages.value.push({
       id: 'submit-success',
       role: 'assistant',
-      content: `✅ 任务已提交，任务 ID：${data.id.slice(0, 8)}...（完整 ID：${data.id}）。路由系统将自动分配计算节点，完成后任务将按计划时间启动。`,
+      content: `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将继续完成节点分配和部署准备，您可以在“我的工单”查看进度。`,
       created_at: new Date().toISOString(),
     })
     await scrollToBottom()
@@ -980,9 +979,9 @@ async function demoRoute() {
     conversation.value = data
     await refreshList()
     if (showOrders.value) await loadOrders()
-    ElMessage.success('已完成自动路由部署')
+    ElMessage.success('部署流程已执行')
   } catch (err) {
-    ElMessage.error(err.response?.data?.detail || '自动路由部署失败')
+    ElMessage.error(err.response?.data?.detail || '部署流程执行失败')
   } finally {
     isDemoRouting.value = false
   }

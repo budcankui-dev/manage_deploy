@@ -602,14 +602,15 @@ function formatTime(value) {
 
 function orderStatusLabel(value) {
   return {
-    pending: '待路由',
-    routing: '路由中',
-    routed: '已路由',
-    materialized: '已物化',
+    pending: '待分配',
+    routing: '分配中',
+    routed: '待部署',
+    materialized: '已部署',
     running: '运行中',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
+    awaiting_routing: '待分配',
   }[value] || value || '-'
 }
 
@@ -627,11 +628,11 @@ function orderStatusType(value) {
 function routingStatusLabel(value) {
   return {
     not_required: '无需路由',
-    pending: '待路由',
-    computing: '计算中',
-    network_binding_ready: '等待网络确认',
-    completed: '已完成',
-    failed: '失败',
+    pending: '待分配',
+    computing: '分配中',
+    network_binding_ready: '网络准备中',
+    completed: '已完成分配',
+    failed: '分配失败',
   }[value] || value || '-'
 }
 

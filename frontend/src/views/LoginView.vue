@@ -4,8 +4,8 @@
       <div class="brand-logo">智</div>
       <h1 class="brand-title">智联计算系统</h1>
       <p class="brand-subtitle">意图解析模块 · Intelligent Computing Intent Parser</p>
-      <p class="brand-desc">基于通义千问大模型，智能解析计算任务意图，自动完成任务路由与部署</p>
-      <div class="model-badge">Powered by Qwen (通义千问) via DashScope</div>
+      <p class="brand-desc">智能解析计算任务意图，辅助完成任务分配与部署</p>
+      <div class="model-badge">智能解析服务</div>
     </div>
 
     <el-card class="auth-card">

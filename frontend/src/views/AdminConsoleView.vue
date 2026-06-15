@@ -28,8 +28,8 @@
         <div class="filter-bar">
           <el-select v-model="convFilter.status" placeholder="状态" clearable size="small" @change="loadConversations">
             <el-option label="草稿中" value="drafting" />
-            <el-option label="待路由" value="awaiting_routing" />
-            <el-option label="可提交" value="ready_to_submit" />
+            <el-option label="待分配" value="awaiting_routing" />
+            <el-option label="待部署" value="ready_to_submit" />
             <el-option label="已提交" value="submitted" />
             <el-option label="失败" value="failed" />
           </el-select>

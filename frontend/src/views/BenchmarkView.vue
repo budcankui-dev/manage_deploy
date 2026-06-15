@@ -146,7 +146,7 @@
           <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建测评工单</el-button>
         </div>
         <div class="pending-pill">
-          当前待路由工单：<strong>{{ pendingWorkCount }}</strong> 个
+          当前待分配工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
@@ -159,7 +159,7 @@
           <span class="step-num">3</span>
           <div>
             <div class="step-title">执行</div>
-            <div class="step-desc">实时查看待路由、已路由、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
+            <div class="step-desc">实时查看待分配、已分配、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
             <el-button size="small" type="primary" :loading="routeLoading || startLoading || settingsLoading" @click="runEvaluationFlow">
@@ -173,7 +173,7 @@
         <div class="route-mode-title">
           <span>路由方式</span>
           <el-radio-group v-model="settingsForm.benchmark_routing_mode" size="small">
-            <el-radio-button label="internal_auto">自动路由</el-radio-button>
+            <el-radio-button label="internal_auto">系统自动分配</el-radio-button>
             <el-radio-button label="external">外部路由系统</el-radio-button>
           </el-radio-group>
         </div>
@@ -197,11 +197,11 @@
       <div class="status-grid">
         <div class="status-cell waiting">
           <div class="status-num">{{ executionStats.waitingRoute }}</div>
-          <div class="status-label">待路由</div>
+          <div class="status-label">待分配</div>
         </div>
         <div class="status-cell routed">
           <div class="status-num">{{ executionStats.routed }}</div>
-          <div class="status-label">已路由</div>
+          <div class="status-label">已分配</div>
         </div>
         <div class="status-cell running">
           <div class="status-num">{{ executionStats.running }}</div>
@@ -528,7 +528,7 @@ const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_
 
 const routeModeLabel = computed(() =>
   showInternalControls.value
-    ? (routeMode.value === 'external' ? '外部路由系统' : '自动路由')
+    ? (routeMode.value === 'external' ? '外部路由系统' : '系统自动分配')
     : '按系统配置执行'
 )
 
@@ -830,9 +830,9 @@ function metricMeaningLabel(metricKey) {
 function orderStatusLabel(value) {
   const labels = {
     pending: '待提交',
-    routing: '路由中',
-    routed: '已路由',
-    materialized: '已物化',
+    routing: '分配中',
+    routed: '已分配',
+    materialized: '已部署',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
@@ -843,11 +843,11 @@ function orderStatusLabel(value) {
 function routingStatusLabel(value) {
   const labels = {
     not_required: '无需路由',
-    pending: '待路由',
-    computing: '计算中',
-    network_binding_ready: '等待网络确认',
-    completed: '已完成',
-    failed: '失败',
+    pending: '待分配',
+    computing: '分配中',
+    network_binding_ready: '网络准备中',
+    completed: '已完成分配',
+    failed: '分配失败',
   }
   return labels[value] || value || '—'
 }
@@ -905,7 +905,7 @@ function gpuDisplay(row) {
 }
 
 function summarizePlacements(placements) {
-  if (!placements) return '待路由'
+  if (!placements) return '待分配'
   if (Array.isArray(placements)) {
     return placements.map(p => {
       const gpu = p.gpu_device != null ? ` GPU ${p.gpu_device}` : ''
@@ -1286,7 +1286,7 @@ async function doAutoRoute() {
       benchmark_run_id: currentBenchmarkRunId.value || null,
       task_type: taskType.value,
     })
-    ElMessage.success(`已路由 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
+    ElMessage.success(`已分配 ${data.routed} 条工单${data.failed?.length ? `，${data.failed.length} 条失败` : ''}`)
     await loadOrders()
     return data
   } finally {
@@ -1301,9 +1301,9 @@ async function refreshExternalRoutingStatus() {
     const waiting = orderStats.value.waitingRoute
     const routed = orderStats.value.routed + orderStats.value.running + orderStats.value.completed
     if (waiting > 0) {
-      ElMessage.info(`仍有 ${waiting} 条工单待外部路由系统回写；已路由/执行中/完成 ${routed} 条。`)
+      ElMessage.info(`仍有 ${waiting} 条工单待分配；已分配/执行中/完成 ${routed} 条。`)
     } else if (orders.value.length) {
-      ElMessage.success('当前轮次工单已全部完成路由，可继续运行测评。')
+      ElMessage.success('当前轮次工单已全部完成分配，可继续运行测评。')
     } else {
       ElMessage.warning('当前没有测试工单，请先创建测评工单。')
     }
@@ -1386,7 +1386,7 @@ async function startFullFlow() {
     await createBatch()
     if (routeMode.value === 'external') {
       await refreshExternalRoutingStatus()
-      ElMessage.info('已创建工单，请等待路由结果回写完成后再点击运行测评。')
+      ElMessage.info('已创建工单，请等待节点分配完成后再点击运行测评。')
       return
     }
     await runEvaluationFlow()

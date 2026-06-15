@@ -148,16 +148,16 @@ async function cancelOrder() {
 
 function formatStatus(status) {
   return {
-    pending: '待路由',
-    routing: '路由中',
-    routed: '已路由',
+    pending: '待分配',
+    routing: '分配中',
+    routed: '待部署',
     materialized: '已部署',
     running: '运行中',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
-    awaiting_routing: '待路由',
-    orphaned: '孤立',
+    awaiting_routing: '待分配',
+    orphaned: '待处理',
   }[status] || status || '-'
 }
 

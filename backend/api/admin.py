@@ -373,10 +373,14 @@ async def parse_one(
     context = payload.get("context")
     expected = payload.get("expected")
     runtime_settings = await get_runtime_settings(db)
+    nodes_result = await db.execute(
+        select(Node.hostname).where(Node.deleted_at.is_(None))
+    )
+    valid_nodes = [row[0] for row in nodes_result.fetchall()]
     result, trace = await run_intent_workflow(
         utterance,
         context,
-        valid_nodes=VALID_NODES,
+        valid_nodes=valid_nodes,
         runtime_settings=runtime_settings,
     )
     response = _parse_result_payload(result)
