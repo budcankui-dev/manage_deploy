@@ -787,6 +787,50 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
 
 
 @pytest.mark.asyncio
+async def test_batch_benchmark_respects_fixed_endpoint_names(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-fixed-endpoint-user")
+
+    for idx, hostname in enumerate(["h1", "h2"], start=10):
+        response = await client.post(
+            "/api/nodes",
+            json={
+                "hostname": hostname,
+                "display_name": hostname,
+                "agent_address": f"http://127.0.0.1:81{idx}",
+                "management_ip": f"10.0.0.{idx}",
+                "business_ip": f"10.0.1.{idx}",
+                "node_kind": "terminal",
+                "is_schedulable": True,
+                "is_routable": True,
+            },
+        )
+        assert response.status_code == 200
+
+    response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "fixed-endpoint-run",
+            "source_name": "h1",
+            "destination_name": "h2",
+        },
+    )
+
+    assert response.status_code == 200
+    order_id = response.json()["order_ids"][0]
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+
+    assert order.source_name == "h1"
+    assert order.destination_name == "h2"
+    assert order.routing_input_dag["nodes"][0]["fixed_topology_node_id"] == "h1"
+    assert order.routing_input_dag["nodes"][2]["fixed_topology_node_id"] == "h2"
+
+
+@pytest.mark.asyncio
 async def test_order_routing_result_persists_router_metadata_and_is_idempotent(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="route-metadata-user")

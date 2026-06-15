@@ -1441,6 +1441,8 @@ class BatchBenchmarkRequest(BaseModel):
     benchmark_run_id: Optional[str] = None
     data_profile: dict = Field(default_factory=dict)
     routing_strategy: str = "resource_guarantee"
+    source_name: Optional[str] = None
+    destination_name: Optional[str] = None
 
 
 @router.post("/batch-benchmark")
@@ -1466,8 +1468,17 @@ async def create_batch_benchmark(
     runtime_settings = await get_runtime_settings(db)
     modality_priority_map = modality_priority_map_from_settings(runtime_settings)
     endpoint_nodes = await _deployable_endpoint_nodes(db)
+    endpoint_by_hostname = {node.hostname: node for node in endpoint_nodes}
+    fixed_source = endpoint_by_hostname.get(payload.source_name or "") if payload.source_name else None
+    fixed_sink = endpoint_by_hostname.get(payload.destination_name or "") if payload.destination_name else None
+    if payload.source_name and not fixed_source:
+        raise HTTPException(status_code=400, detail=f"source_name is not a deployable endpoint node: {payload.source_name}")
+    if payload.destination_name and not fixed_sink:
+        raise HTTPException(status_code=400, detail=f"destination_name is not a deployable endpoint node: {payload.destination_name}")
     for i in range(payload.count):
-        source_node, sink_node = _pick_endpoint_pair(endpoint_nodes, i)
+        auto_source_node, auto_sink_node = _pick_endpoint_pair(endpoint_nodes, i)
+        source_node = fixed_source or auto_source_node
+        sink_node = fixed_sink or auto_sink_node
         source_name = source_node.hostname
         destination_name = sink_node.hostname
         order_name = f"benchmark-{payload.task_type}-{run_id}-{i + 1}"

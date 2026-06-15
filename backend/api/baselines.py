@@ -10,9 +10,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from enums import NodeKind
 from models import Node as NodeModel, NodeBaseline
 
 router = APIRouter(prefix="/api/baselines", tags=["baselines"])
+
+
+COMPUTE_NODE_KINDS = {NodeKind.WORKER.value, NodeKind.BOTH.value}
+
+
+def _is_compute_node(node: NodeModel) -> bool:
+    return str(node.node_kind or NodeKind.WORKER.value).lower() in COMPUTE_NODE_KINDS
 
 
 class BaselineCreate(BaseModel):
@@ -153,7 +161,7 @@ class BatchBaselineRunRequest(BaseModel):
 
 @router.post("/batch-run")
 async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession = Depends(get_db)):
-    """对所有可调度节点批量运行远程基准测试。"""
+    """对所有可调度计算节点批量运行远程基准测试。"""
     from services.baseline_runner import BENCHMARK_PROFILES, run_baseline_on_node, run_benchmark
 
     if payload.task_type not in BENCHMARK_PROFILES:
@@ -162,6 +170,7 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
     nodes = (await db.execute(
         select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
     )).scalars().all()
+    nodes = [node for node in nodes if _is_compute_node(node)]
 
     succeeded, failed = [], []
     for node in nodes:

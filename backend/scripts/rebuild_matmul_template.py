@@ -37,7 +37,14 @@ WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
 #   <registry-host:port>/scientific-matmul
 # For local single-host runs the default stays the registry-less name.
 WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "manage-deploy/scientific-matmul")
-MATMUL_IMAGE = f"{WORKER_IMAGE}:{WORKER_TAG}"
+
+# Role-specific image overrides let source/sink use a small endpoint image
+# while compute keeps the CUDA/CuPy image.  If no endpoint override is provided
+# the legacy single-image template is preserved.
+COMPUTE_IMAGE_REPO = os.environ.get("MATMUL_COMPUTE_IMAGE", WORKER_IMAGE)
+ENDPOINT_IMAGE_REPO = os.environ.get("MATMUL_ENDPOINT_IMAGE", WORKER_IMAGE)
+MATMUL_COMPUTE_IMAGE = f"{COMPUTE_IMAGE_REPO}:{WORKER_TAG}"
+MATMUL_ENDPOINT_IMAGE = f"{ENDPOINT_IMAGE_REPO}:{WORKER_TAG}"
 
 SOURCE_PORT = 18801
 COMPUTE_PORT = 18802
@@ -146,7 +153,7 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "source",
                     "name": "source",
-                    "image": MATMUL_IMAGE,
+                    "image": MATMUL_ENDPOINT_IMAGE,
                     "command": "python /app/src/source_main.py",
                     "port_defs": [auto_port("source", "source HTTP", SOURCE_PORT)],
                     "node_id": node_ids["compute-1"],
@@ -155,7 +162,7 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "compute",
                     "name": "compute",
-                    "image": MATMUL_IMAGE,
+                    "image": MATMUL_COMPUTE_IMAGE,
                     "command": "python /app/src/compute_main.py",
                     "port_defs": [auto_port("compute", "compute HTTP", COMPUTE_PORT)],
                     "node_id": node_ids["compute-2"],
@@ -164,7 +171,7 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
                 {
                     "client_id": "sink",
                     "name": "sink",
-                    "image": MATMUL_IMAGE,
+                    "image": MATMUL_ENDPOINT_IMAGE,
                     "command": "python /app/src/sink_main.py",
                     "port_defs": [auto_port("sink", "sink HTTP", SINK_PORT)],
                     "node_id": node_ids["compute-3"],
@@ -218,7 +225,8 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
         return {
             "node_ids": node_ids,
             "matmul_template_id": template_id,
-            "worker_image": MATMUL_IMAGE,
+            "compute_image": MATMUL_COMPUTE_IMAGE,
+            "endpoint_image": MATMUL_ENDPOINT_IMAGE,
         }
 
 

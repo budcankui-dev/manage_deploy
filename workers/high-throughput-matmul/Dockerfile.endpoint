@@ -1,0 +1,20 @@
+# Lightweight source/sink image for the matmul pipeline.
+#
+# Compute still uses the CUDA/CuPy image from Dockerfile.  This image only
+# needs to build input jobs, receive results, upload evidence, and report
+# metrics, so it intentionally avoids CUDA dependencies.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    httpx==0.28.1 \
+    minio==7.2.15
+
+COPY _common /app/_common
+COPY high-throughput-matmul/src/source_main.py /app/src/source_main.py
+COPY high-throughput-matmul/src/sink_main.py /app/src/sink_main.py
+
+ENV PYTHONPATH=/app/src:/app
+CMD ["python", "/app/src/source_main.py"]

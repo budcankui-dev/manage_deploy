@@ -28,8 +28,8 @@
         <div class="step-header">
           <span class="step-num">1</span>
           <div>
-            <div class="step-title">基线</div>
-            <div class="step-desc">直接列出所有可调度节点；不稳定节点保留展示，但不纳入本轮候选计算节点。</div>
+            <div class="step-title">计算节点基线</div>
+            <div class="step-desc">仅测试计算节点；终端节点只作为业务源/目的节点参与路由，不参与基线测试。</div>
           </div>
           <el-button
             class="header-action"
@@ -39,7 +39,7 @@
             :loading="batchBaselineLoading"
             @click="runBatchBaseline"
           >
-            批量测试所有节点
+            批量测试计算节点
           </el-button>
         </div>
       </template>
@@ -558,8 +558,12 @@ const baselineRunCount = computed(() => (
   taskType.value === 'low_latency_video_pipeline' ? 5 : 3
 ))
 
+function isComputeNode(node) {
+  return ['worker', 'both'].includes(String(node.node_kind || 'worker').toLowerCase())
+}
+
 const nodeBaselineRows = computed(() =>
-  nodes.value.filter(n => n.is_schedulable).map(n => {
+  nodes.value.filter(n => n.is_schedulable && isComputeNode(n)).map(n => {
     const bl = baselines.value.find(b => b.node_id === n.id)
     return {
       node_id: n.id,
@@ -581,8 +585,18 @@ const nodeBaselineRows = computed(() =>
 )
 
 const excludedNodeRows = computed(() =>
-  nodes.value.filter(n => !n.is_schedulable || n.node_kind === 'admin')
+  nodes.value.filter(n => !n.is_schedulable || !isComputeNode(n))
 )
+
+const defaultEndpointPair = computed(() => {
+  const endpoints = nodes.value
+    .filter(n => n.is_schedulable !== false && ['terminal', 'worker', 'both'].includes(String(n.node_kind || 'worker').toLowerCase()))
+    .map(n => n.hostname)
+  return {
+    source_name: endpoints.includes('h1') ? 'h1' : '',
+    destination_name: endpoints.includes('h2') ? 'h2' : '',
+  }
+})
 
 const missingBaselineCount = computed(() =>
   nodeBaselineRows.value.filter(row => row.baseline_value == null || row.stable === false).length
@@ -958,6 +972,7 @@ function formatDiagnosticGpuError(diagnostics) {
 
 function excludedNodeReason(node) {
   if (node.node_kind === 'admin') return '管理节点不参与业务调度'
+  if (node.node_kind === 'terminal') return '终端节点只作为源/目的节点，不做计算基线'
   if (node.is_schedulable === false) return '不可调度或 Node Agent 不可达'
   return '未纳入当前业务调度'
 }
@@ -1136,7 +1151,7 @@ async function runBatchBaseline() {
   batchBaselineLoading.value = true
   try {
     const { data } = await baselinesApi.batchRun({ task_type: taskType.value, runs: baselineRunCount.value })
-    ElMessage.success(`批量基线测试完成：${data.succeeded} 个节点成功${data.failed ? `，${data.failed} 个失败` : ''}`)
+    ElMessage.success(`批量基线测试完成：${data.succeeded} 个计算节点成功${data.failed ? `，${data.failed} 个失败` : ''}`)
     await loadBaselines()
   } finally {
     batchBaselineLoading.value = false
@@ -1152,6 +1167,7 @@ async function createBatch() {
       count: benchmarkForm.count,
       benchmark_run_id: runId,
       data_profile: buildBenchmarkDataProfile(),
+      ...defaultEndpointPair.value,
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条测评工单`)
