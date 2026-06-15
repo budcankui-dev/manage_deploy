@@ -210,7 +210,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="终端节点如果要承载 source/sink 业务容器，需要开启参与任务调度并部署 Node Agent；如果只用于路由路径检查，可关闭任务调度，仅参与外部路由。"
+          title="终端节点建议也部署 Node Agent 和 Docker，并开启参与任务调度；具体任务是否部署 source/sink 容器由工单部署策略决定，路由系统只关心路径和计算节点选择。"
         />
         <div class="form-grid compact">
           <el-form-item label="参与任务调度">

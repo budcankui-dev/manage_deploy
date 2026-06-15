@@ -251,8 +251,8 @@ WHERE deleted_at IS NULL
 
 - `node_kind in ('worker', 'both')` 且 `is_schedulable=1` 的节点可作为 `compute` 候选。
 - `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
-- 正式业务要部署 `source/sink` 端点容器，因此源/目的真实节点还必须 `is_schedulable=1`，并部署 Node Agent、Docker、业务镜像拉取能力。
-- 如果某终端节点没有 Docker/Node Agent，只能用于纯路由路径检查；这类节点应设置 `is_schedulable=0, is_routable=1`，不要用于业务目标成功率测评。
+- 新增终端节点时推荐也部署 Docker 和 Node Agent，并设置 `is_schedulable=1, is_routable=1`，这样同一台终端既能承载 source/sink 容器，也能只作为路由端点。
+- 是否为 source/sink 创建容器由平台工单的 `platform_deployment.deployable_roles` 决定，不由路由系统决定。
 - 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统应按 `nodes.hostname` 匹配。
 - 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id`。
 
@@ -261,7 +261,8 @@ WHERE deleted_at IS NULL
 | 场景 | 推荐配置 | 是否可用于业务目标测评 | 说明 |
 |------|----------|------------------------|------|
 | 终端节点需要承载 source/sink 容器 | `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
-| 终端节点只有网络路径，没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 只用于 route-only 路径检查；平台不会在其上创建业务实例。 |
+| 终端节点参与某些任务但该任务不部署 source/sink 容器 | 通常仍为 `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 视任务而定 | 机器具备部署能力，但当前任务可用 `deployable_roles=["compute"]` 或 `[]` 只建立路由路径。 |
+| 少数纯网络节点确实没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 仅作为兼容场景用于 route-only 路径检查，不用于需要业务容器的测评。 |
 | 计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。 |
 | 专用计算节点 | `node_kind=worker`，`is_schedulable=1`，`is_routable=1` | 可以 | 路由系统可把它作为 `compute` placement，并按 GPU 独占规则扣减资源。 |
 
@@ -535,7 +536,7 @@ routing_resource_events(
 - `task_node_id` 是任务内部子任务节点名，不是物理节点名。
 - 用户输入的源节点和目的节点写在 `fixed_topology_node_id`。
 - 源节点和目的节点可以是物理终端节点，也可以是物理计算节点；在 DAG 里它们仍然只是 `source/sink` 子任务角色。
-- 正式业务默认会在 source/sink 所在真实节点启动端点容器，所以这些真实节点必须可调度。纯路由检查场景可由平台设置 `platform_deployment.deployable_roles=[]`，此时不创建业务容器，也不会产生业务指标。
+- source/sink 是否启动端点容器由平台工单的 `platform_deployment.deployable_roles` 决定；例如 `["source","compute","sink"]` 表示三类角色都部署，`["compute"]` 表示 source/sink 只作为路由端点。
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
@@ -939,7 +940,7 @@ curl -sS -X POST \
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。
 7. POST /result 后必须读取响应里的 network_bindings，并按其中 src_ip/dst_ip/dst_port 下发网络规则。
 8. 网络规则下发完成后必须调用 POST /api/routing-orders/{order_id}/network-ready。
-9. 没有 Docker/Node Agent 的终端节点只能用于 route-only 路径检查，不用于业务目标成功率测评。
+9. 终端机器通常也具备容器部署能力；某个任务是否部署 source/sink 容器由平台工单决定，路由系统不要自行推断。
 
 需要实现：
 1. 调 GET /api/routing-resource-events?event_type=release&unacked=true 读取释放事件，把 GPU 加回自己的资源表，再调 POST /api/routing-resource-events/ack。
