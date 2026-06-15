@@ -682,17 +682,19 @@ function nodeStatusLabel(value) {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   margin-bottom: 16px;
-  border: 1px solid var(--border-subtle, #e5e7eb);
+  border: 1px solid #d8e1ea;
   border-radius: 14px;
-  background: linear-gradient(135deg, #f8fbff 0%, #f6faf6 100%);
+  background: linear-gradient(135deg, #ffffff 0%, #f2f8f5 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
 }
 
 .overview-card h2 {
   margin: 0 0 6px;
   font-size: 20px;
-  color: var(--text-primary, #1f2937);
+  color: #111827;
+  line-height: 1.45;
 }
 
 .eyebrow {
@@ -706,8 +708,13 @@ function nodeStatusLabel(value) {
 .summary,
 .task-summary {
   margin: 0;
-  color: var(--text-secondary, #607085);
+  color: #334155;
   line-height: 1.6;
+}
+
+.overview-card .summary {
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .overview-tags {
@@ -815,7 +822,7 @@ function nodeStatusLabel(value) {
 .objective-meaning,
 .result-verdict p {
   margin: 0;
-  color: var(--text-secondary, #607085);
+  color: #334155;
   line-height: 1.6;
 }
 
@@ -828,7 +835,7 @@ function nodeStatusLabel(value) {
 .pipeline-steps {
   margin: 0 0 16px;
   padding-left: 20px;
-  color: var(--text-secondary, #607085);
+  color: #334155;
   line-height: 1.75;
   font-size: 13px;
 }
@@ -912,7 +919,7 @@ function nodeStatusLabel(value) {
   align-items: center;
   gap: 10px;
   margin: 12px 0;
-  color: var(--text-secondary, #607085);
+  color: #334155;
   font-size: 13px;
 }
 
@@ -946,13 +953,13 @@ function nodeStatusLabel(value) {
   padding: 12px;
   border-radius: 8px;
   background: var(--bg-tertiary, #f8fafc);
-  color: var(--text-secondary, #607085);
+  color: #334155;
   font-size: 12px;
   line-height: 1.5;
 }
 
 .muted {
-  color: var(--text-muted, #8b95a1);
+  color: #64748b;
 }
 
 .warning-text {

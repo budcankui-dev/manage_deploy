@@ -152,16 +152,16 @@ export function describeRuntimePlan(taskType, plan) {
   if (!plan) return []
   if (taskType === 'high_throughput_matmul') {
     return [
-      { label: '算法', value: plan.algorithm || 'batched_matmul' },
-      { label: '精度', value: plan.precision || '-' },
-      { label: 'GPU', value: plan.use_gpu ? '是' : '否' },
+      { label: '执行方式', value: '批量矩阵乘法计算' },
+      { label: '计算资源', value: plan.use_gpu ? '优先使用路由分配的 GPU 计算节点' : '按路由分配的计算节点执行' },
+      { label: '结果采集', value: '统计有效计算吞吐量并回传平台' },
     ]
   }
   if (taskType === 'low_latency_video_pipeline') {
     return [
-      { label: '编码', value: plan.codec || '-' },
-      { label: '预设', value: plan.preset || '-' },
-      { label: '模式', value: plan.process_mode || '-' },
+      { label: '执行方式', value: '固定视频抽帧后进行目标检测推理' },
+      { label: '计算资源', value: '优先使用路由分配的 GPU 推理节点' },
+      { label: '结果采集', value: '统计帧推理时延并生成带框预览图' },
     ]
   }
   return Object.entries(plan).map(([key, value]) => ({
