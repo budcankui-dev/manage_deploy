@@ -90,6 +90,18 @@ curl -sS http://h节点管理IP:8001/health
 
 业务面需要业务容器之间访问动态端口。迁移到新网络后，路由系统应基于新的 `nodes.business_ip` / `nodes.business_ipv6` 下发路径或流表。
 
+## 2026-06-15 接入结果
+
+已在 `h1-h13` 终端节点完成实测接入：
+
+- 13 台终端节点均可通过 `switchpc1@<management_ip>:22` 登录。
+- 13 台终端节点均已安装 Docker，并配置私有仓库 `10.112.244.94:5000`。
+- 13 台终端节点均已启动 `manage-node-agent` 容器，镜像为 `10.112.244.94:5000/node-agent:dev`。
+- 管理节点访问 `http://<terminal_ip>:8001/health` 均返回 `{"status":"healthy"}`。
+- 管理平台 `nodes` 表已注册 `h1-h13`，节点类型为 `terminal`，并同步到资源信息：`cpu_cores=2`、`memory_mb=3945`、`gpu_count=0`。
+
+注意：当前终端节点系统盘容量较小，适合部署轻量 source/sink/route-only 辅助容器；如果后续需要在终端节点长期运行大镜像业务，建议先规划 Docker 数据目录或额外挂载数据盘。
+
 ## 给路由系统的影响
 
 新增终端节点不改变接口。路由系统只需要动态读取 `nodes` 表：
