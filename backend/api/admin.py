@@ -6,7 +6,7 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +37,14 @@ from services.intent_batch_eval import (
     run_rule_evaluation,
     submit_llm_batch_evaluation,
     score_parsed_result,
+)
+from services.intent_online_eval import (
+    ONLINE_REPORT_PATH,
+    fail_online_evaluation,
+    online_evaluation_is_running,
+    read_online_status,
+    run_online_evaluation,
+    start_online_evaluation,
 )
 from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
@@ -73,6 +81,44 @@ def _parse_result_payload(result) -> dict[str, Any]:
         "assistant_message": result.assistant_message,
         "parser_name": result.parser_name,
         "parser_version": result.parser_version,
+    }
+
+
+def _optional_int(payload: dict[str, Any], key: str, default: int | None = None) -> int | None:
+    value = payload.get(key)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _optional_float(payload: dict[str, Any], key: str, default: float) -> float:
+    value = payload.get(key)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
+def _optional_bool(payload: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _online_eval_params(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": payload.get("model"),
+        "limit": _optional_int(payload, "limit"),
+        "concurrency": _optional_int(payload, "concurrency", 4),
+        "retries": _optional_int(payload, "retries", 2),
+        "retry_delay_seconds": _optional_float(payload, "retry_delay_seconds", 1.0),
+        "resume": _optional_bool(payload, "resume", False),
     }
 
 
@@ -415,10 +461,11 @@ async def get_intent_eval_report(
     report_type: str,
     _admin: User = Depends(require_admin),
 ):
-    """读取完整评测报告。report_type 支持 rule 或 llm。"""
+    """读取完整评测报告。report_type 支持 rule、llm 或 online。"""
     report_paths = {
         "rule": RULE_REPORT_PATH,
         "llm": LLM_REPORT_PATH,
+        "online": ONLINE_REPORT_PATH,
     }
     path = report_paths.get(report_type)
     if not path:
@@ -434,12 +481,13 @@ async def download_intent_eval_file(
     file_type: str,
     _admin: User = Depends(require_admin),
 ):
-    """下载固定数据集、评测报告和最近一次 Batch 相关文件。"""
+    """下载固定数据集、评测报告和历史 Batch 相关文件。"""
     latest_job = read_latest_batch_job()
     paths = {
         "dataset": DATASET_PATH,
         "rule-report": RULE_REPORT_PATH,
         "llm-report": LLM_REPORT_PATH,
+        "online-report": ONLINE_REPORT_PATH,
         "batch-job": BATCH_DIR / "latest.json",
     }
     if latest_job:
@@ -463,6 +511,57 @@ async def run_intent_eval_rule(
 ):
     """运行固定数据集的本地规则解析评测，用于快速回归。"""
     return run_rule_evaluation()
+
+
+@router.post("/intent-parser/evaluations/llm-online/run")
+async def run_intent_eval_llm_online(
+    background_tasks: BackgroundTasks,
+    payload: dict[str, Any] | None = None,
+    _admin: User = Depends(require_admin),
+):
+    """使用在线 chat/completions API 逐条运行固定数据集评测。"""
+    payload = payload or {}
+    try:
+        if online_evaluation_is_running():
+            raise HTTPException(status_code=409, detail="在线意图评测正在运行，请等待完成后再启动")
+        params = _online_eval_params(payload)
+        status = start_online_evaluation(**params)
+        background_tasks.add_task(_run_online_evaluation_background, {
+            **params,
+            "evaluation_id": status.get("evaluation_id"),
+            "started_at": status.get("started_at"),
+        })
+        return status
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def _run_online_evaluation_background(params: dict[str, Any]) -> None:
+    try:
+        await run_online_evaluation(**params)
+    except Exception as exc:  # noqa: BLE001 - surface background failure to UI.
+        fail_online_evaluation(params.get("evaluation_id"), str(exc))
+
+
+@router.post("/intent-parser/evaluations/llm-online/run-sync")
+async def run_intent_eval_llm_online_sync(
+    payload: dict[str, Any] | None = None,
+    _admin: User = Depends(require_admin),
+):
+    """同步运行在线评测，主要用于脚本和排障。"""
+    payload = payload or {}
+    try:
+        return await run_online_evaluation(**_online_eval_params(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/intent-parser/evaluations/llm-online/status")
+async def get_intent_eval_llm_online_status(
+    _admin: User = Depends(require_admin),
+):
+    """返回在线逐条评测的最近进度。"""
+    return read_online_status() or {"status": "idle"}
 
 
 @router.post("/intent-parser/evaluations/llm-batch/submit")

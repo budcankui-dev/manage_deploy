@@ -19,7 +19,7 @@
           <el-select
             v-model="selectedModel"
             placeholder="选择大模型"
-            :disabled="batchSubmitting || !dashscopeConfigured"
+            :disabled="onlineRunning || !dashscopeConfigured"
           >
             <el-option
               v-for="model in evalModelOptions"
@@ -34,12 +34,19 @@
           size="large"
           @click="runOfficialEvaluation"
           :loading="officialRunning"
-          :disabled="isBatchActive || (dashscopeConfigured && !selectedModel)"
+          :disabled="dashscopeConfigured && !selectedModel"
         >
           运行意图参数解析准确率评测
         </el-button>
         <div class="secondary-actions">
           <el-button @click="loadLatest" :loading="loading">更新评测看板</el-button>
+        </div>
+        <div v-if="onlineStatus?.status === 'running'" class="online-progress">
+          <div class="case-row-title">
+            <span>当前评测进度</span>
+            <strong>{{ onlineProgressText }}</strong>
+          </div>
+          <el-progress :percentage="onlineProgressPercent" />
         </div>
       </div>
     </header>
@@ -50,7 +57,7 @@
       type="info"
       show-icon
       :closable="false"
-      title="当前将使用与用户端一致的意图解析流程完成评测。"
+      title="当前未配置在线大模型，将使用系统解析流程完成本地回归评测。"
     />
     <el-alert
       v-if="hasStaleReport"
@@ -315,7 +322,7 @@
             <el-card class="inner-card">
               <template #header>
                 <div class="card-header">
-                  <span>异步评测进度</span>
+                  <span>历史批量任务诊断</span>
                   <el-tag v-if="batchJob" size="small" :type="batchStatusType(batchJob.status)">
                     {{ batchStatusLabel(batchJob.status) }}
                   </el-tag>
@@ -353,7 +360,7 @@
                   <el-tag size="small" type="success">验收留档</el-tag>
                 </div>
               </template>
-              <p class="panel-hint">用于复核数据集来源、当前评测结果和批处理过程文件。</p>
+              <p class="panel-hint">用于复核数据集来源和当前评测结果文件。</p>
               <div class="file-download-list">
                 <el-button plain @click="downloadEvalFile('dataset')">下载原始数据集</el-button>
                 <el-button type="success" plain @click="downloadCurrentReport" :disabled="!officialReport">
@@ -538,6 +545,8 @@ import { routingPolicyLabel } from '@/constants/routingPolicy'
 const latest = ref(null)
 const loading = ref(false)
 const ruleRunning = ref(false)
+const onlineRunning = ref(false)
+const onlineStatus = ref(null)
 const batchSubmitting = ref(false)
 const batchRefreshing = ref(false)
 const batchCancelling = ref(false)
@@ -550,6 +559,7 @@ const parserLoading = ref(false)
 const selectedModel = ref('')
 const selectedSampleId = ref('')
 const autoRefreshTimer = ref(null)
+const onlineRefreshTimer = ref(null)
 const showRoutingDagJson = ref(false)
 const activeHelperTab = ref('process')
 const evaluationFlowSteps = [
@@ -560,8 +570,8 @@ const evaluationFlowSteps = [
   },
   {
     no: '02',
-    title: '运行统一解析流程',
-    detail: '点击评测按钮后，系统按用户端同一套意图解析链路逐条生成结构化参数。',
+    title: '逐条调用在线模型',
+    detail: '点击评测按钮后，系统通过在线大模型接口逐条解析样本，并使用同一套校验流程生成结构化参数。',
   },
   {
     no: '03',
@@ -579,17 +589,32 @@ const dataset = computed(() => latest.value?.dataset || {})
 const config = computed(() => latest.value?.config || {})
 const ruleReport = computed(() => latest.value?.rule_report || null)
 const llmReport = computed(() => latest.value?.llm_report || null)
+const onlineReport = computed(() => latest.value?.online_report || null)
 const batchJob = computed(() => latest.value?.batch_job || null)
 const batchDiagnostic = computed(() => latest.value?.batch_diagnostic || batchJob.value?.diagnostic || null)
 const dashscopeConfigured = computed(() => !!config.value.dashscope_configured)
 const evalModelOptions = computed(() => config.value.dashscope_models || config.value.dashscope_eval_models || [])
 const ACTIVE_BATCH_STATUSES = ['validating', 'in_progress', 'finalizing', 'submitted', 'cancelling']
 const isBatchActive = computed(() => ACTIVE_BATCH_STATUSES.includes(batchJob.value?.status))
-const officialRunning = computed(() => batchSubmitting.value || ruleRunning.value)
+const officialRunning = computed(() => onlineRunning.value || ruleRunning.value)
 const batchRequestCountsText = computed(() => {
   const counts = batchJob.value?.request_counts
   if (!counts) return '-'
   return `总数 ${counts.total ?? 0}，完成 ${counts.completed ?? 0}，失败 ${counts.failed ?? 0}`
+})
+const onlineProgressPercent = computed(() => {
+  const total = Number(onlineStatus.value?.total || 0)
+  const completed = Number(onlineStatus.value?.completed || 0)
+  return total ? Math.min(100, Math.round((completed / total) * 100)) : 0
+})
+const onlineProgressText = computed(() => {
+  const status = onlineStatus.value
+  if (!status || status.status === 'idle') return '未运行'
+  const total = status.total ?? 0
+  const completed = status.completed ?? 0
+  if (status.status === 'completed') return `${completed}/${total} 已完成`
+  if (status.status === 'failed') return `评测失败：${status.error || '未知错误'}`
+  return `${completed}/${total} 运行中`
 })
 const isLlmReportCurrent = computed(() => {
   if (!llmReport.value || !batchJob.value) return true
@@ -599,6 +624,9 @@ const isLlmReportCurrent = computed(() => {
 const hasCurrentLlmReport = computed(() =>
   Boolean(llmReport.value && isReportDatasetCurrent(llmReport.value, dataset.value))
 )
+const hasCurrentOnlineReport = computed(() =>
+  Boolean(onlineReport.value && isReportDatasetCurrent(onlineReport.value, dataset.value))
+)
 const hasCurrentRuleReport = computed(() =>
   Boolean(ruleReport.value && isReportDatasetCurrent(ruleReport.value, dataset.value))
 )
@@ -607,16 +635,19 @@ const hasStaleReport = computed(() =>
     !officialReport.value &&
     (
       (ruleReport.value && !isReportDatasetCurrent(ruleReport.value, dataset.value)) ||
-      (llmReport.value && !isReportDatasetCurrent(llmReport.value, dataset.value))
+      (llmReport.value && !isReportDatasetCurrent(llmReport.value, dataset.value)) ||
+      (onlineReport.value && !isReportDatasetCurrent(onlineReport.value, dataset.value))
     )
   )
 )
 const officialReportType = computed(() => {
+  if (hasCurrentOnlineReport.value) return 'online'
   if (hasCurrentLlmReport.value) return 'llm'
   if (hasCurrentRuleReport.value) return 'fallback'
   return ''
 })
 const officialReport = computed(() => {
+  if (officialReportType.value === 'online') return onlineReport.value
   if (officialReportType.value === 'llm') return llmReport.value
   if (officialReportType.value === 'fallback') return ruleReport.value
   return null
@@ -1011,6 +1042,7 @@ const FILE_NAMES = {
   dataset: 'intent_eval_dataset.jsonl',
   'rule-report': 'intent_eval_rule_report.json',
   'llm-report': 'intent_eval_llm_report.json',
+  'online-report': 'intent_eval_online_report.json',
   'batch-job': 'intent_eval_batch_job.json',
   'batch-input': 'intent_eval_batch_input.jsonl',
   'batch-output': 'intent_eval_batch_output.jsonl',
@@ -1036,12 +1068,29 @@ async function loadLatest() {
     const { data } = await adminApi.intentEvalLatest()
     latest.value = data
     if (!selectedModel.value) {
-      selectedModel.value = evalModelOptions.value.includes(data.batch_job?.model)
-        ? data.batch_job.model
+      const lastModel = data.online_report?.model || data.batch_job?.model
+      selectedModel.value = evalModelOptions.value.includes(lastModel)
+        ? lastModel
         : evalModelOptions.value[0] || ''
     }
   } finally {
     loading.value = false
+  }
+}
+
+async function loadOnlineStatus() {
+  try {
+    const { data } = await adminApi.intentEvalOnlineStatus()
+    onlineStatus.value = data
+    if (data?.status === 'completed') {
+      stopOnlineRefresh()
+      await loadLatest()
+    } else if (data?.status === 'failed') {
+      stopOnlineRefresh()
+      ElMessage.error(data.error || '意图参数解析评测失败')
+    }
+  } catch {
+    stopOnlineRefresh()
   }
 }
 
@@ -1056,9 +1105,30 @@ async function loadSystemSettings() {
 
 async function runOfficialEvaluation() {
   if (dashscopeConfigured.value) {
-    await submitBatch()
+    await runOnline()
   } else {
     await runRule()
+  }
+}
+
+async function runOnline() {
+  if (!selectedModel.value) {
+    ElMessage.warning('请先选择评测模型')
+    return
+  }
+  onlineRunning.value = true
+  try {
+    const { data } = await adminApi.runIntentEvalOnline({
+      model: selectedModel.value,
+      concurrency: 4,
+      retries: 2,
+      resume: false,
+    })
+    onlineStatus.value = data
+    startOnlineRefresh()
+    ElMessage.success('意图参数解析评测已开始')
+  } finally {
+    onlineRunning.value = false
   }
 }
 
@@ -1149,6 +1219,19 @@ function stopAutoRefresh() {
   autoRefreshTimer.value = null
 }
 
+function startOnlineRefresh() {
+  if (onlineRefreshTimer.value) return
+  onlineRefreshTimer.value = window.setInterval(() => {
+    loadOnlineStatus()
+  }, 2000)
+}
+
+function stopOnlineRefresh() {
+  if (!onlineRefreshTimer.value) return
+  window.clearInterval(onlineRefreshTimer.value)
+  onlineRefreshTimer.value = null
+}
+
 async function testParse() {
   const utterance = parserInput.value.trim()
   if (!utterance) {
@@ -1173,7 +1256,11 @@ function applySelectedSample() {
 }
 
 function downloadCurrentReport() {
-  const type = officialReportType.value === 'llm' ? 'llm-report' : 'rule-report'
+  const type = officialReportType.value === 'online'
+    ? 'online-report'
+    : officialReportType.value === 'llm'
+      ? 'llm-report'
+      : 'rule-report'
   downloadEvalFile(type)
 }
 
@@ -1187,11 +1274,15 @@ watch(isBatchActive, active => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadLatest(), loadSystemSettings()])
+  await Promise.all([loadLatest(), loadSystemSettings(), loadOnlineStatus()])
   startAutoRefresh()
+  if (onlineStatus.value?.status === 'running') startOnlineRefresh()
 })
 
-onUnmounted(stopAutoRefresh)
+onUnmounted(() => {
+  stopAutoRefresh()
+  stopOnlineRefresh()
+})
 </script>
 
 <style scoped>
@@ -1615,6 +1706,15 @@ onUnmounted(stopAutoRefresh)
 .file-download-list {
   display: grid;
   gap: 10px;
+}
+
+.online-progress {
+  width: 100%;
+  min-width: 260px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
 }
 
 .sample-expand {

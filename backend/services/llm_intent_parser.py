@@ -170,14 +170,14 @@ def _has_immediate_start(utterance: str | None) -> bool:
     return bool(re.search(r"现在开始|立即|马上", utterance))
 
 
-async def call_qwen(messages: list[dict[str, str]]) -> dict[str, Any]:
+async def call_qwen(messages: list[dict[str, str]], model: str | None = None) -> dict[str, Any]:
     """调用 DashScope OpenAI-compatible chat completions API。"""
     headers = {
         "Authorization": f"Bearer {settings.dashscope_api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": settings.dashscope_model,
+        "model": model or settings.dashscope_model,
         "messages": messages,
         "temperature": settings.dashscope_temperature,
         "response_format": {"type": "json_object"},

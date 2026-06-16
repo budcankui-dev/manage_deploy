@@ -347,6 +347,10 @@ def read_report(path: Path) -> dict[str, Any] | None:
 
 
 def latest_status() -> dict[str, Any]:
+    try:
+        from services.intent_online_eval import read_online_report
+    except Exception:
+        read_online_report = None
     batch_job = read_latest_batch_job()
     llm_report = read_report(LLM_REPORT_PATH)
     batch_job = _sync_batch_summary_from_report(batch_job, llm_report)
@@ -354,6 +358,7 @@ def latest_status() -> dict[str, Any]:
         "dataset": dataset_summary(),
         "rule_report": read_report(RULE_REPORT_PATH),
         "llm_report": llm_report,
+        "online_report": read_online_report() if read_online_report else None,
         "batch_job": batch_job,
         "batch_diagnostic": batch_diagnostic(batch_job),
         "config": {

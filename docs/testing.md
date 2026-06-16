@@ -183,6 +183,37 @@ http://10.112.244.94:8182/benchmark
 
 如果出现部署失败、无 baseline、指标缺失或有效样本数不足，应先通过工单详情和实例日志定位并修复，然后重新创建测评工单补足 30 个可评价样本，不能只截取临时 100% 小样本结果作为正式验收。
 
+## 意图参数解析准确率评测
+
+正式演示和验收使用在线大模型接口逐条运行固定数据集，不再依赖百炼 Batch 队列。Batch 相关接口仅保留为历史诊断能力；页面主入口和测试方案口径均以“在线逐条评测”为准。
+
+本地规则回归：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python - <<'PY'
+from services.intent_batch_eval import run_rule_evaluation
+r = run_rule_evaluation(repeats=1)
+print(r["correct"], r["total"], r["accuracy"], r["passed"])
+PY
+```
+
+在线模型 smoke：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --limit 5 --concurrency 2
+```
+
+在线模型全量评测：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 4 --retries 2
+```
+
+期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
+
 ## 用户端意图对话闭环
 
 页面入口：

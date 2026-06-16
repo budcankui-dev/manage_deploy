@@ -200,6 +200,8 @@ export const adminApi = {
   intentEvalReport: (type) => api.get(`/admin/intent-parser/evaluations/reports/${type}`),
   downloadIntentEvalFile: (type) => api.get(`/admin/intent-parser/evaluations/files/${type}`, { responseType: 'blob', timeout: 180000 }),
   runIntentEvalRule: () => api.post('/admin/intent-parser/evaluations/rule/run', null, { timeout: 180000 }),
+  runIntentEvalOnline: (data = {}) => api.post('/admin/intent-parser/evaluations/llm-online/run', data, { timeout: 900000 }),
+  intentEvalOnlineStatus: () => api.get('/admin/intent-parser/evaluations/llm-online/status'),
   submitIntentEvalBatch: (data = {}) => api.post('/admin/intent-parser/evaluations/llm-batch/submit', data, { timeout: 180000 }),
   refreshIntentEvalBatch: () => api.post('/admin/intent-parser/evaluations/llm-batch/refresh', null, { timeout: 180000 }),
   cancelIntentEvalBatch: () => api.post('/admin/intent-parser/evaluations/llm-batch/cancel', null, { timeout: 180000 }),
