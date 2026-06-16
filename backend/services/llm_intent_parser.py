@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from config import settings
-from services.intent_parser import ParseResult, validate_draft_fields
+from services.intent_parser import ParseResult, extract_routing_strategy, validate_draft_fields
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type
 
 logger = logging.getLogger(__name__)
@@ -530,9 +530,13 @@ def _raw_to_parse_result(
     )
     data_profile = {key: raw.get(key) for key in data_profile_keys if raw.get(key) is not None}
 
+    routing_strategy = raw.get("routing_strategy")
+    if utterance:
+        routing_strategy = extract_routing_strategy(str(utterance), default=routing_strategy or "resource_guarantee")
+
     # Build runtime_plan from routing_strategy
     runtime_plan = {
-        "routing_strategy": raw.get("routing_strategy"),
+        "routing_strategy": routing_strategy,
     }
 
     # Build business_objective from task_type defaults

@@ -202,17 +202,32 @@ def _extract_llm_batch_size(text: str) -> int | None:
     return int(value) if value is not None else None
 
 
-def _extract_routing_strategy(text: str) -> str:
+def extract_routing_strategy(text: str, *, default: str = "resource_guarantee") -> str:
     lower = text.lower()
-    if any(k in lower for k in ("低时延转发", "低延时转发", "低时延策略", "低延时策略", "低时延选路", "低延时选路", "低时延路由", "低延时路由", "latency")):
+    if any(k in lower for k in (
+        "默认策略", "默认路由", "默认", "资源保障", "资源保证", "资源预留", "资源够用",
+        "只要资源满足", "资源满足即可", "资源满足就行", "正常调度", "不需要额外倾向",
+        "无需额外倾向", "没有额外倾向", "无额外倾向", "没有特别偏好", "无特别偏好",
+        "不指定策略", "不指定路由", "没有偏好", "无偏好",
+    )):
+        return "resource_guarantee"
+    if any(k in lower for k in (
+        "低时延转发", "低延时转发", "低时延策略", "低延时策略", "低时延选路", "低延时选路",
+        "低时延路由", "低延时路由", "低时延链路", "低延时链路", "端到端时延",
+        "链路时延", "转发时延", "时延更低", "减少时延", "减少链路时延", "latency",
+    )):
         return "low_latency_forwarding"
-    if any(k in lower for k in ("最快", "更快", "尽快", "完成时间", "高性能", "性能更高", "性能优先", "处理速度", "吞吐性能", "少排队", "尽早跑完", "fast")):
+    if any(k in lower for k in ("最快", "更快", "尽快", "完成时间", "优先完成", "优先完成计算", "高性能", "性能更高", "性能优先", "处理速度", "吞吐性能", "少排队", "尽早跑完", "fast")):
         return "fastest_completion"
     if any(k in lower for k in ("负载", "空闲", "均衡", "竞争少", "低负载", "避开高负载", "抢资源", "均摊", "更平衡", "load")):
         return "load_balance"
     if any(k in lower for k in ("成本", "省钱", "便宜", "少占资源", "低成本", "费用", "省资源", "经济型", "cost")):
         return "cost_priority"
-    return "resource_guarantee"
+    return default
+
+
+def _extract_routing_strategy(text: str) -> str:
+    return extract_routing_strategy(text)
 
 
 def _merge_draft(existing: dict[str, Any] | None, result: ParseResult) -> ParseResult:

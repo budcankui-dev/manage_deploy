@@ -117,3 +117,35 @@ def test_llm_parse_result_keeps_explicit_future_time_when_immediate_is_negated()
 
     assert result.business_start_time.isoformat() == "2099-06-03T21:30:00"
     assert result.business_end_time.isoformat() == "2099-06-03T23:30:00"
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected_strategy"),
+    [
+        ("从compute-1到h8跑 matmul，512x512，batch 20，现在开始跑2小时，成本优先省钱", "cost_priority"),
+        ("创建低功耗边缘推理业务，业务源节点 compute-1，业务目的节点 h6，120帧，50W，立即运行60分钟，希望走低时延路由", "low_latency_forwarding"),
+        ("提交一条随路计算工单：从业务源节点 compute-2 到业务目的节点 h11，执行 512 阶矩阵乘法 20 批，现在开始跑2小时，希望转发时延更低", "low_latency_forwarding"),
+        ("创建高安全传输业务，业务源节点 compute-2，业务目的节点 h1，安全级别 high，马上开始跑3小时，优先保障端到端时延", "low_latency_forwarding"),
+        ("帮我安排一条训练类智算任务，源终端 compute-1，目的终端 h2，数据集 5000 条样本，现在开始跑2小时，选择空闲节点负载均衡", "load_balance"),
+        ("配电线路巡检稳定转发 source=compute-1 dest=h5, jitter=3ms, 现在开始跑2小时, 尽快完成", "fastest_completion"),
+        ("请提交通用计算任务 source: compute-3 dest: h5, matrix_size=512, batch_count=20, 现在开始跑2小时, 优先完成计算", "fastest_completion"),
+        ("大规模连接采集任务，从 compute-1 到 h4，接入 20000 个终端，马上开始跑3小时，没有特别偏好", "resource_guarantee"),
+        ("高能效边缘推理任务，从 compute-2 到 h9，处理 120 帧，功耗 50W，立即运行60分钟，只要资源满足就行", "resource_guarantee"),
+        ("智算中心模型训练任务，从 compute-3 到 compute-1，训练 5000 条样本，现在开始跑2小时，不需要额外倾向", "resource_guarantee"),
+    ],
+)
+def test_llm_parse_result_uses_user_utterance_for_routing_strategy(utterance, expected_strategy):
+    raw = {
+        "task_type": "high_throughput_matmul",
+        "source_name": "compute-1",
+        "destination_name": "h1",
+        "start_time": "now",
+        "end_time": "2099-06-03T23:30:00",
+        "matrix_size": 512,
+        "batch_count": 20,
+        "routing_strategy": "fastest_completion" if expected_strategy != "fastest_completion" else "cost_priority",
+    }
+
+    result = _raw_to_parse_result(raw, None, utterance=utterance)
+
+    assert result.runtime_plan["routing_strategy"] == expected_strategy
