@@ -92,6 +92,8 @@ TIME_PHRASES = [
     ("现在开始跑2小时", 120),
     ("立即运行60分钟", 60),
     ("马上开始跑3小时", 180),
+    ("现在开始连续运行90分钟", 90),
+    ("立即执行半小时", 30),
 ]
 
 TASKS = {
@@ -322,6 +324,65 @@ def _valid_row(task_type: str, index: int) -> dict:
     }
 
 
+def _valid_minimal_row(task_type: str, index: int) -> dict:
+    """Generate natural utterances without an explicit route preference.
+
+    These represent ordinary users who only describe the business task.  The
+    product should default the route strategy to resource_guarantee.
+    """
+    spec = TASKS[task_type]
+    pairs = _node_pairs()
+    src, dst = pairs[(index * 3 + 5) % len(pairs)]
+    profile = spec["slots"][(index + 1) % len(spec["slots"])]
+    time, duration_minutes = TIME_PHRASES[index % len(TIME_PHRASES)]
+    profile_text = _profile_text(task_type, profile)
+    utterance = (
+        f"请创建{TASK_NAMES[task_type]}，从 {src} 到 {dst}，"
+        f"{profile_text}，{time}。"
+    )
+    return {
+        "case_type": "valid_default_strategy",
+        "utterance": utterance,
+        "expected": _expected(
+            task_type=task_type,
+            src=src,
+            dst=dst,
+            profile=profile,
+            strategy="resource_guarantee",
+            parse_status="valid",
+            duration_minutes=duration_minutes,
+        ),
+    }
+
+
+def _valid_colloquial_row(task_type: str, index: int) -> dict:
+    """Generate less template-like but still unambiguous acceptance samples."""
+    spec = TASKS[task_type]
+    pairs = _node_pairs()
+    src, dst = pairs[(index * 7 + 11) % len(pairs)]
+    profile = spec["slots"][(index + 2) % len(spec["slots"])]
+    strategy, strategy_text = _strategy_for(index + 2)
+    time, duration_minutes = TIME_PHRASES[(index + 1) % len(TIME_PHRASES)]
+    profile_text = _profile_text(task_type, profile)
+    utterance = (
+        f"帮我在业务链路 {src} -> {dst} 上跑一个{TASK_NAMES[task_type]}，"
+        f"参数按{profile_text}，{time}，{strategy_text}。"
+    )
+    return {
+        "case_type": "valid_colloquial",
+        "utterance": utterance,
+        "expected": _expected(
+            task_type=task_type,
+            src=src,
+            dst=dst,
+            profile=profile,
+            strategy=strategy,
+            parse_status="valid",
+            duration_minutes=duration_minutes,
+        ),
+    }
+
+
 def _incomplete_row(task_type: str, index: int) -> dict:
     pairs = _node_pairs()
     src, dst = pairs[index % len(pairs)]
@@ -356,13 +417,24 @@ def _incomplete_row(task_type: str, index: int) -> dict:
 def generate_dataset(count: int) -> list[dict]:
     rows: list[dict] = []
     task_types = list(TASKS)
-    valid_target = int(count * 0.7)
+    valid_target = int(count * 0.8)
+    minimal_target = int(count * 0.1)
+    colloquial_target = int(count * 0.06)
+    incomplete_target = count - valid_target - minimal_target - colloquial_target
 
     for index in range(valid_target):
         task_type = task_types[index % len(task_types)]
         rows.append(_valid_row(task_type, index))
 
-    for index in range(count - valid_target):
+    for index in range(minimal_target):
+        task_type = task_types[index % len(task_types)]
+        rows.append(_valid_minimal_row(task_type, index))
+
+    for index in range(colloquial_target):
+        task_type = task_types[index % len(task_types)]
+        rows.append(_valid_colloquial_row(task_type, index))
+
+    for index in range(incomplete_target):
         task_type = task_types[index % len(task_types)]
         rows.append(_incomplete_row(task_type, index))
 

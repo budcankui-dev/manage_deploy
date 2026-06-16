@@ -99,17 +99,24 @@ def _extract_time(text: str) -> tuple[datetime | None, datetime | None]:
     start_time = None
     end_time = None
 
-    if re.search(r"现在开始|立即|马上", text):
+    if re.search(r"现在开始|立即|马上|立即执行", text):
         start_time = now
 
-    duration_match = re.search(r"(\d+)\s*(?:小时|h|hour)", text, re.IGNORECASE)
+    duration_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:小时|h|hour)", text, re.IGNORECASE)
     if duration_match:
-        hours = int(duration_match.group(1))
+        hours = float(duration_match.group(1))
         if start_time:
             end_time = start_time + timedelta(hours=hours)
         else:
             start_time = now
             end_time = now + timedelta(hours=hours)
+
+    half_hour_match = re.search(r"(?:半小时|半个小时|一小时半|1个半小时)", text)
+    if half_hour_match and not duration_match:
+        minutes = 90 if "一小时半" in text or "1个半小时" in text else 30
+        if not start_time:
+            start_time = now
+        end_time = start_time + timedelta(minutes=minutes)
 
     min_match = re.search(r"(\d+)\s*(?:分钟|min|minute)", text, re.IGNORECASE)
     if min_match and not duration_match:

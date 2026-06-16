@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import json
 
 import services.intent_batch_eval as intent_batch_eval
-from services.intent_batch_eval import batch_diagnostic, latest_status, score_parsed_result
+from services.intent_batch_eval import batch_diagnostic, latest_status, score_batch_output, score_parsed_result
 from services.intent_parser import ParseResult
 
 
@@ -131,3 +131,68 @@ def test_latest_status_uses_matching_llm_report_summary_for_batch_job(tmp_path, 
         "accuracy": 1.0,
         "passed": True,
     }
+
+
+def test_score_batch_output_reports_final_accuracy_with_raw_llm_diagnostics(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    batch_dir = reports_dir / "intent_eval_batches"
+    dataset_path = tmp_path / "datasets" / "multi_business.jsonl"
+    output_path = batch_dir / "job-1" / "output.jsonl"
+    dataset_path.parent.mkdir(parents=True)
+    output_path.parent.mkdir(parents=True)
+
+    sample = {
+        "case_type": "valid",
+        "utterance": "矩阵乘法任务，从 compute-1 到 compute-2，512阶矩阵，20批，现在开始跑2小时，希望成本更低",
+        "expected": {
+            "task_type": "high_throughput_matmul",
+            "modality": "高通量计算模态",
+            "source_name": "compute-1",
+            "destination_name": "compute-2",
+            "parse_status": "valid",
+            "data_profile": {"matrix_size": 512, "batch_count": 20},
+            "runtime_plan": {"routing_strategy": "cost_priority"},
+            "expected_time": {"duration_minutes": 120},
+        },
+    }
+    dataset_path.write_text(json.dumps(sample, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # Simulate an LLM that got the route strategy wrong. The final product
+    # parser can still deterministically recover it from the original utterance.
+    raw_llm = {
+        "task_type": "high_throughput_matmul",
+        "source_name": "compute-1",
+        "destination_name": "compute-2",
+        "start_time": "now",
+        "duration_hours": 2,
+        "matrix_size": 512,
+        "batch_count": 20,
+        "routing_strategy": "resource_guarantee",
+    }
+    output_line = {
+        "custom_id": "sample-0000",
+        "response": {
+            "body": {
+                "choices": [
+                    {"message": {"content": json.dumps(raw_llm, ensure_ascii=False)}}
+                ]
+            }
+        },
+    }
+    output_path.write_text(json.dumps(output_line, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(intent_batch_eval, "DATASET_PATH", dataset_path)
+    monkeypatch.setattr(intent_batch_eval, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(intent_batch_eval, "BATCH_DIR", batch_dir)
+    monkeypatch.setattr(intent_batch_eval, "LLM_REPORT_PATH", reports_dir / "intent_eval_llm.json")
+
+    report = score_batch_output({"job_id": "job-1", "batch_id": "batch-1", "model": "qwen-test"}, output_path)
+
+    assert report["correct"] == 1
+    assert report["accuracy"] == 1.0
+    assert report["llm_raw_summary"]["correct"] == 0
+    assert report["llm_raw_summary"]["accuracy"] == 0.0
+    run = report["results"][0]["runs"][0]
+    assert run["match"] is True
+    assert run["llm_raw_match"] is False
+    assert run["final_parser_name"] == "rule_based"

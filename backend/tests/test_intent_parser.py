@@ -82,6 +82,18 @@ def test_parse_matmul_extracts_required_fields():
     assert result.runtime_plan["routing_strategy"] == "fastest_completion"
 
 
+def test_parse_half_hour_duration():
+    result = parse_intent(
+        "矩阵乘法任务，从 compute-1 到 compute-2，512阶矩阵，20批，立即执行半小时，希望成本更低",
+        valid_nodes=["compute-1", "compute-2"],
+    )
+
+    assert result.parse_status == "valid"
+    assert result.business_start_time is not None
+    assert result.business_end_time is not None
+    assert (result.business_end_time - result.business_start_time).total_seconds() == 30 * 60
+
+
 def test_llm_parse_result_normalizes_relative_duration_from_utterance():
     raw = {
         "task_type": "high_throughput_matmul",

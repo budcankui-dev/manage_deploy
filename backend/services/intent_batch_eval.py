@@ -71,6 +71,13 @@ def _format_datetime(value: datetime | None) -> str | None:
     return value.replace(microsecond=0).isoformat(sep=" ")
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _duration_minutes(start: datetime | None, end: datetime | None) -> float | None:
     if not start or not end:
         return None
@@ -115,7 +122,7 @@ def dataset_summary() -> dict[str, Any]:
     modality_counts = Counter((row.get("expected") or {}).get("modality", "unknown") for row in rows)
     dataset_bytes = DATASET_PATH.read_bytes() if DATASET_PATH.exists() else b""
     return {
-        "path": str(DATASET_PATH.relative_to(REPO_ROOT)),
+        "path": _display_path(DATASET_PATH),
         "total": len(rows),
         "sha256": hashlib.sha256(dataset_bytes).hexdigest() if dataset_bytes else None,
         "updated_at": _format_datetime(datetime.fromtimestamp(DATASET_PATH.stat().st_mtime)) if DATASET_PATH.exists() else None,
@@ -583,6 +590,8 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
     by_id = {f"sample-{index:04d}": sample for index, sample in enumerate(rows)}
     results: list[dict[str, Any]] = []
     correct = 0
+    raw_correct = 0
+    raw_returned = 0
     model = job.get("model") or settings.dashscope_model
 
     with output_path.open(encoding="utf-8") as f:
@@ -595,27 +604,57 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
             if not sample:
                 continue
             raw, error = _extract_raw_llm_json(output_line)
+            raw_run: dict[str, Any] | None = None
             if raw is None:
+                final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
+                final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
                 run = {
-                    "match": False,
-                    "details": {"llm_error": {"expected": None, "got": error}},
-                    "parser_name": "llm_qwen",
-                    "parser_version": model,
+                    **final_scored,
+                    "llm_raw_match": False,
+                    "llm_raw_details": {"llm_error": {"expected": None, "got": error}},
+                    "parser_name": "system_intent_parser",
+                    "parser_version": final_parsed.parser_version,
+                    "model": model,
+                    "final_parser_name": final_parsed.parser_name,
+                    "final_parser_version": final_parsed.parser_version,
                     "raw_llm_response": None,
-                    "parsed_result": None,
+                    "llm_raw_result": None,
+                    "parsed_result": _parse_result_payload(final_parsed),
                     "expected_result": sample.get("expected", {}),
                     "sample_payload": sample,
                 }
             else:
                 cleaned = _validate_and_clean(raw, VALID_NODES)
-                parsed = _raw_to_parse_result(cleaned, None, utterance=sample["utterance"])
-                scored = score_parsed_result(parsed, sample.get("expected", {}))
-                run = {
-                    **scored,
-                    "parser_name": parsed.parser_name,
+                raw_parsed = _raw_to_parse_result(cleaned, None, utterance=sample["utterance"])
+                if raw.get("routing_strategy") in {None, ""}:
+                    raw_parsed.runtime_plan["routing_strategy"] = None
+                elif "routing_strategy" in cleaned:
+                    raw_parsed.runtime_plan["routing_strategy"] = cleaned.get("routing_strategy")
+                raw_scored = score_parsed_result(raw_parsed, sample.get("expected", {}))
+                raw_returned += 1
+                if raw_scored["match"]:
+                    raw_correct += 1
+
+                final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
+                final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
+                raw_run = {
+                    **raw_scored,
+                    "parser_name": "llm_qwen_raw",
                     "parser_version": model,
+                    "parsed_result": _parse_result_payload(raw_parsed),
+                }
+                run = {
+                    **final_scored,
+                    "llm_raw_match": raw_scored["match"],
+                    "llm_raw_details": raw_scored["details"],
+                    "parser_name": "system_intent_parser",
+                    "parser_version": final_parsed.parser_version,
+                    "model": model,
+                    "final_parser_name": final_parsed.parser_name,
+                    "final_parser_version": final_parsed.parser_version,
                     "raw_llm_response": raw,
-                    "parsed_result": _parse_result_payload(parsed),
+                    "llm_raw_result": _parse_result_payload(raw_parsed),
+                    "parsed_result": _parse_result_payload(final_parsed),
                     "expected_result": sample.get("expected", {}),
                     "sample_payload": sample,
                 }
@@ -630,14 +669,16 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                 "sample_payload": sample,
                 "match": match,
                 "runs": [run],
+                "diagnostic_runs": [raw_run] if raw_run else [],
             })
 
     total = len(rows)
+    raw_accuracy = raw_correct / total if total else 0
     report = {
         "evaluation_id": job["job_id"],
         "engine": "llm_qwen_batch",
-        "parser_name": "llm_qwen",
-        "parser_version": model,
+        "parser_name": "system_intent_parser",
+        "parser_version": "llm_with_deterministic_validation",
         "model": model,
         "dataset": dataset_summary(),
         "batch_job_id": job["job_id"],
@@ -646,6 +687,14 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
         "returned": len(results),
         "correct": correct,
         "accuracy": correct / total if total else 0,
+        "llm_raw_summary": {
+            "returned": raw_returned,
+            "total": total,
+            "correct": raw_correct,
+            "accuracy": raw_accuracy,
+            "passed": raw_accuracy >= 0.9 if total else False,
+            "note": "内部诊断：仅统计大模型原始结构化输出，不含系统确定性校验/补全。",
+        },
         "target_accuracy": 0.9,
         "passed": (correct / total) >= 0.9 if total else False,
         "generated_at": _now_iso(),
