@@ -8,6 +8,8 @@ const { chromium } = require("playwright");
 const baseUrl = process.env.EVALUATION_BASE_URL || "http://10.112.244.94:8182";
 const username = process.env.E2E_ADMIN_USERNAME || "admin";
 const password = process.env.E2E_ADMIN_PASSWORD || "admin";
+const userUsername = process.env.E2E_USER_USERNAME || "user";
+const userPassword = process.env.E2E_USER_PASSWORD || "user";
 const matmulRunId = process.env.MATMUL_BENCHMARK_RUN_ID || "high_throughput_matmul-20260612095418";
 const videoRunId = process.env.VIDEO_BENCHMARK_RUN_ID || "video-route-pool-check-20260612160633";
 const outDir = path.resolve("docs/assets/evaluation-plan");
@@ -26,14 +28,23 @@ async function save(page, name, options = {}) {
   console.log(file);
 }
 
-async function login(page) {
+async function login(page, loginUsername = username, loginPassword = password) {
   await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  if (!page.url().includes("/login")) return;
+  if (page.url().includes("/login")) {
+    await page.getByPlaceholder("admin").fill(loginUsername);
+    await page.locator('input[type="password"]').fill(loginPassword);
+    await page.getByRole("button", { name: "登录" }).click();
+    await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15000 });
+  }
+}
 
-  await page.getByPlaceholder("admin").fill(username);
-  await page.locator('input[type="password"]').fill(password);
-  await page.getByRole("button", { name: "登录" }).click();
-  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15000 });
+async function logout(page) {
+  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
+  const logoutButton = page.getByRole("button", { name: "退出登录" });
+  if (await logoutButton.count()) {
+    await logoutButton.first().click();
+    await page.waitForURL((url) => url.pathname.includes("/login"), { timeout: 10000 }).catch(() => {});
+  }
 }
 
 async function openPage(page, route, waitText) {
@@ -56,6 +67,20 @@ async function selectTaskType(page, visibleName) {
   await pause(1200);
 }
 
+async function openFirstOrderDetail(page) {
+  const details = page.getByRole("button", { name: "详情", exact: true });
+  const detailCount = await details.count();
+  if (detailCount > 0) {
+    await details.first().click();
+  } else {
+    const firstRow = page.locator(".evidence-table .el-table__body-wrapper tbody tr").first();
+    if (!(await firstRow.count())) return false;
+    await firstRow.dblclick();
+  }
+  await page.getByText("任务工单详情", { exact: false }).first().waitFor({ timeout: 10000 });
+  return true;
+}
+
 async function captureBenchmark(page, runId, taskName, prefix) {
   await openPage(page, `/benchmark?benchmark_run_id=${encodeURIComponent(runId)}`, "业务测评");
   await selectTaskType(page, taskName);
@@ -67,10 +92,7 @@ async function captureBenchmark(page, runId, taskName, prefix) {
   await pause(800);
   await save(page, `${prefix}-benchmark-result.png`);
 
-  const details = page.getByRole("button", { name: "详情" });
-  const count = await details.count();
-  if (count > 0) {
-    await details.nth(0).click();
+  if (await openFirstOrderDetail(page)) {
     await pause(1600);
     await save(page, `${prefix}-order-detail-overview.png`, { fullPage: false });
     if (prefix === "video") {
@@ -96,7 +118,7 @@ async function captureIntentEvaluation(page) {
 }
 
 async function captureIntentChat(page) {
-  await openPage(page, "/intent-chat", "智联计算系统");
+  await openPage(page, "/intent-chat", "对话列表");
   await save(page, "intent-chat-page.png");
 }
 
@@ -113,13 +135,15 @@ const page = await context.newPage();
 page.setDefaultTimeout(15000);
 
 try {
-  await login(page);
+  await login(page, username, password);
   await captureBenchmark(page, matmulRunId, "矩阵乘法计算任务", "matmul");
   await captureBenchmark(page, videoRunId, "视频AI推理任务", "video");
-  await openPage(page, "/settings", "运行环境与系统配置");
+  await openPage(page, "/settings", "系统设置");
   await save(page, "system-settings-runtime-mode.png");
-  await captureIntentChat(page);
   await captureIntentEvaluation(page);
+  await logout(page);
+  await login(page, userUsername, userPassword);
+  await captureIntentChat(page);
 } finally {
   await browser.close();
 }
