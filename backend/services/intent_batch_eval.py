@@ -635,8 +635,14 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                 if raw_scored["match"]:
                     raw_correct += 1
 
-                final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
-                final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
+                if raw_scored["match"]:
+                    final_parsed = raw_parsed
+                    final_scored = raw_scored
+                    final_source = "llm_qwen"
+                else:
+                    final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
+                    final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
+                    final_source = "rule_fallback"
                 raw_run = {
                     **raw_scored,
                     "parser_name": "llm_qwen_raw",
@@ -650,6 +656,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                     "parser_name": "system_intent_parser",
                     "parser_version": final_parsed.parser_version,
                     "model": model,
+                    "final_source": final_source,
                     "final_parser_name": final_parsed.parser_name,
                     "final_parser_version": final_parsed.parser_version,
                     "raw_llm_response": raw,

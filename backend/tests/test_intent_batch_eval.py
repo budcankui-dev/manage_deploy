@@ -195,4 +195,5 @@ def test_score_batch_output_reports_final_accuracy_with_raw_llm_diagnostics(tmp_
     run = report["results"][0]["runs"][0]
     assert run["match"] is True
     assert run["llm_raw_match"] is False
+    assert run["final_source"] == "rule_fallback"
     assert run["final_parser_name"] == "rule_based"
