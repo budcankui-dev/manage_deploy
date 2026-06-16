@@ -43,6 +43,7 @@ from services.routing_payload_builder import build_routing_payload
 from services.system_settings import (
     get_runtime_settings,
     modality_priority_map_from_settings,
+    routing_resource_options_from_settings,
     update_runtime_settings,
 )
 
@@ -111,6 +112,7 @@ def _routing_dag_preview(
         and result.business_end_time
     ):
         return None
+    resource_options = routing_resource_options_from_settings(runtime_settings)
     return build_routing_payload(
         order_id=order_id,
         order_name=f"{result.task_type}-{order_id}",
@@ -124,6 +126,7 @@ def _routing_dag_preview(
         resource_requirement=result.resource_requirement,
         modality_priority_map=modality_priority_map_from_settings(runtime_settings),
         routing_strategy=(result.runtime_plan or {}).get("routing_strategy"),
+        **resource_options,
     )
 
 

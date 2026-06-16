@@ -1520,6 +1520,12 @@ async def create_batch_benchmark(
             routing_strategy=payload.routing_strategy,
             **resource_options,
         )
+        effective_resources = _routing_dag_resources_by_role(order)
+        if effective_resources:
+            business_task = runtime_config["business_task"]
+            business_task["resource_requirement"] = effective_resources
+            order.runtime_config = runtime_config
+            flag_modified(order, "runtime_config")
         order_ids.append(order.id)
 
     await db.commit()

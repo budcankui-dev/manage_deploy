@@ -213,7 +213,7 @@ async def rebuild_matmul_template(base_url: str | None = None) -> dict:
         # Register in business-template-catalog if not already
         catalog = {
             "task_type": "high_throughput_matmul",
-            "modality": "high_throughput_compute",
+            "modality": "高通量计算模态",
             "template_id": template_id,
         }
         catalog_response = await client.put(

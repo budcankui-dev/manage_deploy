@@ -172,10 +172,10 @@
       <div v-if="showInternalControls" class="route-mode-panel" :class="`mode-${routeMode}`">
         <div class="route-mode-title">
           <span>路由方式</span>
-          <el-radio-group v-model="settingsForm.benchmark_routing_mode" size="small">
-            <el-radio-button label="internal_auto">系统自动分配</el-radio-button>
-            <el-radio-button label="external">外部路由系统</el-radio-button>
-          </el-radio-group>
+          <span>
+            <el-tag type="success" size="small">{{ routeModeLabel }}</el-tag>
+            <el-button link type="primary" @click="$router.push('/settings')">去系统设置修改</el-button>
+          </span>
         </div>
         <p>{{ routeModeDescription }}</p>
       </div>
@@ -527,9 +527,7 @@ const showInternalControls = computed(() => Boolean(settingsForm.show_internal_c
 const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_json))
 
 const routeModeLabel = computed(() =>
-  showInternalControls.value
-    ? (routeMode.value === 'external' ? '外部路由系统' : '系统自动分配')
-    : '按系统配置执行'
+  routeMode.value === 'external' ? '外部路由系统' : '系统自动分配'
 )
 
 const routeModeDescription = computed(() => {
@@ -909,24 +907,12 @@ function summarizePlacements(placements) {
   if (Array.isArray(placements)) {
     return placements.map(p => {
       const gpu = p.gpu_device != null ? ` GPU ${p.gpu_device}` : ''
-      const role = p.task_node_id || p.node_id || p.role || p.task_role || '子任务'
-      const node = p.topology_node_id || p.worker_host || p.hostname || p.node_name || p.node_id || '—'
+      const role = p.task_node_id || '子任务'
+      const node = p.topology_node_id || '—'
       return `${role} -> ${node}${gpu}`
     }).join(' / ')
   }
-  if (typeof placements === 'object') {
-    return Object.entries(placements).map(([role, placement]) => {
-      if (typeof placement === 'string') return `${role} -> ${placement}`
-      const node = placement?.topology_node_id || placement?.worker_host || placement?.node_name || placement?.hostname || placement?.node_id || '—'
-      const gpu = placement?.gpu_device != null
-        ? ` GPU ${placement.gpu_device}`
-        : Array.isArray(placement?.gpu_indices) && placement.gpu_indices.length
-        ? ` GPU ${placement.gpu_indices.join(',')}`
-        : ''
-      return `${role} -> ${node}${gpu}`
-    }).join(' / ')
-  }
-  return String(placements)
+  return '旧格式数据，请清理后重跑'
 }
 
 function prettyJson(value) {

@@ -24,10 +24,10 @@
         <el-form-item label="配置分组">
           <el-radio-group v-model="form.environment_mode">
             <el-radio-button label="production">标准模式</el-radio-button>
-            <el-radio-button label="development">调试模式</el-radio-button>
+            <el-radio-button label="development">联调模式</el-radio-button>
           </el-radio-group>
           <p class="form-hint">
-            配置分组用于区分常规运行和联调排障场景；实际链路由下方解析、路由、展示开关控制。
+            配置分组仅用于标记当前运行场景；实际链路由下方解析方式、路由方式和展示开关控制。
           </p>
         </el-form-item>
 
@@ -39,7 +39,7 @@
               <el-radio label="rule">系统解析流程</el-radio>
             </el-radio-group>
             <el-checkbox v-model="form.intent_rule_fallback_enabled">
-              主解析不可用时允许系统解析流程接管
+              主解析不可用时允许系统解析流程继续处理
             </el-checkbox>
             <p class="form-hint">
               意图测评页统一展示“意图参数解析准确率”。该设置会影响用户端对话解析和管理端单条解析。
@@ -63,13 +63,13 @@
             <el-switch
               v-model="form.expert_mode"
               active-text="简洁展示视图"
-              inactive-text="调试展示视图"
+              inactive-text="详细展示视图"
             />
             <el-checkbox v-model="form.show_internal_controls">
-              显示调试控制项
+              显示高级控制项
             </el-checkbox>
             <el-checkbox v-model="form.show_routing_dag_json">
-              显示 DAG JSON 调试信息
+              显示 DAG JSON 详情
             </el-checkbox>
             <p class="form-hint">
               默认关闭。开启后会在任务工单详情的“节点分配”、业务测评工单详情、意图测评单条检测中显示原始 DAG/分配 JSON；常规演示建议保持关闭，只展示参数、节点、端口和业务结果。
@@ -105,6 +105,125 @@
               <template #default="{ row }">{{ modalityPriorityHint(row.modality) }}</template>
             </el-table-column>
           </el-table>
+        </el-card>
+
+        <el-card shadow="never" class="priority-card">
+          <template #header>
+            <div class="priority-header">
+              <span>任务模态映射</span>
+              <el-switch
+                v-model="form.task_modality_override_enabled"
+                active-text="启用覆盖"
+                inactive-text="使用默认"
+              />
+            </div>
+          </template>
+          <p class="form-hint priority-hint">
+            默认按任务类型映射业务模态；启用覆盖后，以这里的设置为准，并同步影响意图解析结果和提交给路由系统的 DAG 优先级。
+          </p>
+          <el-table :data="taskModalityRows" size="small" border>
+            <el-table-column prop="task_label" label="任务类型" min-width="220" />
+            <el-table-column prop="default_modality" label="默认模态" min-width="180" />
+            <el-table-column label="指定模态" min-width="220">
+              <template #default="{ row }">
+                <el-select
+                  v-model="form.task_modality_overrides[row.task_type]"
+                  :disabled="!form.task_modality_override_enabled"
+                  placeholder="默认映射"
+                  clearable
+                  filterable
+                >
+                  <el-option
+                    v-for="modality in modalityOptions"
+                    :key="modality"
+                    :label="modality"
+                    :value="modality"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+
+        <el-card shadow="never" class="priority-card">
+          <template #header>
+            <div class="priority-header">
+              <span>任务资源要求</span>
+              <el-switch
+                v-model="form.task_resource_override_enabled"
+                active-text="启用覆盖"
+                inactive-text="使用默认估算"
+              />
+            </div>
+          </template>
+          <p class="form-hint priority-hint">
+            默认由系统根据任务类型和参数画像估算。若已通过基线或实测确认更合适的资源需求，可在这里覆盖 source、compute、sink 三类子任务角色的资源值。
+          </p>
+          <div class="resource-task-list">
+            <section
+              v-for="task in resourceTaskRows"
+              :key="task.task_type"
+              class="resource-task-card"
+            >
+              <div class="resource-task-title">
+                <strong>{{ task.task_label }}</strong>
+                <span>{{ task.default_note }}</span>
+              </div>
+              <el-table :data="task.roles" size="small" border>
+                <el-table-column prop="role_label" label="子任务角色" width="120" />
+                <el-table-column label="CPU" width="120">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="form.task_resource_overrides[task.task_type][row.role].cpu_units"
+                      :disabled="!form.task_resource_override_enabled"
+                      :min="0"
+                      :max="64"
+                      size="small"
+                      controls-position="right"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="内存 MB" width="140">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="form.task_resource_overrides[task.task_type][row.role].mem_mb"
+                      :disabled="!form.task_resource_override_enabled"
+                      :min="0"
+                      :max="131072"
+                      :step="256"
+                      size="small"
+                      controls-position="right"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="磁盘 MB" width="140">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="form.task_resource_overrides[task.task_type][row.role].disk_mb"
+                      :disabled="!form.task_resource_override_enabled"
+                      :min="0"
+                      :max="1048576"
+                      :step="256"
+                      size="small"
+                      controls-position="right"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="GPU" width="120">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="form.task_resource_overrides[task.task_type][row.role].gpu_units"
+                      :disabled="!form.task_resource_override_enabled"
+                      :min="0"
+                      :max="8"
+                      size="small"
+                      controls-position="right"
+                    />
+                  </template>
+                </el-table-column>
+              </el-table>
+            </section>
+          </div>
         </el-card>
 
         <el-form-item label="备注">
@@ -144,6 +263,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adminApi } from '@/api'
+import { TASK_TYPE_LABELS } from '@/constants/businessTaskDisplay'
 
 const DEFAULT_MODALITY_PRIORITY_MAP = {
   高通量计算模态: 5,
@@ -167,6 +287,72 @@ const MODALITY_PRIORITY_HINTS = {
   高安全传输模态: '安全隔离和传输可靠性优先业务。',
 }
 
+const TASK_MODALITY_DEFAULTS = {
+  high_throughput_matmul: '高通量计算模态',
+  low_latency_video_pipeline: '低时延转发模态',
+  llm_text_generation: '智算中心模态',
+  ai_model_training: '智算中心模态',
+  distributed_storage_compute: '分布式存算模态',
+  massive_connection_collect: '大规模连接模态',
+  deterministic_forwarding: '确定性转发模态',
+  energy_efficient_edge_inference: '高能效边缘计算模态',
+  secure_transmission: '高安全传输模态',
+}
+
+const DEFAULT_TASK_RESOURCE_OVERRIDES = {
+  high_throughput_matmul: {
+    source: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 8, mem_mb: 1024, disk_mb: 1024, gpu_units: 1 },
+    sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+  },
+  low_latency_video_pipeline: {
+    source: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 2048, disk_mb: 1024, gpu_units: 1 },
+    sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+  },
+  llm_text_generation: {
+    source: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 8, mem_mb: 4096, disk_mb: 1024, gpu_units: 1 },
+    sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+  },
+  ai_model_training: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+  distributed_storage_compute: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+  massive_connection_collect: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+  deterministic_forwarding: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+  energy_efficient_edge_inference: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+  secure_transmission: {
+    source: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+    sink: { cpu_units: 4, mem_mb: 1024, disk_mb: 512, gpu_units: 0 },
+  },
+}
+
+const ROLE_ROWS = [
+  { role: 'source', role_label: 'source' },
+  { role: 'compute', role_label: 'compute' },
+  { role: 'sink', role_label: 'sink' },
+]
+
 const loading = ref(false)
 const saving = ref(false)
 const settings = ref({})
@@ -179,6 +365,10 @@ const form = reactive({
   show_internal_controls: false,
   show_routing_dag_json: false,
   modality_priority_map: { ...DEFAULT_MODALITY_PRIORITY_MAP },
+  task_modality_override_enabled: false,
+  task_modality_overrides: { ...TASK_MODALITY_DEFAULTS },
+  task_resource_override_enabled: false,
+  task_resource_overrides: cloneTaskResources(DEFAULT_TASK_RESOURCE_OVERRIDES),
   notes: '',
 })
 
@@ -187,6 +377,21 @@ const modalityPriorityRows = computed(() => {
   if (Array.isArray(rows) && rows.length) return rows
   return Object.entries(DEFAULT_MODALITY_PRIORITY_MAP).map(([modality, priority]) => ({ modality, priority }))
 })
+
+const modalityOptions = computed(() => Object.keys(DEFAULT_MODALITY_PRIORITY_MAP))
+
+const taskModalityRows = computed(() => Object.entries(TASK_MODALITY_DEFAULTS).map(([taskType, modality]) => ({
+  task_type: taskType,
+  task_label: TASK_TYPE_LABELS[taskType] || taskType,
+  default_modality: modality,
+})))
+
+const resourceTaskRows = computed(() => Object.keys(DEFAULT_TASK_RESOURCE_OVERRIDES).map((taskType) => ({
+  task_type: taskType,
+  task_label: TASK_TYPE_LABELS[taskType] || taskType,
+  default_note: '覆盖值会写入 DAG nodes[].resources',
+  roles: ROLE_ROWS,
+})))
 
 function normalizePriorityMap(value) {
   return {
@@ -199,12 +404,39 @@ function modalityPriorityHint(modality) {
   return MODALITY_PRIORITY_HINTS[modality] || '供路由系统识别业务流优先级。'
 }
 
+function cloneTaskResources(value) {
+  return JSON.parse(JSON.stringify(value || {}))
+}
+
+function normalizeTaskModalityOverrides(value) {
+  return {
+    ...TASK_MODALITY_DEFAULTS,
+    ...(value && typeof value === 'object' ? value : {}),
+  }
+}
+
+function normalizeTaskResourceOverrides(value) {
+  const merged = cloneTaskResources(DEFAULT_TASK_RESOURCE_OVERRIDES)
+  const incoming = value && typeof value === 'object' ? value : {}
+  Object.entries(incoming).forEach(([taskType, roleMap]) => {
+    if (!merged[taskType] || !roleMap || typeof roleMap !== 'object') return
+    Object.entries(roleMap).forEach(([role, resources]) => {
+      if (!merged[taskType][role] || !resources || typeof resources !== 'object') return
+      merged[taskType][role] = {
+        ...merged[taskType][role],
+        ...resources,
+      }
+    })
+  })
+  return merged
+}
+
 function applySettings(data) {
   settings.value = data || {}
   const loadedNotes = data?.notes || ''
   const hasLegacyEnvironmentNote = ['真实', '开发'].some((word) => loadedNotes.includes(`${word}环境`))
   const notes = hasLegacyEnvironmentNote
-    ? '标准模式用于常规运行；调试模式用于联调、排障和快速回归。'
+    ? '标准模式用于常规运行；联调模式用于接口联调、排障和快速回归。'
     : loadedNotes
   Object.assign(form, {
     environment_mode: data?.environment_mode || 'production',
@@ -215,6 +447,10 @@ function applySettings(data) {
     show_internal_controls: data?.show_internal_controls ?? false,
     show_routing_dag_json: data?.show_routing_dag_json ?? false,
     modality_priority_map: normalizePriorityMap(data?.modality_priority_map),
+    task_modality_override_enabled: data?.task_modality_override_enabled ?? false,
+    task_modality_overrides: normalizeTaskModalityOverrides(data?.task_modality_overrides),
+    task_resource_override_enabled: data?.task_resource_override_enabled ?? false,
+    task_resource_overrides: normalizeTaskResourceOverrides(data?.task_resource_overrides),
     notes,
   })
 }
@@ -235,6 +471,8 @@ async function saveSettings() {
     const payload = {
       ...form,
       modality_priority_map: normalizePriorityMap(form.modality_priority_map),
+      task_modality_overrides: normalizeTaskModalityOverrides(form.task_modality_overrides),
+      task_resource_overrides: normalizeTaskResourceOverrides(form.task_resource_overrides),
     }
     const { data } = await adminApi.updateSystemSettings(payload)
     applySettings(data)
@@ -324,6 +562,30 @@ onMounted(loadSettings)
 
 .priority-hint {
   margin: 0 0 12px;
+}
+
+.resource-task-list {
+  display: grid;
+  gap: 14px;
+}
+
+.resource-task-card {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fbfdff;
+}
+
+.resource-task-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #334155;
+}
+
+.resource-task-title strong {
+  color: #0f172a;
 }
 
 .vertical-radio {

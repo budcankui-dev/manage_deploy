@@ -1,4 +1,7 @@
+import pytest
+
 from services.intent_parser import parse_intent
+from services.intent_workflow import run_intent_workflow
 from services.llm_intent_parser import _raw_to_parse_result
 
 
@@ -27,6 +30,27 @@ def test_task_type_forces_modality_mapping_even_if_user_mentions_other_modality(
 
     assert result.task_type == "low_latency_video_pipeline"
     assert result.modality == "低时延转发模态"
+    assert result.parse_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_runtime_settings_can_override_task_modality_mapping():
+    runtime_settings = {
+        "intent_parser_mode": "rule",
+        "intent_rule_fallback_enabled": True,
+        "task_modality_override_enabled": True,
+        "task_modality_overrides": {
+            "low_latency_video_pipeline": "确定性转发模态",
+        },
+    }
+
+    result, _trace = await run_intent_workflow(
+        "视频AI推理任务，从 compute-1 到 compute-2，100帧，720p，30fps，现在开始跑2小时",
+        runtime_settings=runtime_settings,
+    )
+
+    assert result.task_type == "low_latency_video_pipeline"
+    assert result.modality == "确定性转发模态"
     assert result.parse_status == "valid"
 
 

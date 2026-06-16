@@ -882,6 +882,55 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert "traffic_class" not in dag["edges"][0]["flow"]
     assert dag["edges"][0]["flow"]["priority"] == 1
     assert dag["edges"][1]["flow"]["priority"] == 1
+    assert business_task["resource_requirement"] == {
+        node["task_node_id"]: node["resources"] for node in dag["nodes"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_benchmark_applies_system_resource_overrides_to_routing_dag(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-resource-override-user")
+    await _set_runtime_settings(
+        db_session,
+        task_resource_override_enabled=True,
+        task_resource_overrides={
+            "low_latency_video_pipeline": {
+                "compute": {
+                    "cpu_units": 6,
+                    "mem_mb": 3072,
+                    "disk_mb": 2048,
+                    "gpu_units": 1,
+                }
+            }
+        },
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "video-resource-override-run",
+            "routing_strategy": "low_latency_forwarding",
+        },
+    )
+
+    assert response.status_code == 200
+    order_id = response.json()["order_ids"][0]
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one()
+    by_role = {node["task_node_id"]: node["resources"] for node in order.routing_input_dag["nodes"]}
+
+    assert by_role["compute"] == {
+        "cpu_units": 6,
+        "mem_mb": 3072,
+        "disk_mb": 2048,
+        "gpu_units": 1,
+    }
+    assert order.runtime_config["business_task"]["resource_requirement"]["compute"] == by_role["compute"]
 
 
 @pytest.mark.asyncio

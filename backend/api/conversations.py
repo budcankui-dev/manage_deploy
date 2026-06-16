@@ -29,7 +29,11 @@ from schemas import (
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
 from services.routing_payload_builder import build_routing_payload
-from services.system_settings import get_runtime_settings, modality_priority_map_from_settings
+from services.system_settings import (
+    get_runtime_settings,
+    modality_priority_map_from_settings,
+    routing_resource_options_from_settings,
+)
 
 from .business_tasks import create_business_task
 
@@ -441,6 +445,7 @@ async def confirm_intent(
 
     runtime_settings = await get_runtime_settings(db)
     modality_priority_map = modality_priority_map_from_settings(runtime_settings)
+    resource_options = routing_resource_options_from_settings(runtime_settings)
 
     # 生成外部路由 DAG payload，并同步作为工单路由输入，避免页面与路由请求出现两套 DAG。
     input_payload = build_routing_payload(
@@ -456,8 +461,18 @@ async def confirm_intent(
         resource_requirement=draft.resource_requirement,
         modality_priority_map=modality_priority_map,
         routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
+        **resource_options,
     )
     order.routing_input_dag = input_payload
+    effective_resource_requirement = {
+        str(node.get("task_node_id")): node.get("resources")
+        for node in input_payload.get("nodes", [])
+        if isinstance(node, dict)
+        and node.get("task_node_id")
+        and isinstance(node.get("resources"), dict)
+    }
+    if effective_resource_requirement:
+        order.runtime_config["business_task"]["resource_requirement"] = effective_resource_requirement
 
     # 创建 RoutingRequest
     routing = RoutingRequest(
@@ -643,7 +658,17 @@ async def submit_conversation(
         data_profile=draft.data_profile or {},
         business_objective=BusinessObjective(**draft.business_objective),
         runtime_plan=draft.runtime_plan or {},
-        resource_requirement=draft.resource_requirement or {},
+        resource_requirement=(
+            {
+                str(node.get("task_node_id")): node.get("resources")
+                for node in (routing.input_payload or {}).get("nodes", [])
+                if isinstance(node, dict)
+                and node.get("task_node_id")
+                and isinstance(node.get("resources"), dict)
+            }
+            or draft.resource_requirement
+            or {}
+        ),
         routing_result=RoutingResult(
             strategy=routing.strategy,
             placements=routing.placements,
@@ -725,6 +750,7 @@ async def _get_conversation_detail(
         draft_response.destination_endpoint = endpoints.get(draft.destination_name or "")
         if draft.parse_status == ParseStatus.VALID:
             runtime_settings = await get_runtime_settings(db)
+            resource_options = routing_resource_options_from_settings(runtime_settings)
             draft_response.routing_dag_preview = build_routing_payload(
                 order_id=conversation.id,
                 order_name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
@@ -738,6 +764,7 @@ async def _get_conversation_detail(
                 resource_requirement=draft.resource_requirement,
                 modality_priority_map=modality_priority_map_from_settings(runtime_settings),
                 routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
+                **resource_options,
             )
     return ConversationResponse(
         id=conversation.id,

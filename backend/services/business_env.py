@@ -63,6 +63,10 @@ def build_business_env(
     routing_strategy = routing_strategy_from_business_task(bt)
     runtime_plan = bt.get("runtime_plan") or {}
     merged_resource_requirement = resource_requirement if resource_requirement is not None else bt.get("resource_requirement")
+    if task_role and isinstance(merged_resource_requirement, dict):
+        role_resources = merged_resource_requirement.get(str(task_role).lower())
+        if isinstance(role_resources, dict):
+            merged_resource_requirement = role_resources
     merged_result_storage = result_storage if result_storage is not None else bt.get("result_storage")
     merged_routing_result = routing_result if routing_result is not None else bt.get("routing_result")
 

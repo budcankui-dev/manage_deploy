@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models import SystemSetting
-from services.modality_catalog import MODALITIES, normalize_modality_priority_map
+from services.modality_catalog import (
+    MODALITIES,
+    TASK_TYPE_MODALITY,
+    normalize_modality,
+    normalize_modality_priority_map,
+)
 
 SYSTEM_RUNTIME_KEY = "runtime_modes"
 PRODUCTION_MODE = "production"
@@ -25,6 +30,10 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "show_internal_controls": False,
     "show_routing_dag_json": False,
     "modality_priority_map": normalize_modality_priority_map(),
+    "task_modality_override_enabled": False,
+    "task_modality_overrides": {},
+    "task_resource_override_enabled": False,
+    "task_resource_overrides": {},
     "notes": "标准模式用于常规运行；调试模式用于联调、排障和快速回归。",
 }
 
@@ -41,13 +50,62 @@ LEGACY_ENVIRONMENT_MODES = {
 
 INTENT_PARSER_MODE_LABELS = {
     "llm": "大模型/智能体解析",
-    "rule": "规则解析",
+    "rule": "系统解析流程",
 }
 
 BENCHMARK_ROUTING_MODE_LABELS = {
     "internal_auto": "自动路由",
     "external": "外部路由系统",
 }
+
+TASK_RESOURCE_ROLES = ("source", "compute", "sink")
+RESOURCE_KEYS = ("cpu_units", "mem_mb", "cpu_mem_mb", "disk_mb", "gpu_units", "gpu_mem_mb")
+
+
+def normalize_task_modality_overrides(value: dict[str, Any] | None = None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not isinstance(value, dict):
+        return result
+    for task_type, raw_modality in value.items():
+        task_key = str(task_type or "").strip()
+        if task_key not in TASK_TYPE_MODALITY:
+            continue
+        modality = normalize_modality(str(raw_modality or ""), task_key)
+        if modality in MODALITIES:
+            result[task_key] = modality
+    return result
+
+
+def normalize_task_resource_overrides(value: dict[str, Any] | None = None) -> dict[str, dict[str, dict[str, int]]]:
+    result: dict[str, dict[str, dict[str, int]]] = {}
+    if not isinstance(value, dict):
+        return result
+
+    for task_type, role_map in value.items():
+        task_key = str(task_type or "").strip()
+        if not task_key or not isinstance(role_map, dict):
+            continue
+        normalized_roles: dict[str, dict[str, int]] = {}
+        for role, raw_resources in role_map.items():
+            role_key = str(role or "").strip().lower()
+            if role_key not in TASK_RESOURCE_ROLES or not isinstance(raw_resources, dict):
+                continue
+            normalized_resources: dict[str, int] = {}
+            for key in RESOURCE_KEYS:
+                if key not in raw_resources:
+                    continue
+                try:
+                    number = int(raw_resources[key])
+                except (TypeError, ValueError):
+                    continue
+                if number < 0:
+                    continue
+                normalized_resources[key] = number
+            if normalized_resources:
+                normalized_roles[role_key] = normalized_resources
+        if normalized_roles:
+            result[task_key] = normalized_roles
+    return result
 
 
 def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -72,6 +130,18 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
     merged["show_routing_dag_json"] = bool(merged.get("show_routing_dag_json", False))
     merged["modality_priority_map"] = normalize_modality_priority_map(
         merged.get("modality_priority_map")
+    )
+    merged["task_modality_override_enabled"] = bool(
+        merged.get("task_modality_override_enabled", False)
+    )
+    merged["task_modality_overrides"] = normalize_task_modality_overrides(
+        merged.get("task_modality_overrides")
+    )
+    merged["task_resource_override_enabled"] = bool(
+        merged.get("task_resource_override_enabled", False)
+    )
+    merged["task_resource_overrides"] = normalize_task_resource_overrides(
+        merged.get("task_resource_overrides")
     )
     merged["modality_priority_rows"] = [
         {"modality": modality, "priority": merged["modality_priority_map"][modality]}
@@ -142,3 +212,33 @@ def modality_priority_map_from_settings(runtime_settings: dict[str, Any] | None)
     return normalize_modality_priority_map(
         (runtime_settings or {}).get("modality_priority_map")
     )
+
+
+def modality_for_task_from_settings(
+    task_type: str | None,
+    default_modality: str | None,
+    runtime_settings: dict[str, Any] | None,
+) -> str | None:
+    if not task_type:
+        return default_modality
+    settings_value = runtime_settings or {}
+    if not settings_value.get("task_modality_override_enabled", False):
+        return default_modality
+    overrides = normalize_task_modality_overrides(
+        settings_value.get("task_modality_overrides")
+    )
+    return overrides.get(task_type) or default_modality
+
+
+def routing_resource_options_from_settings(
+    runtime_settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    settings_value = runtime_settings or {}
+    return {
+        "task_resource_override_enabled": bool(
+            settings_value.get("task_resource_override_enabled", False)
+        ),
+        "task_resource_overrides": normalize_task_resource_overrides(
+            settings_value.get("task_resource_overrides")
+        ),
+    }

@@ -91,7 +91,7 @@ async def rebuild_video_template(base_url: str | None = None) -> dict:
 
         catalog = {
             "task_type": "low_latency_video_pipeline",
-            "modality": "low_latency_forwarding",
+            "modality": "低时延转发模态",
             "template_id": template_id,
         }
         catalog_response = await client.put(

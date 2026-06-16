@@ -1,7 +1,7 @@
 """Unified resource estimation for routing DAG nodes.
 
 Derives resource requirements deterministically from task_type + data_profile,
-eliminating inconsistencies between dag_builder and routing_payload_builder.
+so every routing DAG and worker env uses the same explainable values.
 """
 
 from __future__ import annotations

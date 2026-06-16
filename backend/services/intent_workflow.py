@@ -13,10 +13,23 @@ from config import settings
 from services.intent_parser import ParseResult, parse_intent
 from services.system_settings import (
     allow_rule_intent_fallback,
+    modality_for_task_from_settings,
     should_use_llm_intent_parser,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_runtime_result_overrides(
+    result: ParseResult,
+    runtime_settings: dict[str, Any] | None,
+) -> ParseResult:
+    result.modality = modality_for_task_from_settings(
+        result.task_type,
+        result.modality,
+        runtime_settings,
+    )
+    return result
 
 
 async def run_intent_workflow(
@@ -42,7 +55,7 @@ async def run_intent_workflow(
                 "parser_version": result.parser_version,
                 "raw_llm_response": raw_response,
             }
-            return result, trace
+            return _apply_runtime_result_overrides(result, configured_runtime), trace
         except Exception as exc:
             if not allow_rule_intent_fallback(configured_runtime):
                 raise
@@ -63,4 +76,4 @@ async def run_intent_workflow(
             "check_required_fields",
         ],
     }
-    return result, trace
+    return _apply_runtime_result_overrides(result, configured_runtime), trace
