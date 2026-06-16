@@ -166,7 +166,7 @@ function showConvDetail(row) {
 async function loadRouting() {
   const params = { page: routingFilter.page, page_size: 20 }
   if (routingFilter.status) params.status = routingFilter.status
-  const { data } = await adminApi.listRoutingRequests(params)
+  const { data } = await adminApi.listRoutingAuditRecords(params)
   routingRequests.value = data.items
   routingTotal.value = data.total
 }
