@@ -59,9 +59,7 @@ from .conversation import (
     ConversationSummary,
     IntentDraftResponse,
     IntentDraftUpdate,
-    RoutingRequestCreate,
     RoutingRequestResponse,
-    RoutingResultCallback,
 )
 from .health import (
     HealthStatus,
@@ -127,9 +125,7 @@ __all__ = [
     "ConversationSummary",
     "IntentDraftResponse",
     "IntentDraftUpdate",
-    "RoutingRequestCreate",
     "RoutingRequestResponse",
-    "RoutingResultCallback",
     "HealthStatus",
     "ContainerStatus",
     "ContainerStartRequest",

@@ -105,6 +105,29 @@ async def _seed_business_fixture(client):
     return node_ids, template_id
 
 
+def _standard_placements(
+    source: str = "worker-a",
+    compute: str = "worker-b",
+    sink: str = "worker-c",
+    *,
+    gpu_device: str | None = "0",
+) -> list[dict]:
+    rows = [
+        {"task_node_id": "source", "topology_node_id": source},
+        {"task_node_id": "compute", "topology_node_id": compute},
+        {"task_node_id": "sink", "topology_node_id": sink},
+    ]
+    if gpu_device is not None:
+        rows[1]["gpu_device"] = gpu_device
+    return rows
+
+
+async def _submit_routing_result(client, order_id: str, payload: dict):
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
+    assert claim_response.status_code == 200, claim_response.text
+    return await client.post(f"/api/routing-orders/{order_id}/result", json=payload)
+
+
 async def _seed_stable_baselines(db_session, node_ids, task_type: str = "high_throughput_matmul"):
     metric_key = "frame_latency_p90_ms" if task_type == "low_latency_video_pipeline" else "effective_gflops"
     operator = "<=" if task_type == "low_latency_video_pipeline" else ">="
@@ -207,6 +230,8 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     assert defaults["expert_mode"] is True
     assert defaults["labels"]["benchmark_routing_mode"] == "外部路由系统"
     assert defaults["modality_priority_map"]["低时延转发模态"] == 1
+    assert defaults["task_modality_override_enabled"] is False
+    assert defaults["task_resource_override_enabled"] is False
 
     update_response = await client.put(
         "/api/admin/system-settings",
@@ -222,6 +247,23 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
                 "低时延转发模态": 2,
                 "high_throughput_compute": 4,
                 "unknown": 99,
+            },
+            "task_modality_override_enabled": True,
+            "task_modality_overrides": {
+                "low_latency_video_pipeline": "确定性转发模态",
+                "unknown": "低时延转发模态",
+            },
+            "task_resource_override_enabled": True,
+            "task_resource_overrides": {
+                "high_throughput_matmul": {
+                    "compute": {
+                        "cpu_units": 12,
+                        "mem_mb": 4096,
+                        "disk_mb": 2048,
+                        "gpu_units": 1,
+                    },
+                    "unknown": {"cpu_units": 99},
+                }
             },
             "notes": "联调路由系统",
         },
@@ -240,6 +282,17 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     assert body["modality_priority_map"]["低时延转发模态"] == 2
     assert body["modality_priority_map"]["高通量计算模态"] == 4
     assert len(body["modality_priority_rows"]) == 8
+    assert body["task_modality_override_enabled"] is True
+    assert body["task_modality_overrides"] == {
+        "low_latency_video_pipeline": "确定性转发模态",
+    }
+    assert body["task_resource_override_enabled"] is True
+    assert body["task_resource_overrides"]["high_throughput_matmul"]["compute"] == {
+        "cpu_units": 12,
+        "mem_mb": 4096,
+        "disk_mb": 2048,
+        "gpu_units": 1,
+    }
 
     stored = (
         await db_session.execute(select(SystemSetting).where(SystemSetting.key == "runtime_modes"))
@@ -331,11 +384,7 @@ async def test_business_task_create_and_metric_evaluation(client, db_session):
         "runtime_plan": {"codec": "h264", "preset": "ultrafast"},
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
             "estimated_metric": {
                 "metric_key": "end_to_end_latency_ms",
                 "metric_value": 180,
@@ -413,11 +462,7 @@ async def test_business_task_summary_success_rate_excludes_unevaluated_orders(cl
             },
             "routing_result": {
                 "strategy": "completion_time_first",
-                "placements": {
-                    "source": node_ids[0],
-                    "compute": node_ids[1],
-                    "sink": node_ids[2],
-                },
+                "placements": _standard_placements(),
             },
             "auto_start": False,
         }
@@ -643,7 +688,7 @@ async def test_recalculate_benchmark_evaluations_from_metrics(client, db_session
                     "unit": "GFLOPS",
                 },
                 "runtime_plan": {"routing_strategy": "resource_guarantee"},
-                "routing_result": {"strategy": "resource_guarantee", "placements": {}},
+                "routing_result": {"strategy": "resource_guarantee", "placements": _standard_placements()},
             },
         },
         materialized_instance_id=instance.id,
@@ -800,7 +845,7 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
 
     business_task = order.runtime_config["business_task"]
     assert business_task["task_type"] == "low_latency_video_pipeline"
-    assert business_task["modality"] == "low_latency_forwarding"
+    assert business_task["modality"] == "低时延转发模态"
     assert business_task["business_objective"] == {
         "metric_key": "frame_latency_p90_ms",
         "operator": "<=",
@@ -814,6 +859,7 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert dag["order_id"] == order.id
     assert dag["job_name"] == "视频AI推理"
     assert dag["task_type"] == "low_latency_video_pipeline"
+    assert dag["modal"] == "低时延转发模态"
     assert dag["routing_strategy"] == "low_latency_forwarding"
     assert dag["policy_type"] == "LATENCY_CONSTRAINED"
     assert dag["priority"] == 1
@@ -900,7 +946,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     order_id = create_response.json()["order_ids"][0]
 
     payload = {
-        "strategy": "cost_first",
+        "strategy": "cost_priority",
         "selected_strategy": "GPU_EXCLUSIVE_LOW_RENT",
         "external_routing_id": "route-meta-001",
         "placements": [
@@ -921,7 +967,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
             "decision_trace_id": "trace-meta-001",
         },
     }
-    response = await client.post(f"/api/orders/{order_id}/routing-result", json=payload)
+    response = await _submit_routing_result(client, order_id, payload)
     assert response.status_code == 200, response.text
 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
@@ -934,7 +980,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     assert routing_result["metadata"]["rent"]["amount"] == 1.6
     assert routing_result["metadata"]["decision_trace_id"] == "trace-meta-001"
 
-    duplicate = await client.post(f"/api/orders/{order_id}/routing-result", json=payload)
+    duplicate = await client.post(f"/api/routing-orders/{order_id}/result", json=payload)
     assert duplicate.status_code == 200
     assert duplicate.json()["idempotent"] is True
 
@@ -1002,9 +1048,10 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
     db_session.add(order)
     await db_session.flush()
 
-    response = await client.post(
-        f"/api/orders/{order.id}/routing-result",
-        json={
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
             "strategy": "resource_guarantee",
             "placements": [],
             "metadata": {"path": ["terminal-a", "terminal-b"]},
@@ -1123,9 +1170,10 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
     db_session.add(order)
     await db_session.flush()
 
-    response = await client.post(
-        f"/api/orders/{order.id}/routing-result",
-        json={
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
             "strategy": "resource_guarantee",
             "placements": [
                 {"task_node_id": "compute", "topology_node_id": "worker-compute", "gpu_device": "0"},
@@ -1249,9 +1297,10 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
     db_session.add(order)
     await db_session.flush()
 
-    response = await client.post(
-        f"/api/orders/{order.id}/routing-result",
-        json={
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
             "strategy": "resource_guarantee",
             "placements": [
                 {"task_node_id": "compute", "topology_node_id": "worker-compute-2", "gpu_device": "0"},
@@ -1346,9 +1395,10 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     db_session.add(order)
     await db_session.flush()
 
-    response = await client.post(
-        f"/api/orders/{order.id}/routing-result",
-        json={
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
             "strategy": "resource_guarantee",
             "placements": [
                 {"task_node_id": "compute", "topology_node_id": "compute-dest", "gpu_device": "0"},
@@ -1404,9 +1454,10 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     order.routing_input_dag = {**order.routing_input_dag, "nodes": dag_nodes}
     await db_session.flush()
 
-    response = await client.post(
-        f"/api/orders/{order_id}/routing-result",
-        json={
+    response = await _submit_routing_result(
+        client,
+        order_id,
+        {
             "strategy": "resource_guarantee",
             "placements": [
                 {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
@@ -1428,6 +1479,37 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     assert order.runtime_config["routing_result"]["router_placements"] == [
         {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_routing_result_rejects_legacy_placement_fields(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-asset-id-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "routing-asset-id-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    response = await _submit_routing_result(
+        client,
+        order_id,
+        {
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_indices": ["0"]},
+            ],
+        },
+    )
+    assert response.status_code == 422
+    assert "gpu_indices" in response.text
 
 
 @pytest.mark.asyncio
@@ -1544,6 +1626,36 @@ async def test_routing_order_result_requires_claim(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_legacy_order_routing_result_endpoint_is_not_public(client, db_session):
+    await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="legacy-routing-endpoint-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "legacy-routing-endpoint-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    result_response = await client.post(
+        f"/api/orders/{order_id}/routing-result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            ],
+        },
+    )
+
+    assert result_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_router_can_requeue_and_fail_routing_order_without_service_token(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-status-user")
@@ -1611,10 +1723,14 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
             {"task_node_id": "sink", "topology_node_id": "worker-c"},
         ],
     }
+    first_claim = await client.patch(f"/api/routing-orders/{first_id}/claim")
+    assert first_claim.status_code == 200
     first = await client.post(f"/api/routing-orders/{first_id}/result", json=payload)
     assert first.status_code == 200, first.text
     assert first.json()["routing_status"] == "network_binding_ready"
 
+    second_claim = await client.patch(f"/api/routing-orders/{second_id}/claim")
+    assert second_claim.status_code == 200
     second = await client.post(f"/api/routing-orders/{second_id}/result", json=payload)
     assert second.status_code == 409
     assert "GPU slot conflict" in second.json()["detail"]
@@ -1645,6 +1761,8 @@ async def test_routing_result_default_benchmark_gpu_participates_in_conflict_che
             {"task_node_id": "sink", "topology_node_id": "worker-c"},
         ],
     }
+    first_claim = await client.patch(f"/api/routing-orders/{first_id}/claim")
+    assert first_claim.status_code == 200
     first = await client.post(f"/api/routing-orders/{first_id}/result", json=payload_without_gpu)
     assert first.status_code == 200, first.text
 
@@ -1655,6 +1773,8 @@ async def test_routing_result_default_benchmark_gpu_participates_in_conflict_che
     compute = next(item for item in placements if item["task_node_id"] == "compute")
     assert compute["gpu_device"] == "0"
 
+    second_claim = await client.patch(f"/api/routing-orders/{second_id}/claim")
+    assert second_claim.status_code == 200
     second = await client.post(f"/api/routing-orders/{second_id}/result", json=payload_without_gpu)
     assert second.status_code == 409
     assert "GPU slot conflict" in second.json()["detail"]
@@ -1713,6 +1833,9 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
     )
     assert create_response.status_code == 200
     order_id = create_response.json()["order_ids"][0]
+
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
+    assert claim_response.status_code == 200
 
     result_response = await client.post(
         f"/api/routing-orders/{order_id}/result",
@@ -1775,6 +1898,9 @@ async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu
     )
     assert create_response.status_code == 200
     order_id = create_response.json()["order_ids"][0]
+
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
+    assert claim_response.status_code == 200
 
     result_response = await client.post(
         f"/api/routing-orders/{order_id}/result",
@@ -2087,12 +2213,7 @@ async def test_business_task_summary_ignores_orphan_evaluations(client, db_sessi
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
         },
         "auto_start": False,
     }
@@ -2134,11 +2255,7 @@ async def test_delete_order_purges_evaluation(client, db_session):
         },
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
         },
         "auto_start": False,
     }
@@ -2179,11 +2296,7 @@ async def test_cleanup_order_instance_preserves_business_evidence(client, db_ses
         },
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
         },
         "auto_start": False,
     }
@@ -2256,11 +2369,7 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
         },
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
         },
         "auto_start": False,
     }
@@ -2331,7 +2440,9 @@ async def test_cleanup_order_instances_can_scope_by_benchmark_run_and_task_type(
                 "task_type": task_type,
                 "routing_result": {
                     "strategy": "resource_guarantee",
-                    "placements": {"compute": {"topology_node_id": "worker-a", "gpu_device": "0"}},
+                    "placements": [
+                        {"task_node_id": "compute", "topology_node_id": "worker-a", "gpu_device": "0"}
+                    ],
                 },
             },
         }
@@ -2407,11 +2518,7 @@ async def test_business_task_list_api(client, db_session):
         },
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": _standard_placements(),
         },
         "auto_start": False,
     }
@@ -2486,7 +2593,8 @@ async def test_business_task_list_api(client, db_session):
     detail = detail_response.json()
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
     assert detail["routing_result"]["strategy"] == "completion_time_first"
-    assert detail["routing_result"]["placements"]["compute"] == node_ids[1]
+    compute_route = next(item for item in detail["routing_result"]["placements"] if item["task_node_id"] == "compute")
+    assert compute_route["topology_node_id"] == "worker-b"
     assert detail["instance"]["id"] == instance_id
     assert detail["evaluation"]["business_success"] is True
     placements = {item["role"]: item for item in detail["node_placements"]}

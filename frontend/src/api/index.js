@@ -82,7 +82,7 @@ export const templatesApi = {
   get: (id) => api.get(`/templates/${id}`),
   create: (data) => api.post('/templates', data),
   update: (id, data) => api.put(`/templates/${id}`, data),
-  delete: (id) => api.delete(`/templates/${id}`)
+  delete: (id, config = {}) => api.delete(`/templates/${id}`, config)
 }
 
 export const instancesApi = {
@@ -117,7 +117,6 @@ export const ordersApi = {
   ),
   materialize: (id) => api.post(`/orders/${id}/materialize`),
   materializePending: () => api.post('/orders/materialize/pending'),
-  submitRoutingResult: (id, data) => api.post(`/orders/${id}/routing-result`, data),
   cancel: (id) => api.post(`/orders/${id}/cancel`),
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
   batchAutoRoute: (data = {}) => api.post('/orders/batch-auto-route', data),
@@ -133,6 +132,12 @@ export const ordersApi = {
     Array.isArray(payload) ? { order_ids: payload } : payload,
     withTimeout(LONG_RUNNING_TIMEOUT)
   ),
+}
+
+export const routingOrdersApi = {
+  claim: (id) => api.patch(`/routing-orders/${id}/claim`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
+  submitResult: (id, data) => api.post(`/routing-orders/${id}/result`, data, withTimeout(BENCHMARK_FLOW_TIMEOUT)),
+  networkReady: (id, data = {}) => api.post(`/routing-orders/${id}/network-ready`, data, withTimeout(LONG_RUNNING_TIMEOUT))
 }
 
 export const businessApi = {
@@ -176,8 +181,6 @@ export const conversationApi = {
     api.post(`/conversations/${id}/submit`, null, {
       params: { auto_start: params.auto_start ?? false }
     }),
-  createRoutingRequest: (data) => api.post('/routing-requests', data),
-  getRoutingRequest: (id) => api.get(`/routing-requests/${id}`)
 }
 
 export const adminApi = {
@@ -190,7 +193,7 @@ export const adminApi = {
   deleteUser: (id) => api.delete(`/admin/users/${id}`),
   listConversations: (params = {}) => api.get('/admin/conversations', { params }),
   getConversation: (id) => api.get(`/admin/conversations/${id}`),
-  listRoutingRequests: (params = {}) => api.get('/admin/routing-requests', { params }),
+  listRoutingAuditRecords: (params = {}) => api.get('/admin/routing-requests', { params }),
   listOrders: (params = {}) => api.get('/admin/orders', { params }),
   parseOne: (data) => api.post('/admin/intent-parser/parse-one', data),
   intentEvalLatest: () => api.get('/admin/intent-parser/evaluations/latest'),

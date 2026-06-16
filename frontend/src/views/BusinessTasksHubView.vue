@@ -296,7 +296,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adminApi, businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
+import { adminApi, businessApi, instancesApi, nodesApi, ordersApi, routingOrdersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import { extractErrorMessage } from '@/utils/errorMessage'
 import {
@@ -383,58 +383,6 @@ const manualPlacements = ref({
   sink: { topology_node_id: '', gpu_device: null, skip_deploy: false },
 })
 
-
-const placementRows = computed(() => {
-  const placements = orderDetail.value?.routing_result?.placements
-  if (!placements) return []
-  const rowFor = (role, placement) => {
-    const roleName = { source: '数据源', worker: '计算', compute: '计算', sink: '汇总' }[role] || role
-    const requiresGpu = ['worker', 'compute'].includes(role)
-    if (!placement) {
-      return {
-        role: roleName,
-        task_node_id: role,
-        topology_node_id: '未部署',
-        gpu_device: null,
-        gpu_display: requiresGpu ? '未记录' : '不需要',
-        requires_gpu: requiresGpu,
-      }
-    }
-    if (typeof placement === 'string') {
-      return {
-        role: roleName,
-        task_node_id: role,
-        topology_node_id: placement,
-        gpu_device: null,
-        gpu_display: requiresGpu ? '未记录' : '不需要',
-        requires_gpu: requiresGpu,
-      }
-    }
-    const gpu = placement.gpu_device ?? (Array.isArray(placement.gpu_indices) ? placement.gpu_indices[0] : null)
-    return {
-      role: roleName,
-      task_node_id: placement.task_node_id || placement.node_id || role,
-      topology_node_id: placement.topology_node_id || placement.worker_host || placement.node_name || placement.hostname || placement.node_id || '未部署',
-      gpu_device: gpu,
-      gpu_display: hasGpuValue(gpu) ? String(gpu) : (requiresGpu ? '未记录' : '不需要'),
-      requires_gpu: requiresGpu,
-    }
-  }
-  if (Array.isArray(placements)) {
-    const map = {}
-    placements.forEach(p => { map[p.task_node_id || p.node_id] = p })
-    return [
-      rowFor('source', map.source),
-      rowFor('compute', map.compute || map.worker),
-      rowFor('sink', map.sink),
-    ]
-  }
-  return [
-    rowFor('source', placements.source),
-    rowFor('compute', placements.compute || placements.worker),
-    rowFor('sink', placements.sink),
-  ]
-})
 
 const portAccessRows = computed(() => {
   if (!instanceDetail.value?.nodes) return []
@@ -885,7 +833,11 @@ async function submitManualRouting() {
         topology_node_id: manualPlacements.value[role].topology_node_id,
         gpu_device: manualPlacements.value[role].gpu_device || null,
       }))
-    await ordersApi.submitRoutingResult(manualRoutingOrder.value.order_id, { placements })
+    await routingOrdersApi.claim(manualRoutingOrder.value.order_id)
+    await routingOrdersApi.submitResult(manualRoutingOrder.value.order_id, {
+      placements,
+      require_network_ready: false,
+    })
     ElMessage.success('路由分配成功，实例已创建')
     manualRoutingVisible.value = false
     await refreshAll()
@@ -922,7 +874,7 @@ async function submitSample() {
   const payload = {
     external_task_id: `matmul-ui-${Date.now()}`,
     task_type: 'high_throughput_matmul',
-    modality: 'high_throughput_compute',
+    modality: '高通量计算模态',
     name: '矩阵乘法示例任务',
     description: '演示科学计算流水线：三节点 batched 矩阵乘法，以计算耗时验收是否达标。',
     data_profile: {
@@ -944,11 +896,11 @@ async function submitSample() {
     },
     routing_result: {
       strategy: 'fastest_completion',
-      placements: {
-        source: nodes.value[0].id,
-        compute: nodes.value[1].id,
-        sink: nodes.value[2].id,
-      },
+      placements: [
+        { task_node_id: 'source', topology_node_id: nodes.value[0].hostname },
+        { task_node_id: 'compute', topology_node_id: nodes.value[1].hostname, gpu_device: '0' },
+        { task_node_id: 'sink', topology_node_id: nodes.value[2].hostname },
+      ],
       estimated_metric: { metric_key: 'effective_gflops', metric_value: 200, unit: 'GFLOPS' },
     },
     result_storage: { backend: 'minio', bucket: 'task-results' },

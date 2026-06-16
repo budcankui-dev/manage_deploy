@@ -63,12 +63,14 @@ async def main():
 
         # Route
         if order["routing_status"] != "completed":
-            route = await c.post(f"/api/orders/{order_id}/routing-result", headers=h, json={
+            claim = await c.patch(f"/api/routing-orders/{order_id}/claim")
+            print(f"claim: {claim.status_code}")
+            route = await c.post(f"/api/routing-orders/{order_id}/result", json={
+                "strategy": "fastest_completion",
                 "placements": [
-                    {"node_id": "source", "worker_host": "compute-1"},
-                    {"node_id": "compute", "worker_host": "compute-1"},
-                    {"node_id": "sink", "worker_host": "compute-2"},
-                ]
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                ],
+                "require_network_ready": False,
             })
             rj = route.json()
             print(f"routing: {rj.get('routing_status')} instance={str(rj.get('instance_id',''))[:8]}")

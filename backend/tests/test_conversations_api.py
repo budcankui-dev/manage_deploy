@@ -3,14 +3,14 @@ from sqlalchemy import select
 
 from config import settings
 from models import TaskInstanceNode, TaskOrder
-from tests.test_business_tasks_api import _auth_headers, _seed_business_fixture
+from tests.test_business_tasks_api import _auth_headers, _seed_business_fixture, _standard_placements
 
 
 @pytest.mark.asyncio
 async def test_conversation_parse_confirm_route_and_submit(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session)
-    node_ids, _template_id = await _seed_business_fixture(client)
+    _node_ids, _template_id = await _seed_business_fixture(client)
     catalog_response = await client.post(
         "/api/business-template-catalog",
         json={
@@ -50,60 +50,55 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert confirm_response.status_code == 200
     confirm_body = confirm_response.json()
     assert confirm_body["status"] == "awaiting_routing"
-    routing_id = confirm_body["latest_routing_request"]["id"]
+    assert confirm_body["materialized_order_id"] == conversation_id
 
-    callback_response = await client.post(
-        f"/api/routing-results/{routing_id}",
-        headers={"X-Service-Token": settings.service_api_token},
+    claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
+    assert claim_response.status_code == 200
+    assert claim_response.json()["order_id"] == conversation_id
+    assert claim_response.json()["routing_status"] == "computing"
+
+    result_response = await client.post(
+        f"/api/routing-orders/{conversation_id}/result",
         json={
-            "status": "completed",
             "strategy": "completion_time_first",
-            "placements": {
-                "source": {"node_id": node_ids[0], "gpu_indices": []},
-                "worker": {
-                    "node_id": node_ids[1],
-                    "node_name": "worker-b",
-                    "gpu_indices": [0],
-                    "allocated_resources": {"gpu_units": 1},
-                },
-                "sink": {"node_id": node_ids[2], "gpu_indices": []},
-            },
+            "placements": _standard_placements(),
             "estimated_metric": {
                 "metric_key": "end_to_end_latency_ms",
                 "metric_value": 180,
                 "unit": "ms",
             },
             "external_routing_id": "router-mock-001",
+            "require_network_ready": False,
         },
     )
-    assert callback_response.status_code == 200
+    assert result_response.status_code == 200
+    assert result_response.json()["order_id"] == conversation_id
+    assert result_response.json()["routing_status"] == "completed"
 
     detail_response = await client.get(f"/api/conversations/{conversation_id}", headers=headers)
     assert detail_response.status_code == 200
-    assert detail_response.json()["status"] == "ready_to_submit"
-    assert detail_response.json()["latest_routing_request"]["placements"]["worker"]["node_id"] == node_ids[1]
-
-    submit_response = await client.post(
-        f"/api/conversations/{conversation_id}/submit?auto_start=false",
-        headers=headers,
-    )
-    assert submit_response.status_code == 200
-    submit_body = submit_response.json()
-    assert submit_body["instance_id"]
-    assert submit_body["order_id"]
+    assert detail_response.json()["status"] == "submitted"
+    routing_placements = detail_response.json()["latest_routing_request"]["placements"]
+    compute_route = next(item for item in routing_placements if item["task_node_id"] == "compute")
+    assert compute_route["topology_node_id"] == "worker-b"
+    assert compute_route["gpu_device"] == "0"
 
     order = (
-        await db_session.execute(select(TaskOrder).where(TaskOrder.id == submit_body["order_id"]))
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
     ).scalar_one()
-    assert order.runtime_config["business_task"]["routing_result"]["placements"]["worker"]["node_id"] == node_ids[1]
+    assert order.materialized_instance_id
+    order_placements = order.runtime_config["routing_result"]["placements"]
+    compute_order_route = next(item for item in order_placements if item["task_node_id"] == "compute")
+    assert compute_order_route["topology_node_id"] == "worker-b"
+    assert compute_order_route["gpu_device"] == "0"
 
     inst_nodes = (
         await db_session.execute(
-            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == submit_body["instance_id"])
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == order.materialized_instance_id)
         )
     ).scalars().all()
     by_role = {node.env["TASK_ROLE"]: node for node in inst_nodes}
-    assert by_role["compute"].node_id == node_ids[1]
+    assert by_role["compute"].node_id
     assert by_role["compute"].gpu_id == "0"
     assert by_role["compute"].env["GPU_DEVICE"] == "0"
 
@@ -159,8 +154,10 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert route_body["status"] == "submitted"
     assert route_body["materialized_order_id"] == conversation_id
     assert route_body["latest_routing_request"]["status"] == "completed"
-    assert route_body["latest_routing_request"]["placements"]["compute"]["topology_node_id"] == "worker-b"
-    assert route_body["latest_routing_request"]["placements"]["compute"]["gpu_device"] == "0"
+    routing_placements = route_body["latest_routing_request"]["placements"]
+    routing_compute = next(item for item in routing_placements if item["task_node_id"] == "compute")
+    assert routing_compute["topology_node_id"] == "worker-b"
+    assert routing_compute["gpu_device"] == "0"
 
     order = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))

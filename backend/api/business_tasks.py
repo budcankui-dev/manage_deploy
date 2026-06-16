@@ -69,13 +69,6 @@ async def build_instance_create_from_business_task(
     template_id: str,
     role_node_names: dict[str, str],
 ) -> TaskInstanceCreate:
-    shared_env = build_business_env(
-        business_task=payload.model_dump(mode="json"),
-        task_instance_id=payload.external_task_id,
-        resource_requirement=payload.resource_requirement,
-        result_storage=payload.result_storage,
-        routing_result=payload.routing_result.model_dump(mode="json"),
-    )
     overrides: list[TaskInstanceNodeOverride] = []
     gpu_roles = set()
     if payload.task_type == "high_throughput_matmul":
@@ -84,10 +77,9 @@ async def build_instance_create_from_business_task(
         gpu_roles.add("compute")
     elif payload.task_type == "llm_text_generation":
         gpu_roles.add("compute")
+    placements_by_role = _placements_by_role(payload.routing_result.placements)
     for role, template_node_name in role_node_names.items():
-        placement = payload.routing_result.placements.get(role)
-        if role == "compute" and placement is None:
-            placement = payload.routing_result.placements.get("worker")
+        placement = placements_by_role.get(role)
         raw_node_id = _placement_node_name(placement)
         if not raw_node_id:
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
@@ -95,8 +87,14 @@ async def build_instance_create_from_business_task(
             node_id = raw_node_id
         else:
             node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
-        env = dict(shared_env)
-        env["TASK_ROLE"] = role
+        env = build_business_env(
+            business_task=payload.model_dump(mode="json"),
+            task_role=role,
+            task_instance_id=payload.external_task_id,
+            resource_requirement=payload.resource_requirement,
+            result_storage=payload.result_storage,
+            routing_result=payload.routing_result.model_dump(mode="json"),
+        )
         placement_gpu_id = _placement_gpu_id(placement)
         gpu_id = placement_gpu_id if placement_gpu_id is not None else ("0" if role in gpu_roles else None)
         if gpu_id is not None:
@@ -207,7 +205,10 @@ async def create_business_task(payload: BusinessTaskCreate, db: AsyncSession = D
         auto_start=False,
         keep_after_stop=payload.keep_after_stop,
         runtime_config={
-            "business_task": payload.model_dump(mode="json"),
+            "business_task": {
+                **payload.model_dump(mode="json"),
+                "resource_requirement": payload.resource_requirement,
+            },
             "node_overrides": [item.model_dump() for item in instance_create.node_overrides],
         },
         status=OrderStatus.PENDING,
@@ -319,25 +320,21 @@ async def _lookup_baseline(
     if not task_type:
         return None
     placements = routing_result.get("placements") or []
-    worker_host = None
+    topology_node_id = None
     if isinstance(placements, list):
         for p in placements:
-            role = p.get("task_node_id") or p.get("node_id") or p.get("role")
+            if not isinstance(p, dict):
+                continue
+            role = p.get("task_node_id")
             if role in ("compute", "worker"):
-                worker_host = p.get("topology_node_id") or p.get("worker_host")
+                topology_node_id = p.get("topology_node_id")
                 break
-    elif isinstance(placements, dict):
-        worker_host = _placement_node_name(placements.get("worker") or placements.get("compute"))
-    if not worker_host:
+    if not topology_node_id:
         return None
-    # Resolve hostname/display name/UUID to node_id.
+    # External routing placements use nodes.hostname as topology_node_id.
     node = (
         await db.execute(
-            select(NodeModel).where(
-                (NodeModel.id == worker_host)
-                | (NodeModel.hostname == worker_host)
-                | (NodeModel.display_name == worker_host)
-            )
+            select(NodeModel).where(NodeModel.hostname == topology_node_id)
         )
     ).scalar_one_or_none()
     if not node:
@@ -354,14 +351,22 @@ async def _lookup_baseline(
     return baseline.baseline_value if baseline else None
 
 
+def _placements_by_role(placements: list[Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for placement in placements or []:
+        if not isinstance(placement, dict):
+            placement = placement.model_dump(exclude_none=True)
+        role = str(placement.get("task_node_id") or "").lower()
+        if role:
+            result[role] = placement
+    return result
+
+
 def _placement_node_name(placement: Any) -> str | None:
-    if isinstance(placement, str):
-        return placement
     if isinstance(placement, dict):
-        for key in ("topology_node_id", "node_name", "worker_host", "hostname", "node_id"):
-            value = placement.get(key)
-            if isinstance(value, str) and value:
-                return value
+        value = placement.get("topology_node_id")
+        if isinstance(value, str) and value:
+            return value
     return None
 
 
@@ -371,9 +376,6 @@ def _placement_gpu_id(placement: Any) -> str | None:
     gpu_device = placement.get("gpu_device")
     if gpu_device is not None:
         return str(gpu_device)
-    gpu_indices = placement.get("gpu_indices")
-    if isinstance(gpu_indices, list) and gpu_indices:
-        return str(gpu_indices[0])
     return None
 
 

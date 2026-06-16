@@ -135,12 +135,19 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 
 平台系统设置中“业务测评路由”应选择 **外部路由系统**。该模式下平台会等待路由系统回写结果，并拒绝内置自动路由接口，避免测评工单绕过外部路由服务。
 
+核心联调只需要下面 4 个接口：
+
 | 动作 | 方法与路径 | 说明 |
 |------|------------|------|
 | 获取待路由工单 | `GET /api/routing-orders?status=pending&limit=100` | 平台返回 pending 工单和 DAG。也可以直接读 MySQL，但推荐先用接口联调。 |
 | 领取工单 | `PATCH /api/routing-orders/{order_id}/claim` | 平台把 `pending -> computing`，并发时只有一个路由进程能成功。 |
 | 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例，并返回实际端口绑定 `network_bindings`。该接口要求先 claim，pending 工单直接回写会返回 409。 |
 | 确认网络就绪 | `POST /api/routing-orders/{order_id}/network-ready` | 路由系统下发流表/QoS 后调用，平台才启动或注册启动计划。 |
+
+下面是可选运维接口，不是最小联调必需。只有当路由系统要完整维护资源占用、失败恢复和资源释放时再实现：
+
+| 动作 | 方法与路径 | 说明 |
+|------|------------|------|
 | 临时资源不足 | `PATCH /api/routing-orders/{order_id}/requeue` | 把 `computing -> pending`，稍后重试，不要丢工单。 |
 | 确定无法路由 | `PATCH /api/routing-orders/{order_id}/fail` | 把工单标记为 `failed`，需要写清失败原因。 |
 | 查询释放事件 | `GET /api/routing-resource-events?event_type=release&unacked=true&limit=100` | 平台告诉路由系统哪些 GPU 已释放。 |

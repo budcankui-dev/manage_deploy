@@ -79,7 +79,7 @@ class RoutingRequestResponse(BaseModel):
     business_end_time: Optional[datetime] = None
     input_payload: Optional[dict[str, Any]] = None
     result_payload: Optional[dict[str, Any]] = None
-    placements: Optional[dict[str, Any]] = None
+    placements: Optional[list[dict[str, Any]]] = None
     estimated_metric: Optional[dict[str, Any]] = None
     selected_strategy: Optional[str] = None
     external_routing_id: Optional[str] = None
@@ -114,25 +114,6 @@ class ConversationSummary(BaseModel):
     title: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-
-
-class RoutingRequestCreate(BaseModel):
-    conversation_id: str
-    strategy: str = "resource_guarantee"
-
-
-class RoutingResultCallback(BaseModel):
-    status: RoutingRequestStatus
-    strategy: Optional[str] = None
-    placements: Optional[dict[str, Any]] = None
-    metadata: Optional[dict[str, Any]] = None
-    estimated_metric: Optional[dict[str, Any]] = None
-    external_routing_id: Optional[str] = None
-    error_message: Optional[str] = None
-    result_payload: Optional[dict[str, Any]] = None
-    selected_strategy: Optional[str] = None
-    path: Optional[list[str]] = None
-    explanation: Optional[str] = None
 
 
 class ConversationSubmitResponse(BaseModel):

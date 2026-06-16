@@ -387,11 +387,11 @@ async def test_business_task_defaults_to_scheduled_with_end_time(client, db_sess
         },
         "routing_result": {
             "strategy": "completion_time_first",
-            "placements": {
-                "source": node_ids[0],
-                "compute": node_ids[1],
-                "sink": node_ids[2],
-            },
+            "placements": [
+                {"task_node_id": "source", "topology_node_id": "lc-worker-a"},
+                {"task_node_id": "compute", "topology_node_id": "lc-worker-b", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "lc-worker-c"},
+            ],
         },
     }
     response = await client.post("/api/business-tasks", json=payload)

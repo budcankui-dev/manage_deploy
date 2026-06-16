@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -52,7 +52,7 @@ from schemas import (
 from services.business_task_query import get_order_detail_context
 from services.business_env import build_business_env
 from services.dag_executor import DAGExecutor
-from services.order_materialize import _resolve_node_id
+from services.node_resolver import resolve_node_id
 from services.instance_lifecycle import cleanup_instance_runtime
 from services.order_sync import (
     mark_orders_completed_for_instance,
@@ -68,7 +68,11 @@ from services.routing_network import (
     mark_network_binding_ready,
 )
 from services.scheduler import TaskScheduler
-from services.system_settings import get_runtime_settings, modality_priority_map_from_settings
+from services.system_settings import (
+    get_runtime_settings,
+    modality_priority_map_from_settings,
+    routing_resource_options_from_settings,
+)
 from services.time_utils import business_now
 
 from .instances import _create_instance_from_template
@@ -79,7 +83,7 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 BENCHMARK_TASK_CONFIGS = {
     "high_throughput_matmul": {
         "label": "矩阵乘法计算任务",
-        "modality": "high_throughput_compute",
+        "modality": "高通量计算模态",
         "default_profile": {
             "profile_id": "gpu_standard",
             "matrix_size": 1024,
@@ -101,7 +105,7 @@ BENCHMARK_TASK_CONFIGS = {
     },
     "low_latency_video_pipeline": {
         "label": "视频AI推理任务",
-        "modality": "low_latency_forwarding",
+        "modality": "低时延转发模态",
         "default_profile": {
             "profile_id": "video_industrial_inspection_720p",
             "frame_count": 100,
@@ -302,26 +306,15 @@ def _benchmark_compute_slot(order: TaskOrder) -> str:
             if isinstance(item, dict) and _placement_role(item) in ("compute", "worker"):
                 placement = item
                 break
-    elif isinstance(placements, dict):
-        placement = placements.get("compute") or placements.get("worker")
 
     host = "unknown"
     gpu = _default_compute_gpu_for_order(order) or "none"
     if isinstance(placement, dict):
         host = (
             placement.get("topology_node_id")
-            or placement.get("worker_host")
-            or placement.get("hostname")
-            or placement.get("node_name")
             or host
         )
-        gpu = (
-            placement.get("gpu_device")
-            or (placement.get("gpu_indices") or [None])[0]
-            or gpu
-        )
-    elif isinstance(placement, str):
-        host = placement
+        gpu = placement.get("gpu_device") or gpu
     return f"{host}:gpu={gpu}"
 
 
@@ -347,18 +340,6 @@ def _gpu_from_routing_result(routing_result: dict | None, role: str) -> str | No
             gpu_device = placement.get("gpu_device")
             if gpu_device is not None:
                 return str(gpu_device)
-            gpu_indices = placement.get("gpu_indices")
-            if isinstance(gpu_indices, list) and gpu_indices:
-                return str(gpu_indices[0])
-    if isinstance(placements, dict):
-        placement = placements.get(role)
-        if isinstance(placement, dict):
-            gpu_device = placement.get("gpu_device")
-            if gpu_device is not None:
-                return str(gpu_device)
-            gpu_indices = placement.get("gpu_indices")
-            if isinstance(gpu_indices, list) and gpu_indices:
-                return str(gpu_indices[0])
     return None
 
 
@@ -818,12 +799,16 @@ async def materialize_pending_orders(db: AsyncSession = Depends(get_db)):
 
 
 class RoutingPlacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     task_node_id: str
     topology_node_id: str
     gpu_device: Optional[str] = None
 
 
 class RoutingResultPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     placements: list[RoutingPlacement] = Field(default_factory=list)
     strategy: Optional[str] = None
     selected_strategy: Optional[str] = None
@@ -831,14 +816,13 @@ class RoutingResultPayload(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     estimated_metric: dict[str, Any] = Field(default_factory=dict)
     result_payload: dict[str, Any] = Field(default_factory=dict)
-    extra: dict[str, Any] = Field(default_factory=dict)
     require_network_ready: bool = True
 
 
 def _placement_role(placement: RoutingPlacement | dict[str, Any]) -> str:
     if isinstance(placement, RoutingPlacement):
         return str(placement.task_node_id or "").lower()
-    return str(placement.get("task_node_id") or placement.get("node_id") or placement.get("role") or "").lower()
+    return str(placement.get("task_node_id") or "").lower()
 
 
 def _routing_dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
@@ -855,6 +839,15 @@ def _routing_dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
             if key:
                 result[str(key).lower()] = node
     return result
+
+
+def _routing_dag_resources_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
+    resources: dict[str, dict[str, Any]] = {}
+    for role, node in _routing_dag_nodes_by_role(order).items():
+        value = node.get("resources") if isinstance(node, dict) else None
+        if isinstance(value, dict):
+            resources[role] = value
+    return resources
 
 
 def _role_set(value: Any) -> set[str] | None:
@@ -941,10 +934,10 @@ def _complete_platform_fixed_endpoint_placements(
     return completed
 
 
-def _placement_worker_host(placement: RoutingPlacement | dict[str, Any]) -> str | None:
+def _placement_topology_node_id(placement: RoutingPlacement | dict[str, Any]) -> str | None:
     if isinstance(placement, RoutingPlacement):
         return placement.topology_node_id
-    value = placement.get("topology_node_id") or placement.get("worker_host") or placement.get("node_name") or placement.get("hostname")
+    value = placement.get("topology_node_id")
     return str(value) if value else None
 
 
@@ -953,11 +946,6 @@ def _placement_gpu_ids(placement: RoutingPlacement | dict[str, Any]) -> list[str
         return [str(placement.gpu_device)] if placement.gpu_device is not None else []
     if placement.get("gpu_device") is not None:
         return [str(placement["gpu_device"])]
-    if placement.get("gpu_id") is not None:
-        return [str(placement["gpu_id"])]
-    indices = placement.get("gpu_indices")
-    if isinstance(indices, list):
-        return [str(item) for item in indices if item is not None]
     return []
 
 
@@ -968,11 +956,11 @@ def _compute_gpu_slots_from_placements(
     for placement in placements:
         if _placement_role(placement) not in {"compute", "worker", "infer", "train"}:
             continue
-        worker_host = _placement_worker_host(placement)
-        if not worker_host:
+        topology_node_id = _placement_topology_node_id(placement)
+        if not topology_node_id:
             continue
         for gpu_id in _placement_gpu_ids(placement):
-            slots.add((worker_host, gpu_id))
+            slots.add((topology_node_id, gpu_id))
     return slots
 
 
@@ -1001,29 +989,12 @@ def _normalize_effective_placement_resources(
 
 
 async def _resolve_topology_node(db: AsyncSession, raw: str) -> NodeModel:
-    import re
-
-    uuid_pattern = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-        re.I,
-    )
-    if uuid_pattern.match(raw):
-        result = await db.execute(select(NodeModel).where(NodeModel.id == raw))
-        node = result.scalar_one_or_none()
-        if node:
-            return node
-
-    result = await db.execute(select(NodeModel).where(NodeModel.display_name == raw))
-    node = result.scalar_one_or_none()
-    if node:
-        return node
-
     result = await db.execute(select(NodeModel).where(NodeModel.hostname == raw))
     node = result.scalar_one_or_none()
     if node:
         return node
 
-    raise HTTPException(status_code=422, detail=f"Node not found: {raw}")
+    raise HTTPException(status_code=422, detail=f"Node hostname not found: {raw}")
 
 
 async def _validate_deployable_placements(
@@ -1060,22 +1031,10 @@ async def _validate_deployable_placements(
                 )
 
 
-def _routing_request_placement_map(
+def _routing_request_placements(
     placements: list[RoutingPlacement],
-) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    for placement in placements:
-        role = str(placement.task_node_id or "").lower()
-        if not role:
-            continue
-        value: dict[str, Any] = {
-            "topology_node_id": placement.topology_node_id,
-        }
-        if placement.gpu_device is not None:
-            value["gpu_device"] = placement.gpu_device
-            value["gpu_indices"] = [placement.gpu_device]
-        result[role] = value
-    return result
+) -> list[dict[str, Any]]:
+    return [placement.model_dump(exclude_none=True) for placement in placements]
 
 
 def _routing_placements_from_runtime(value: Any) -> list[RoutingPlacement]:
@@ -1085,8 +1044,8 @@ def _routing_placements_from_runtime(value: Any) -> list[RoutingPlacement]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        task_node_id = item.get("task_node_id") or item.get("node_id") or item.get("role")
-        topology_node_id = item.get("topology_node_id") or item.get("worker_host") or item.get("hostname") or item.get("node_name")
+        task_node_id = item.get("task_node_id")
+        topology_node_id = item.get("topology_node_id")
         if not task_node_id or not topology_node_id:
             continue
         placements.append(
@@ -1122,7 +1081,7 @@ async def _sync_conversation_after_order_routing(
             )
         ).scalars().first()
 
-    placement_map = _routing_request_placement_map(placements)
+    placement_rows = _routing_request_placements(placements)
     if routing is not None:
         routing.status = RoutingRequestStatus.COMPLETED
         routing.strategy = payload.strategy or routing.strategy
@@ -1130,7 +1089,7 @@ async def _sync_conversation_after_order_routing(
             routing.selected_strategy = payload.selected_strategy
         elif payload.strategy:
             routing.selected_strategy = payload.strategy
-        routing.placements = placement_map
+        routing.placements = placement_rows
         routing.estimated_metric = payload.estimated_metric or routing.estimated_metric
         routing.external_routing_id = payload.external_routing_id or routing.external_routing_id
         result_payload = dict(payload.result_payload or {})
@@ -1166,14 +1125,6 @@ def _order_compute_gpu_slots(order: TaskOrder) -> set[tuple[str, str]]:
     placements = routing_result.get("placements")
     if isinstance(placements, list):
         return _compute_gpu_slots_from_placements([p for p in placements if isinstance(p, dict)])
-    if isinstance(placements, dict):
-        rows: list[dict[str, Any]] = []
-        for role, value in placements.items():
-            if isinstance(value, dict):
-                row = dict(value)
-                row.setdefault("task_node_id", role)
-                rows.append(row)
-        return _compute_gpu_slots_from_placements(rows)
     return set()
 
 
@@ -1241,13 +1192,16 @@ async def _ensure_no_active_gpu_slot_conflicts(
             )
 
 
-@router.post("/{order_id}/routing-result")
 async def receive_routing_result(
     order_id: str,
     payload: RoutingResultPayload,
     db: AsyncSession = Depends(get_db),
 ):
-    """接收外部路由系统的计算结果（节点放置 + GPU 分配），并自动物化实例。"""
+    """Materialize an order from validated routing placements.
+
+    The external HTTP entrypoint is /api/routing-orders/{order_id}/result,
+    which enforces claim-before-result before calling this implementation.
+    """
     row = await db.execute(
         select(TaskOrder).where(TaskOrder.id == order_id).with_for_update()
     )
@@ -1300,6 +1254,11 @@ async def receive_routing_result(
     # Persist routing result
     order.routing_status = RoutingStatus.COMPUTING.value
     rc = order.runtime_config or {}
+    resource_requirement = _routing_dag_resources_by_role(order)
+    business_task = rc.get("business_task")
+    if isinstance(business_task, dict) and resource_requirement:
+        business_task["resource_requirement"] = resource_requirement
+        rc["business_task"] = business_task
     routing_result = {
         "placements": [p.model_dump(exclude_none=True) for p in effective_placements],
     }
@@ -1317,8 +1276,6 @@ async def receive_routing_result(
         routing_result["estimated_metric"] = payload.estimated_metric
     if payload.result_payload:
         routing_result["result_payload"] = payload.result_payload
-    if payload.extra:
-        routing_result["extra"] = payload.extra
     rc["routing_result"] = routing_result
     order.runtime_config = rc
     flag_modified(order, "runtime_config")
@@ -1345,7 +1302,7 @@ async def receive_routing_result(
             continue
 
         try:
-            resolved_node_id = await _resolve_node_id(db, placement.topology_node_id)
+            resolved_node_id = await resolve_node_id(db, placement.topology_node_id)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         bt = (order.runtime_config or {}).get("business_task", {})
@@ -1354,6 +1311,7 @@ async def receive_routing_result(
             business_task=bt,
             task_role=role,
             task_instance_id=order.id,  # updated after instance creation
+            resource_requirement=resource_requirement,
             routing_result=routing_result,
         )
         if placement.gpu_device is not None:
@@ -1494,6 +1452,7 @@ async def create_batch_benchmark(
     run_id = payload.benchmark_run_id or f"{payload.task_type}-{business_start_time.strftime('%Y%m%d%H%M%S')}"
     runtime_settings = await get_runtime_settings(db)
     modality_priority_map = modality_priority_map_from_settings(runtime_settings)
+    resource_options = routing_resource_options_from_settings(runtime_settings)
     endpoint_nodes = await _deployable_endpoint_nodes(db)
     endpoint_by_hostname = {node.hostname: node for node in endpoint_nodes}
     fixed_source = endpoint_by_hostname.get(payload.source_name or "") if payload.source_name else None
@@ -1559,6 +1518,7 @@ async def create_batch_benchmark(
             data_profile=data_profile,
             modality_priority_map=modality_priority_map,
             routing_strategy=payload.routing_strategy,
+            **resource_options,
         )
         order_ids.append(order.id)
 
@@ -1988,6 +1948,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     }
 
     overrides: list[TaskInstanceNodeOverride] = []
+    resource_requirement = _routing_dag_resources_by_role(order)
     for role, node in picked.items():
         template_node_name = role_node_names.get(role) or role
         bt = (order.runtime_config or {}).get("business_task", {})
@@ -1996,6 +1957,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             business_task=bt,
             task_role=role,
             task_instance_id=order.id,
+            resource_requirement=resource_requirement,
         )
         gpu_id = _default_compute_gpu_for_order(order) if role == "compute" else None
         if gpu_id is not None:
@@ -2017,6 +1979,9 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     ]
     rc = order.runtime_config or {}
     business_task = rc.get("business_task") or {}
+    if isinstance(business_task, dict) and resource_requirement:
+        business_task["resource_requirement"] = resource_requirement
+        rc["business_task"] = business_task
     runtime_plan = business_task.get("runtime_plan") or {}
     rc["routing_result"] = {
         "strategy": runtime_plan.get("routing_strategy") or business_task.get("routing_strategy"),

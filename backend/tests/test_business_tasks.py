@@ -5,7 +5,7 @@ from api.business_tasks import (
     evaluate_business_objective,
 )
 from enums import DeploymentMode
-from schemas import BusinessObjective, BusinessTaskCreate, RoutingResult
+from schemas.task import BusinessPlacement, BusinessObjective, BusinessTaskCreate, RoutingResult
 
 
 @pytest.mark.asyncio
@@ -23,13 +23,18 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
             unit="ms",
         ),
         runtime_plan={"routing_strategy": "low_latency_forwarding", "codec": "h264", "preset": "ultrafast"},
+        resource_requirement={
+            "source": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0},
+            "compute": {"cpu_units": 4, "mem_mb": 2048, "disk_mb": 1024, "gpu_units": 1},
+            "sink": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0},
+        },
         routing_result=RoutingResult(
             strategy="completion_time_first",
-            placements={
-                "source": "node-a",
-                "compute": "node-b",
-                "sink": "node-c",
-            },
+            placements=[
+                {"task_node_id": "source", "topology_node_id": "node-a"},
+                {"task_node_id": "compute", "topology_node_id": "node-b", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "node-c"},
+            ],
             estimated_metric={
                 "metric_key": "end_to_end_latency_ms",
                 "metric_value": 180,
@@ -47,11 +52,11 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
     uuid_a = "11111111-1111-1111-1111-111111111111"
     uuid_b = "22222222-2222-2222-2222-222222222222"
     uuid_c = "33333333-3333-3333-3333-333333333333"
-    payload.routing_result.placements = {
-        "source": uuid_a,
-        "compute": uuid_b,
-        "sink": uuid_c,
-    }
+    payload.routing_result.placements = [
+        BusinessPlacement(task_node_id="source", topology_node_id=uuid_a),
+        BusinessPlacement(task_node_id="compute", topology_node_id=uuid_b, gpu_device="0"),
+        BusinessPlacement(task_node_id="sink", topology_node_id=uuid_c),
+    ]
 
     instance = await build_instance_create_from_business_task(
         db=None,
@@ -81,6 +86,7 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
     assert overrides["compute"].env["ROUTING_STRATEGY"] == "low_latency_forwarding"
     assert overrides["compute"].env["BUSINESS_OBJECTIVE"] == payload.business_objective.model_dump_json()
     assert overrides["compute"].env["RUNTIME_PLAN"] == '{"routing_strategy":"low_latency_forwarding","codec":"h264","preset":"ultrafast"}'
+    assert overrides["compute"].env["RESOURCE_REQUIREMENT"] == '{"cpu_units":4,"mem_mb":2048,"disk_mb":1024,"gpu_units":1}'
     assert overrides["compute"].env["BUSINESS_TASK_JSON"]
 
 

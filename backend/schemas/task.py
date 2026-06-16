@@ -408,12 +408,20 @@ class BusinessObjective(BaseModel):
     unit: Optional[str] = None
 
 
+class BusinessPlacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_node_id: str
+    topology_node_id: str
+    gpu_device: Optional[str] = None
+
+
 class RoutingResult(BaseModel):
     strategy: str = Field(
         default="resource_guarantee",
         validation_alias=AliasChoices("strategy", "routing_policy"),
     )
-    placements: dict[str, Any]
+    placements: list[BusinessPlacement]
     estimated_metric: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)

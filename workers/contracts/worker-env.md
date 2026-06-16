@@ -31,7 +31,7 @@
 | `INPUT_MANIFEST_URI` | MinIO URI（如 `s3://bucket/path/manifest.json`），包含 profile 和 objects |
 | `BUSINESS_OBJECTIVE` | JSON 字符串 |
 | `RUNTIME_PLAN` | JSON 字符串 |
-| `RESOURCE_REQUIREMENT` | JSON 字符串，平台估算或用户指定的资源需求 |
+| `RESOURCE_REQUIREMENT` | JSON 字符串，当前 `TASK_ROLE` 对应的资源需求；完整角色资源表可从 `BUSINESS_TASK_JSON.resource_requirement` 读取 |
 | `ROUTING_RESULT` | JSON 字符串，已回写的节点/GPU 放置结果 |
 | `RESULT_STORAGE` | JSON 字符串，结果归档配置 |
 | `BUSINESS_TASK_JSON` | JSON 字符串，完整业务任务上下文；新增 Worker 可优先读取该变量 |

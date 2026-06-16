@@ -4,7 +4,7 @@
 1. 登录获取 token
 2. 创建对话
 3. 发送消息（含 source/destination/time）
-4. 确认意图（自动创建 TaskOrder + RoutingRequest）
+4. 确认意图（自动创建 TaskOrder）
 5. 模拟外部路由系统回写结果
 6. 验证工单状态和实例物化
 
@@ -25,7 +25,6 @@ def main():
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--username", default="user")
     parser.add_argument("--password", default="user")
-    parser.add_argument("--service-token", default="change-me-service-token")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
@@ -76,46 +75,35 @@ def main():
         sys.exit(1)
     time.sleep(0.5)
 
-    # Step 4: 确认意图（自动创建 TaskOrder + RoutingRequest）
-    print("\n[4/6] 确认意图（创建工单 + 路由请求）...")
+    # Step 4: 确认意图（自动创建 TaskOrder）
+    print("\n[4/6] 确认意图（创建工单）...")
     r = s.post(f"{base}/api/conversations/{conv_id}/confirm-intent")
     if r.status_code != 200:
         print(f"  FAIL: {r.status_code} - {r.text}")
         print("  提示：需要先注册 business_template_catalog")
         sys.exit(1)
     conv = r.json()
-    routing = conv.get("latest_routing_request")
     order_id = conv.get("materialized_order_id")
     print(f"  OK - status: {conv['status']}")
     print(f"       order_id: {order_id}")
-    print(f"       routing_request_id: {routing['id'] if routing else 'N/A'}")
-    print(f"       routing_status: {routing['status'] if routing else 'N/A'}")
-    if routing and routing.get("input_payload"):
-        print(f"       DAG payload job_id: {routing['input_payload'].get('job_id', 'N/A')}")
-
-    if not routing:
-        print("  FAIL: No routing request created")
+    if not order_id:
+        print("  FAIL: No order created")
         sys.exit(1)
     time.sleep(0.5)
 
     # Step 5: 模拟外部路由系统回写结果
     print("\n[5/6] 模拟外部路由回写...")
-    routing_id = routing["id"]
     # 先 claim
-    r = requests.patch(
-        f"{base}/api/routing-requests/{routing_id}/claim",
-        headers={"X-Service-Token": args.service_token},
-    )
-    if r.status_code == 200:
-        print(f"  Claimed - status: {r.json()['status']}")
-    else:
-        print(f"  Claim skipped: {r.status_code}")
+    r = requests.patch(f"{base}/api/routing-orders/{order_id}/claim")
+    assert r.status_code == 200, f"Claim order failed: {r.status_code} {r.text}"
+    print(f"  Claimed - routing_status: {r.json()['routing_status']}")
 
     # 回写结果
     result_payload = {
-        "status": "completed",
-        "placements": {"source": "compute-1", "compute": "compute-2", "sink": "compute-3"},
-        "selected_strategy": "resource_guarantee",
+        "placements": [
+            {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
+        ],
+        "strategy": "resource_guarantee",
         "estimated_metric": {"effective_gflops": 520.0},
         "external_routing_id": "ext-routing-e2e-001",
         "result_payload": {
@@ -125,17 +113,22 @@ def main():
         },
     }
     r = requests.post(
-        f"{base}/api/routing-results/{routing_id}",
+        f"{base}/api/routing-orders/{order_id}/result",
         json=result_payload,
-        headers={"X-Service-Token": args.service_token},
     )
     if r.status_code == 200:
         rr = r.json()
-        print(f"  OK - routing status: {rr['status']}")
-        print(f"       placements: {rr.get('placements')}")
-        print(f"       selected_strategy: {rr.get('selected_strategy')}")
+        print(f"  OK - routing_status: {rr['routing_status']}")
+        print(f"       network_bindings: {len(rr.get('network_bindings') or [])}")
+        if rr.get("network_ready_required"):
+            nr = requests.post(
+                f"{base}/api/routing-orders/{order_id}/network-ready",
+                json={"metadata": {"source": "e2e-script"}, "auto_start": False},
+            )
+            assert nr.status_code == 200, f"Network ready failed: {nr.status_code} {nr.text}"
+            print(f"       network_ready: {nr.json().get('network_ready')}")
     else:
-        print(f"  WARN: routing result callback returned {r.status_code}: {r.text}")
+        print(f"  WARN: routing order result returned {r.status_code}: {r.text}")
         print("  (实例物化可能因缺少真实节点而失败，这在无节点环境下是预期行为)")
 
     # Step 6: 验证最终状态

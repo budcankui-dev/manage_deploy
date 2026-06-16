@@ -246,7 +246,7 @@ CREATE_BODY=$(cat <<EOF
 {
   "external_task_id": "${TASK_ID}",
   "task_type": "high_throughput_matmul",
-  "modality": "high_throughput_compute",
+  "modality": "高通量计算模态",
   "name": "Scientific Matmul Live E2E",
   "data_profile": {
     "profile_id": "matmul_dev",
@@ -266,12 +266,12 @@ CREATE_BODY=$(cat <<EOF
     "use_gpu": false
   },
   "routing_result": {
-    "strategy": "completion_time_first",
-    "placements": {
-      "source": "compute-1",
-      "compute": "compute-2",
-      "sink": "compute-3"
-    },
+    "strategy": "fastest_completion",
+    "placements": [
+      {"task_node_id": "source", "topology_node_id": "compute-1"},
+      {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
+      {"task_node_id": "sink", "topology_node_id": "compute-3"}
+    ],
     "estimated_metric": {
       "metric_key": "compute_latency_ms",
       "metric_value": 5000,

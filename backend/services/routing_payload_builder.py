@@ -8,8 +8,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from services.modality_catalog import priority_for_modality
+from services.modality_catalog import normalize_modality, priority_for_modality
 from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
+
+ROUTING_STRATEGY_TO_POLICY_TYPE = {
+    "resource_guarantee": "RESOURCE_GUARANTEE",
+    "fastest_completion": "TIME_CONSTRAINED",
+    "low_latency_forwarding": "LATENCY_CONSTRAINED",
+    "load_balance": "LOAD_BALANCE",
+    "cost_priority": "COST_CONSTRAINED",
+}
 
 
 def build_routing_payload(
@@ -26,13 +34,15 @@ def build_routing_payload(
     template_nodes: list[dict[str, Any]] | None = None,
     modality_priority_map: dict[str, Any] | None = None,
     routing_strategy: str | None = None,
+    task_resource_override_enabled: bool = False,
+    task_resource_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成外部路由系统可消费的 DAG JSON。
 
     字段映射规则见 docs/routing-system-integration-guide.md。
     """
     job_name = _task_type_to_job_name(task_type)
-    modal = modality or task_type
+    modal = normalize_modality(modality, task_type) or modality or task_type
     job_id = order_id
     priority = priority_for_modality(modal, modality_priority_map, task_type)
 
@@ -45,8 +55,12 @@ def build_routing_payload(
         data_profile,
         source_name,
         destination_name,
+        task_resource_override_enabled=task_resource_override_enabled,
+        task_resource_overrides=task_resource_overrides,
     )
     edges = _build_dag_edges(task_type, nodes, data_profile, priority)
+
+    normalized_strategy = _normalize_routing_strategy(routing_strategy)
 
     return {
         "job_id": job_id,
@@ -59,8 +73,8 @@ def build_routing_payload(
         "modal": modal,
         "priority": priority,
         "_comment": modal,
-        "routing_strategy": routing_strategy or "resource_guarantee",
-        "policy_type": _policy_type_for(routing_strategy, task_type),
+        "routing_strategy": normalized_strategy,
+        "policy_type": _policy_type_for(normalized_strategy),
         "submit_ts_ms": submit_ts_ms,
         "business_start_ts_ms": submit_ts_ms,
         "business_end_ts_ms": int(business_end_time.timestamp() * 1000),
@@ -78,23 +92,15 @@ def _task_type_to_job_name(task_type: str) -> str:
     return mapping.get(task_type, task_type)
 
 
-def _policy_type_for(routing_strategy: str | None, task_type: str) -> str:
-    strategy_mapping = {
-        "resource_guarantee": "RESOURCE_GUARANTEE",
-        "fastest_completion": "TIME_CONSTRAINED",
-        "low_latency_forwarding": "LATENCY_CONSTRAINED",
-        "load_balance": "LOAD_BALANCE",
-        "cost_priority": "COST_CONSTRAINED",
-    }
-    if routing_strategy in strategy_mapping:
-        return strategy_mapping[routing_strategy]
+def _normalize_routing_strategy(routing_strategy: str | None) -> str:
+    value = str(routing_strategy or "").strip()
+    if value in ROUTING_STRATEGY_TO_POLICY_TYPE:
+        return value
+    return "resource_guarantee"
 
-    mapping = {
-        "high_throughput_matmul": "COST_CONSTRAINED",
-        "low_latency_video_pipeline": "LATENCY_CONSTRAINED",
-        "llm_text_generation": "COST_CONSTRAINED",
-    }
-    return mapping.get(task_type, "COST_CONSTRAINED")
+
+def _policy_type_for(routing_strategy: str | None) -> str:
+    return ROUTING_STRATEGY_TO_POLICY_TYPE[_normalize_routing_strategy(routing_strategy)]
 
 
 def _build_dag_nodes(
@@ -104,6 +110,8 @@ def _build_dag_nodes(
     data_profile: dict[str, Any] | None = None,
     source_name: str | None = None,
     destination_name: str | None = None,
+    task_resource_override_enabled: bool = False,
+    task_resource_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """构建路由 DAG 的逻辑节点列表。"""
     if template_nodes:
@@ -127,7 +135,13 @@ def _build_dag_nodes(
             nodes.append(node)
         return nodes
 
-    defaults = _default_nodes_for_task_type(task_type, resource_requirement, data_profile)
+    defaults = _default_nodes_for_task_type(
+        task_type,
+        resource_requirement,
+        data_profile,
+        task_resource_override_enabled=task_resource_override_enabled,
+        task_resource_overrides=task_resource_overrides,
+    )
     for node in defaults:
         task_node_id = node["task_node_id"]
         node.setdefault("task_role", _infer_role(task_node_id))
@@ -140,18 +154,26 @@ def _default_nodes_for_task_type(
     task_type: str,
     resource_requirement: dict[str, Any] | None,
     data_profile: dict[str, Any] | None = None,
+    *,
+    task_resource_override_enabled: bool = False,
+    task_resource_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     estimated = estimate_resources(task_type, data_profile)
     res_override = resource_requirement or {}
+    configured_overrides = task_resource_overrides or {}
+    task_overrides = (
+        configured_overrides.get(task_type, {})
+        if task_resource_override_enabled and isinstance(configured_overrides, dict)
+        else {}
+    )
 
     nodes = []
     for role, res in estimated.items():
-        # Merge: override wins if provided
+        # Merge priority: estimator < system task override < per-order override.
         merged = {**res}
-        if res_override:
-            for key in ("cpu_units", "cpu_mem_mb", "gpu_units", "gpu_mem_mb", "disk_mb"):
-                if key in res_override:
-                    merged[key] = res_override[key]
+        role_override = task_overrides.get(role, {}) if isinstance(task_overrides, dict) else {}
+        _merge_resource_override(merged, _resource_override_for_role(role_override, role))
+        _merge_resource_override(merged, _resource_override_for_role(res_override, role))
 
         nodes.append({
             "task_node_id": role,
@@ -165,6 +187,28 @@ def _default_nodes_for_task_type(
             },
         })
     return nodes
+
+
+def _resource_override_for_role(value: dict[str, Any] | None, role: str) -> dict[str, Any]:
+    """Return a role-specific resource override while preserving flat override compatibility."""
+    if not isinstance(value, dict):
+        return {}
+    role_value = value.get(role)
+    if isinstance(role_value, dict):
+        return role_value
+    if any(key in value for key in ("cpu_units", "cpu_mem_mb", "mem_mb", "gpu_units", "gpu_mem_mb", "disk_mb")):
+        return value
+    return {}
+
+
+def _merge_resource_override(target: dict[str, Any], override: dict[str, Any]) -> None:
+    if not override:
+        return
+    for key in ("cpu_units", "cpu_mem_mb", "gpu_units", "gpu_mem_mb", "disk_mb"):
+        if key in override:
+            target[key] = override[key]
+    if "mem_mb" in override:
+        target["cpu_mem_mb"] = override["mem_mb"]
 
 
 def _infer_node_type(role: Any) -> str:
