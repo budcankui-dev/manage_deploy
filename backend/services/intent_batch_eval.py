@@ -341,10 +341,12 @@ def read_report(path: Path) -> dict[str, Any] | None:
 
 def latest_status() -> dict[str, Any]:
     batch_job = read_latest_batch_job()
+    llm_report = read_report(LLM_REPORT_PATH)
+    batch_job = _sync_batch_summary_from_report(batch_job, llm_report)
     return {
         "dataset": dataset_summary(),
         "rule_report": read_report(RULE_REPORT_PATH),
-        "llm_report": read_report(LLM_REPORT_PATH),
+        "llm_report": llm_report,
         "batch_job": batch_job,
         "batch_diagnostic": batch_diagnostic(batch_job),
         "config": {
@@ -430,6 +432,33 @@ def read_latest_batch_job() -> dict[str, Any] | None:
     if not latest.exists():
         return None
     return json.loads(latest.read_text(encoding="utf-8"))
+
+
+def _report_matches_batch_job(report: dict[str, Any] | None, job: dict[str, Any] | None) -> bool:
+    if not report or not job:
+        return False
+    report_batch_id = report.get("batch_id")
+    job_batch_id = job.get("batch_id")
+    if report_batch_id and job_batch_id:
+        return report_batch_id == job_batch_id
+    report_job_id = report.get("batch_job_id") or report.get("evaluation_id")
+    return bool(report_job_id and report_job_id == job.get("job_id"))
+
+
+def _sync_batch_summary_from_report(
+    job: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not job or not _report_matches_batch_job(report, job):
+        return job
+    synced = dict(job)
+    synced["summary"] = {
+        "total": report.get("total"),
+        "correct": report.get("correct"),
+        "accuracy": report.get("accuracy"),
+        "passed": report.get("passed"),
+    }
+    return synced
 
 
 def batch_diagnostic(job: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:

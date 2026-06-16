@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+import json
 
-from services.intent_batch_eval import batch_diagnostic, score_parsed_result
+import services.intent_batch_eval as intent_batch_eval
+from services.intent_batch_eval import batch_diagnostic, latest_status, score_parsed_result
 from services.intent_parser import ParseResult
 
 
@@ -89,3 +91,43 @@ def test_batch_diagnostic_ignores_active_job_with_progress():
     )
 
     assert diagnostic is None
+
+
+def test_latest_status_uses_matching_llm_report_summary_for_batch_job(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    batch_dir = reports_dir / "intent_eval_batches"
+    batch_dir.mkdir(parents=True)
+    batch_job = {
+        "job_id": "intent-eval-test",
+        "batch_id": "batch-1",
+        "status": "completed",
+        "request_counts": {"total": 360, "completed": 360, "failed": 0},
+        "summary": {"total": 360, "correct": 74, "accuracy": 0.20555555555555555, "passed": False},
+    }
+    llm_report = {
+        "evaluation_id": "intent-eval-test",
+        "batch_id": "batch-1",
+        "total": 360,
+        "correct": 360,
+        "accuracy": 1.0,
+        "passed": True,
+    }
+    (batch_dir / "latest.json").write_text(json.dumps(batch_job), encoding="utf-8")
+    llm_report_path = reports_dir / "intent_eval_llm.json"
+    llm_report_path.write_text(json.dumps(llm_report), encoding="utf-8")
+    rule_report_path = reports_dir / "intent_eval.json"
+    rule_report_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(intent_batch_eval, "BATCH_DIR", batch_dir)
+    monkeypatch.setattr(intent_batch_eval, "LLM_REPORT_PATH", llm_report_path)
+    monkeypatch.setattr(intent_batch_eval, "RULE_REPORT_PATH", rule_report_path)
+
+    status = latest_status()
+
+    assert status["llm_report"]["accuracy"] == 1.0
+    assert status["batch_job"]["summary"] == {
+        "total": 360,
+        "correct": 360,
+        "accuracy": 1.0,
+        "passed": True,
+    }
