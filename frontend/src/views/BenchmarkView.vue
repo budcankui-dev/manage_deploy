@@ -1219,7 +1219,7 @@ async function openOrderDetail(row) {
     const { data } = await ordersApi.get(row.id)
     const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
     const objectsResp = evidenceInstanceId
-      ? await businessApi.results(evidenceInstanceId).catch(() => ({ data: [] }))
+      ? await businessApi.results(evidenceInstanceId, { silentError: true }).catch(() => ({ data: [] }))
       : { data: [] }
     selectedOrderDetail.value = data
     selectedOrderResultObjects.value = objectsResp.data || []

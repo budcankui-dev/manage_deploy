@@ -769,7 +769,7 @@ async function openOrderDetail(order) {
     const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
     if (evidenceInstanceId) {
       try {
-        const { data: objs } = await businessApi.results(evidenceInstanceId)
+        const { data: objs } = await businessApi.results(evidenceInstanceId, { silentError: true })
         orderResultObjects.value = objs || []
       } catch { /* ignore */ }
     }

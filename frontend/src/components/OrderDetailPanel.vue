@@ -84,10 +84,10 @@
           </el-descriptions>
         </el-tab-pane>
 
-        <el-tab-pane label="路由" name="routing">
+        <el-tab-pane label="节点分配" name="routing">
           <el-descriptions :column="2" border class="detail-desc">
-            <el-descriptions-item label="路由状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
-            <el-descriptions-item label="路由策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
+            <el-descriptions-item label="分配状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
+            <el-descriptions-item label="任务策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="网络确认">{{ networkReadyText }}</el-descriptions-item>
           </el-descriptions>
@@ -119,7 +119,7 @@
           </el-table>
 
           <h3 class="section-title">业务链路</h3>
-          <el-table :data="networkBindingRows" size="small" border empty-text="路由结果回写后会展示业务链路 IP 和端口">
+          <el-table :data="networkBindingRows" size="small" border empty-text="完成节点分配后会展示业务链路 IP 和端口">
             <el-table-column label="链路" min-width="160">
               <template #default="{ row }">{{ roleLabel(row.from) }} → {{ roleLabel(row.to) }}</template>
             </el-table-column>
@@ -149,7 +149,7 @@
             <el-collapse-item v-if="detail.routing_input_dag" title="提交给路由系统的 DAG JSON" name="routing-input">
               <pre class="json-block">{{ prettyJson(detail.routing_input_dag) }}</pre>
             </el-collapse-item>
-            <el-collapse-item v-if="routingResult" title="路由结果原始 JSON" name="routing-result">
+            <el-collapse-item v-if="routingResult" title="节点分配结果原始 JSON" name="routing-result">
               <pre class="json-block">{{ prettyJson(routingResult) }}</pre>
             </el-collapse-item>
           </el-collapse>
@@ -174,8 +174,8 @@
           </template>
           <el-alert v-else title="尚未物化部署实例" type="info" show-icon :closable="false" />
 
-          <h3 class="section-title">部署节点</h3>
-          <el-table :data="placementRows" size="small" border empty-text="尚无部署节点">
+          <h3 class="section-title">容器实例节点</h3>
+          <el-table :data="containerPlacementRows" size="small" border empty-text="尚无容器实例节点">
             <el-table-column prop="roleLabel" label="子任务" width="110" />
             <el-table-column prop="hostname" label="物理节点" min-width="150" />
             <el-table-column prop="instance_node_name" label="实例节点" min-width="120" />
@@ -217,6 +217,16 @@
             </li>
           </ol>
 
+          <el-alert
+            v-if="!evaluation"
+            class="result-empty-alert"
+            type="info"
+            show-icon
+            :closable="false"
+            title="暂无业务评估结果"
+            description="该工单还未完成指标上报，或属于清理/迁移前的历史数据。输入参数和节点分配仍可作为工单记录查看；任务重新运行并上报指标后会自动展示结果预览。"
+          />
+
           <template v-if="isVideoTask">
             <div class="video-result-card">
               <div class="video-preview">
@@ -238,7 +248,11 @@
                     </div>
                   </div>
                 </template>
-                <el-empty v-else description="等待带框预览图" :image-size="80" />
+                <el-empty
+                  v-else
+                  :description="evaluation ? '等待带框预览图' : '暂无带框预览图'"
+                  :image-size="80"
+                />
               </div>
               <div class="video-result-side">
                 <h3 class="section-title">输入参数</h3>
@@ -427,6 +441,10 @@ const placementRows = computed(() => {
   return Array.from(byRole.values())
 })
 
+const containerPlacementRows = computed(() => (
+  placementRows.value.filter((row) => row.statusLabel !== '不部署' && row.hostname !== '未部署')
+))
+
 const networkBindingRows = computed(() => {
   const rows = routingResult.value?.network_bindings
   return Array.isArray(rows) ? rows : []
@@ -502,7 +520,7 @@ const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(resultMetadata
 const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(resultMetadata.value))
 const networkReadyText = computed(() => {
   if (!routingResult.value) return '-'
-  if (routingResult.value.network_ready_required && !routingResult.value.network_ready) return '等待外部路由系统确认'
+  if (routingResult.value.network_ready_required && !routingResult.value.network_ready) return '等待网络确认'
   if (routingResult.value.network_ready_required && routingResult.value.network_ready) return '已确认'
   return '无需额外确认'
 })
@@ -531,7 +549,7 @@ function normalizePlacementRow(role, placement) {
     portValues,
     portAccessUrls,
     portText: namedPortsText(portValues),
-    statusLabel: nodeStatusLabel(item.status),
+    statusLabel: item.skip_deploy ? '不部署' : nodeStatusLabel(item.status),
   }
 }
 
@@ -627,7 +645,7 @@ function orderStatusType(value) {
 
 function routingStatusLabel(value) {
   return {
-    not_required: '无需路由',
+    not_required: '无需分配',
     pending: '待分配',
     computing: '分配中',
     network_binding_ready: '网络准备中',

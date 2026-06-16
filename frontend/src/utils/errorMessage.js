@@ -18,6 +18,7 @@ const MESSAGE_MAP = [
   [/order has no materialized instance/i, '工单尚未生成部署实例'],
   [/materialized instance not found/i, '部署实例不存在或已被清理'],
   [/order missing business objective metric_key/i, '工单缺少业务指标配置'],
+  [/business evaluation not found/i, '暂无业务评估结果'],
   [/no reported metric found/i, '尚未上报业务指标'],
   [/metric exists but evaluation could not be built/i, '指标已上报，但无法生成评估结果'],
   [/cannot start instance in status/i, '当前实例状态不允许启动'],

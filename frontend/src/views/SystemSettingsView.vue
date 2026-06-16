@@ -69,10 +69,10 @@
               显示调试控制项
             </el-checkbox>
             <el-checkbox v-model="form.show_routing_dag_json">
-              显示路由 DAG 调试信息
+              显示 DAG JSON 调试信息
             </el-checkbox>
             <p class="form-hint">
-              简洁展示视图会隐藏调试控制项和 DAG JSON，让业务页面聚焦运行结果、参数解析和工单证据。
+              默认关闭。开启后会在任务工单详情的“节点分配”、业务测评工单详情、意图测评单条检测中显示原始 DAG/分配 JSON；常规演示建议保持关闭，只展示参数、节点、端口和业务结果。
             </p>
           </el-card>
         </div>

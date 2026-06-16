@@ -17,6 +17,8 @@ export const ROUTING_POLICY_ALIASES = {
   latency_constrained: 'low_latency_forwarding',
   cost_constrained: 'cost_priority',
   load_balancing: 'load_balance',
+  random_demo: 'resource_guarantee',
+  mock_random: 'resource_guarantee',
 }
 
 export function routingPolicyLabel(policy) {

@@ -55,6 +55,9 @@ api.interceptors.response.use(
       }
       return Promise.reject(error)
     }
+    if (error.config?.silentError) {
+      return Promise.reject(error)
+    }
     const message = error.response?.status === 401
       ? '登录失败，请检查用户名或密码'
       : extractErrorMessage(error, '请求失败')
@@ -136,8 +139,8 @@ export const businessApi = {
   submit: (data) => api.post('/business-tasks', data),
   list: (params = {}) => api.get('/business-tasks', { params }),
   summary: (params = {}) => api.get('/business-tasks/summary', { params }),
-  evaluation: (instanceId) => api.get(`/business-tasks/${instanceId}/evaluation`),
-  results: (instanceId) => api.get(`/business-tasks/${instanceId}/results`),
+  evaluation: (instanceId, config = {}) => api.get(`/business-tasks/${instanceId}/evaluation`, config),
+  results: (instanceId, config = {}) => api.get(`/business-tasks/${instanceId}/results`, config),
   catalog: () => api.get('/business-template-catalog'),
   createCatalog: (data) => api.post('/business-template-catalog', data)
 }

@@ -108,7 +108,7 @@ async function selectOrder(order) {
     const evidenceInstanceId = data.instance?.id || data.materialized_instance_id
     if (evidenceInstanceId) {
       try {
-        const { data: objects } = await businessApi.results(evidenceInstanceId)
+        const { data: objects } = await businessApi.results(evidenceInstanceId, { silentError: true })
         resultObjects.value = objects || []
       } catch {
         resultObjects.value = []

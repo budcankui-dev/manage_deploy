@@ -697,9 +697,9 @@ async function openDetail(orderId, tab = 'business') {
     if (data.instance?.id) {
       const [instResp, objectsResp, evalResp] = await Promise.all([
         instancesApi.get(data.instance.id),
-        evidenceInstanceId ? businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })) : { data: [] },
+        evidenceInstanceId ? businessApi.results(evidenceInstanceId, { silentError: true }).catch(() => ({ data: [] })) : { data: [] },
         evidenceInstanceId && !evaluationData
-          ? businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null }))
+          ? businessApi.evaluation(evidenceInstanceId, { silentError: true }).catch(() => ({ data: null }))
           : { data: evaluationData },
       ])
       instanceDetail.value = instResp.data
@@ -707,8 +707,8 @@ async function openDetail(orderId, tab = 'business') {
       evaluationData = evalResp.data || evaluationData
     } else if (evidenceInstanceId) {
       const [objectsResp, evalResp] = await Promise.all([
-        businessApi.results(evidenceInstanceId).catch(() => ({ data: [] })),
-        evaluationData ? Promise.resolve({ data: evaluationData }) : businessApi.evaluation(evidenceInstanceId).catch(() => ({ data: null })),
+        businessApi.results(evidenceInstanceId, { silentError: true }).catch(() => ({ data: [] })),
+        evaluationData ? Promise.resolve({ data: evaluationData }) : businessApi.evaluation(evidenceInstanceId, { silentError: true }).catch(() => ({ data: null })),
       ])
       resultObjects.value = objectsResp.data
       evaluationData = evalResp.data || evaluationData
@@ -899,7 +899,7 @@ async function submitManualRouting() {
 async function waitForEvaluation(instanceId, maxAttempts = 80, intervalMs = 3000) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const { data } = await businessApi.evaluation(instanceId)
+      const { data } = await businessApi.evaluation(instanceId, { silentError: true })
       if (data && data.actual_value != null) {
         return data
       }

@@ -99,6 +99,9 @@ export function formatMetricValue(value, digits = 2) {
 export function formatObjectiveSentence(objective) {
   if (!objective?.metric_key) return '-'
   const metric = METRIC_LABELS[objective.metric_key] || objective.metric_key
+  if (objective.target_value === null || objective.target_value === undefined || objective.target_value === '') {
+    return `${metric} 按节点历史基线判定`
+  }
   const op = OPERATOR_LABELS[objective.operator] || objective.operator || '不超过'
   const unit = objective.unit ? ` ${objective.unit}` : ''
   const target = formatMetricValue(objective.target_value)
