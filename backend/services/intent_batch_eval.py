@@ -10,7 +10,7 @@ acceptance UI.  It supports two paths:
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -49,10 +49,20 @@ def normalize_eval_model(model: str | None = None) -> str:
 
 
 ACTIVE_BATCH_STATUSES = {"validating", "in_progress", "finalizing", "submitted", "cancelling"}
+BATCH_STALLED_AFTER = timedelta(hours=2)
 
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _format_datetime(value: datetime | None) -> str | None:
@@ -330,11 +340,13 @@ def read_report(path: Path) -> dict[str, Any] | None:
 
 
 def latest_status() -> dict[str, Any]:
+    batch_job = read_latest_batch_job()
     return {
         "dataset": dataset_summary(),
         "rule_report": read_report(RULE_REPORT_PATH),
         "llm_report": read_report(LLM_REPORT_PATH),
-        "batch_job": read_latest_batch_job(),
+        "batch_job": batch_job,
+        "batch_diagnostic": batch_diagnostic(batch_job),
         "config": {
             "intent_parser_engine": settings.intent_parser_engine,
             "dashscope_model": settings.dashscope_model,
@@ -418,6 +430,41 @@ def read_latest_batch_job() -> dict[str, Any] | None:
     if not latest.exists():
         return None
     return json.loads(latest.read_text(encoding="utf-8"))
+
+
+def batch_diagnostic(job: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:
+    """Return a user-facing diagnostic for long-running DashScope batch jobs."""
+    if not job:
+        return None
+    status = job.get("status")
+    if status not in ACTIVE_BATCH_STATUSES:
+        return None
+
+    counts = job.get("request_counts") or {}
+    completed = int(counts.get("completed") or 0)
+    failed = int(counts.get("failed") or 0)
+    created_at = _parse_iso_datetime(job.get("created_at"))
+    now = now or datetime.now()
+    elapsed_seconds = (now - created_at).total_seconds() if created_at else None
+    stalled_zero_progress = (
+        status == "in_progress"
+        and completed == 0
+        and failed == 0
+        and elapsed_seconds is not None
+        and elapsed_seconds >= BATCH_STALLED_AFTER.total_seconds()
+    )
+    if not stalled_zero_progress:
+        return None
+    return {
+        "level": "warning",
+        "code": "dashscope_batch_zero_progress",
+        "message": (
+            "官方批量推理任务已长时间处于评测中，但完成数仍为 0。"
+            "平台刷新接口正常，通常是服务侧队列或该任务挂起；建议取消当前评测后重新提交，"
+            "必要时先用已验证模型做小样本 smoke。"
+        ),
+        "elapsed_minutes": round(elapsed_seconds / 60, 1),
+    }
 
 
 def build_batch_input(job_id: str, model: str) -> tuple[Path, list[dict[str, Any]]]:
@@ -597,6 +644,7 @@ async def refresh_latest_llm_batch() -> dict[str, Any]:
     job["error_file_id"] = batch.get("error_file_id")
     job["request_counts"] = batch.get("request_counts")
     job["raw_batch"] = batch
+    job["diagnostic"] = batch_diagnostic(job)
 
     if job["status"] == "completed" and job.get("output_file_id"):
         output_path = BATCH_DIR / job["job_id"] / "output.jsonl"
@@ -610,6 +658,7 @@ async def refresh_latest_llm_batch() -> dict[str, Any]:
             "accuracy": report["accuracy"],
             "passed": report["passed"],
         }
+        job["diagnostic"] = None
 
     return _write_batch_job(job)
 

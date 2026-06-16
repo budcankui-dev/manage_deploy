@@ -329,6 +329,14 @@
                 <el-descriptions-item label="更新时间">{{ formatDateText(batchJob?.updated_at) || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="请求计数">{{ batchRequestCountsText }}</el-descriptions-item>
               </el-descriptions>
+              <el-alert
+                v-if="batchDiagnostic"
+                class="batch-diagnostic"
+                :title="batchDiagnostic.message"
+                type="warning"
+                show-icon
+                :closable="false"
+              />
               <div class="download-row">
                 <el-button size="small" type="warning" plain @click="refreshBatch" :loading="batchRefreshing" :disabled="!batchJob">
                   同步评测进度
@@ -572,6 +580,7 @@ const config = computed(() => latest.value?.config || {})
 const ruleReport = computed(() => latest.value?.rule_report || null)
 const llmReport = computed(() => latest.value?.llm_report || null)
 const batchJob = computed(() => latest.value?.batch_job || null)
+const batchDiagnostic = computed(() => latest.value?.batch_diagnostic || batchJob.value?.diagnostic || null)
 const dashscopeConfigured = computed(() => !!config.value.dashscope_configured)
 const evalModelOptions = computed(() => config.value.dashscope_models || config.value.dashscope_eval_models || [])
 const ACTIVE_BATCH_STATUSES = ['validating', 'in_progress', 'finalizing', 'submitted', 'cancelling']
@@ -1113,6 +1122,8 @@ async function syncBatch({ silent = false } = {}) {
     if (data.summary) {
       stopAutoRefresh()
       if (!silent) ElMessage.success(`意图参数解析评测已评分：${data.summary.correct}/${data.summary.total}`)
+    } else if (data.diagnostic && !silent) {
+      ElMessage.warning(data.diagnostic.message)
     } else if (!silent) {
       ElMessage.info(`Batch 状态：${data.status}`)
     }
@@ -1519,6 +1530,10 @@ onUnmounted(stopAutoRefresh)
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 12px;
+}
+
+.batch-diagnostic {
   margin-top: 12px;
 }
 

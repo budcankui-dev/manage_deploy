@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from services.intent_batch_eval import score_parsed_result
+from services.intent_batch_eval import batch_diagnostic, score_parsed_result
 from services.intent_parser import ParseResult
 
 
@@ -59,3 +59,33 @@ def test_score_ignores_top_level_fields_missing_from_expected():
 
     assert result["match"] is True
     assert "modality" not in result["details"]
+
+
+def test_batch_diagnostic_flags_long_running_zero_progress_job():
+    now = datetime(2026, 6, 16, 12, 0, 0)
+    diagnostic = batch_diagnostic(
+        {
+            "status": "in_progress",
+            "created_at": (now - timedelta(hours=3)).isoformat(timespec="seconds"),
+            "request_counts": {"total": 360, "completed": 0, "failed": 0},
+        },
+        now=now,
+    )
+
+    assert diagnostic is not None
+    assert diagnostic["code"] == "dashscope_batch_zero_progress"
+    assert diagnostic["level"] == "warning"
+
+
+def test_batch_diagnostic_ignores_active_job_with_progress():
+    now = datetime(2026, 6, 16, 12, 0, 0)
+    diagnostic = batch_diagnostic(
+        {
+            "status": "in_progress",
+            "created_at": (now - timedelta(hours=3)).isoformat(timespec="seconds"),
+            "request_counts": {"total": 360, "completed": 12, "failed": 0},
+        },
+        now=now,
+    )
+
+    assert diagnostic is None
