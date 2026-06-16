@@ -43,6 +43,15 @@ rsync -az --delete frontend/dist/ manage-admin:/home/bupt/manage_deploy/frontend
 
 管理节点后端当前使用 `/home/bupt/miniconda3/bin/python3.13` 启动，监听 `8181`。不要使用历史遗留的 `backend/venv` 或不存在的 conda env。
 
+### 管理节点运行约束
+
+- 管理节点代码目录 `/home/bupt/manage_deploy` 当前按手工同步目录使用，不能默认执行 `git pull`。
+- 同步代码优先用本地 `git archive HEAD` 解包到管理节点，避免覆盖远端 `.env`、数据库、venv、报告目录和运行产物。
+- 后端脚本在管理节点执行时，必须先进入 `/home/bupt/manage_deploy/backend`，并使用 `PYTHONPATH=.` 与 `/home/bupt/miniconda3/bin/python3.13`。
+- 不要在仓库根目录用系统 `python3` 直接导入后端模块；这会缺少 `httpx` 等依赖或读错相对路径。
+- 重启后端时只处理真正监听 `8181` 的 uvicorn 进程，避免用过宽的 `pgrep` 模式误杀当前 SSH shell。
+- 如果启动日志出现 `address already in use`，先用 `ss -ltnp "sport = :8181"` 和 `pgrep -af "[p]ython3.13 -m uvicorn main:app.*--port 8181"` 确认旧进程，再重启。
+
 ```bash
 ssh manage-admin "pids=\$(pgrep -f '[u]vicorn main:app.*8181' || true); \
   [ -n \"\$pids\" ] && kill \$pids || true; \

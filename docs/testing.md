@@ -34,6 +34,15 @@ curl -sS http://127.0.0.1:8000/api/nodes | python3 -m json.tool
 
 ## 自动化测试
 
+### 脚本运行环境约束
+
+后端服务、评测脚本和报告重评分脚本都依赖后端虚拟环境与仓库相对路径。执行这类脚本时遵守以下约定：
+
+- 本地执行后端测试或导入 `services.*` 模块时，先进入 `backend` 目录，并使用 `PYTHONPATH=. ./venv/bin/python` 或 `PYTHONPATH=. ./venv/bin/pytest`。
+- 不要在仓库根目录用系统 `python3` 直接执行会导入后端模块的脚本；容易缺少 `httpx` 等依赖，也可能让报告、数据集相对路径不一致。
+- 如果必须从仓库根目录读取文件，再调用后端服务函数，优先写成 `cd backend && PYTHONPATH=. ./venv/bin/python - <<'PY' ... PY`，文件路径使用绝对路径。
+- 管理节点执行后端脚本时，进入 `/home/bupt/manage_deploy/backend`，使用 `PYTHONPATH=. /home/bupt/miniconda3/bin/python3.13`。
+
 后端：
 
 ```bash
