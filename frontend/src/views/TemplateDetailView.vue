@@ -223,11 +223,12 @@ async function confirmDelete() {
   if (!template.value?.id) return
   try {
     await ElMessageBox.confirm(`确认删除模板「${template.value.name}」吗？`, '删除模板', { type: 'warning' })
-    await templatesStore.deleteTemplate(template.value.id)
+    await templatesStore.deleteTemplate(template.value.id, { silentError: true })
     ElMessage.success('模板已删除')
     router.push('/templates')
-  } catch {
-    /* cancelled */
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(extractErrorMessage(error, '删除模板失败'))
   }
 }
 

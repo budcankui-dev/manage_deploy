@@ -82,6 +82,7 @@ import { useRouter } from 'vue-router'
 import { useTemplatesStore } from '@/stores/templates'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { templateToImportJson } from '@/utils/deployJson'
+import { extractErrorMessage } from '@/utils/errorMessage'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import utc from 'dayjs/plugin/utc'
@@ -142,21 +143,49 @@ async function exportTemplateJson(template) {
 async function confirmDelete(template) {
   try {
     await ElMessageBox.confirm(`确认删除模板「${template.name}」吗？`, '删除模板', { type: 'warning' })
-    await deleteTemplate(template.id)
+    await deleteTemplate(template.id, { silentError: true })
     selectedIds.value = selectedIds.value.filter((id) => id !== template.id)
     ElMessage.success('模板已删除')
-  } catch {
-    /* cancelled */
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(extractErrorMessage(error, '删除模板失败'))
   }
 }
 
 async function batchDeleteTemplates() {
-  await ElMessageBox.confirm(`确认删除选中的 ${selectedIds.value.length} 个模板吗？`, '批量删除', { type: 'warning' })
-  for (const id of [...selectedIds.value]) {
-    await deleteTemplate(id)
+  try {
+    await ElMessageBox.confirm(`确认删除选中的 ${selectedIds.value.length} 个模板吗？`, '批量删除', { type: 'warning' })
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    throw error
   }
-  selectedIds.value = []
-  ElMessage.success('删除完成')
+
+  const byId = Object.fromEntries((templates.value || []).map((item) => [item.id, item.name]))
+  const failed = []
+  let succeeded = 0
+  for (const id of [...selectedIds.value]) {
+    try {
+      await deleteTemplate(id, { silentError: true })
+      selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
+      succeeded += 1
+    } catch (error) {
+      failed.push({
+        name: byId[id] || id,
+        reason: extractErrorMessage(error, '删除失败'),
+      })
+    }
+  }
+
+  if (!failed.length) {
+    ElMessage.success(`删除完成：${succeeded} 个模板`)
+    return
+  }
+  ElMessage.warning(`已删除 ${succeeded} 个，${failed.length} 个未删除`)
+  ElMessageBox.alert(
+    failed.map((item) => `「${item.name}」：${item.reason}`).join('\n'),
+    '未删除的模板',
+    { type: 'warning' }
+  )
 }
 
 function formatDate(date) {

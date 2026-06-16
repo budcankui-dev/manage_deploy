@@ -43,8 +43,8 @@ export const useTemplatesStore = defineStore('templates', () => {
     return data
   }
 
-  async function deleteTemplate(id) {
-    await templatesApi.delete(id)
+  async function deleteTemplate(id, config = {}) {
+    await templatesApi.delete(id, config)
     templates.value = templates.value.filter(t => t.id !== id)
   }
 

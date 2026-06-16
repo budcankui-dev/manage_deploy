@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db
-from models import TaskTemplate, TaskTemplateNode, TaskTemplateEdge
+from models import (
+    BusinessTemplateCatalog,
+    TaskInstance,
+    TaskMetric,
+    TaskOrder,
+    TaskTemplate,
+    TaskTemplateNode,
+    TaskTemplateEdge,
+)
 from schemas import (
     TaskTemplateCreate,
     TaskTemplateUpdate,
@@ -27,6 +35,37 @@ async def _ensure_unique_template_name(
     existing = await _get_template_by_name(db, name)
     if existing and existing.id != exclude_id:
         raise HTTPException(status_code=409, detail=f"模板名称「{name}」已存在")
+
+
+async def _count_template_references(db: AsyncSession, template_id: str) -> dict[str, int]:
+    """Return references that make a template part of existing evidence."""
+    checks = {
+        "task_instances": select(func.count(TaskInstance.id)).where(TaskInstance.template_id == template_id),
+        "task_orders": select(func.count(TaskOrder.id)).where(TaskOrder.template_id == template_id),
+        "business_catalogs": select(func.count(BusinessTemplateCatalog.id)).where(
+            BusinessTemplateCatalog.template_id == template_id
+        ),
+        "task_metrics": select(func.count(TaskMetric.id)).where(TaskMetric.template_id == template_id),
+    }
+    counts: dict[str, int] = {}
+    for key, query in checks.items():
+        counts[key] = int((await db.execute(query)).scalar_one() or 0)
+    return counts
+
+
+def _template_reference_message(counts: dict[str, int]) -> str:
+    labels = {
+        "task_instances": "任务实例",
+        "task_orders": "任务工单",
+        "business_catalogs": "业务模板目录",
+        "task_metrics": "历史指标",
+    }
+    parts = [f"{labels[key]} {count} 条" for key, count in counts.items() if count > 0]
+    return (
+        "模板已被"
+        + "、".join(parts)
+        + "引用，不能直接删除。请先清理关联实例/工单，或取消业务模板目录绑定后再删除。"
+    )
 
 
 async def _populate_template_graph(
@@ -181,6 +220,13 @@ async def delete_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
 
+    reference_counts = await _count_template_references(db, template_id)
+    if any(count > 0 for count in reference_counts.values()):
+        raise HTTPException(
+            status_code=409,
+            detail=_template_reference_message(reference_counts),
+        )
+
     await db.delete(template)
     await db.commit()
-    return {"message": "Template deleted"}
+    return {"message": "模板已删除"}
