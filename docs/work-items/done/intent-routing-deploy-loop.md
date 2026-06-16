@@ -1,5 +1,7 @@
 # Work Item: 意图解析 → 路由 → 部署闭环
 
+> 历史记录：本文记录 2026-05 至 2026-06 早期闭环开发过程，不作为当前路由系统对接规范。当前唯一对接规范见 `docs/routing-system-integration-guide.md`；当前 DAG 生成入口为 `backend/services/routing_payload_builder.py`。
+
 Status: in_progress
 Owner Agent: Coder
 Last Updated: 2026-05-28
@@ -32,7 +34,7 @@ Last Updated: 2026-05-28
 
 - `backend/api/orders.py` — routing-result endpoint
 - `backend/services/order_materialize.py` — 物化逻辑
-- `backend/services/dag_builder.py` — DAG 生成
+- `backend/services/routing_payload_builder.py` — 当前 DAG 生成
 - `backend/services/dag_executor.py` — 容器部署
 - `docs/business-objective-success-rate-design.md` — 成功率设计
 

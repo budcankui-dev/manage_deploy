@@ -45,7 +45,42 @@
 | 端点部署 | 业务工单默认由平台在 `source/sink` 固定拓扑节点部署端点容器；路由系统通常不需要回写 source/sink placement |
 | GPU 独占 | 同一 `topology_node_id + gpu_device` 同一时刻只能分配给一个未释放任务 |
 | 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
+| 资源需求 | `routing_input_dag.nodes[].resources`，由平台确定性生成；路由系统直接读取，不需要调用大模型 |
 | 扩展信息 | 算法版本、路径、成本、租金、解释等统一放到 `metadata` 字典 |
+
+最容易混淆的是下面两组字段，它们不是同一件事：
+
+| 字段 | 含义 | 路由系统怎么用 |
+|------|------|----------------|
+| `modal` / `priority` | 业务属于哪类模态，以及该模态对应的业务流优先级。 | 可用于 QoS、路径等级或日志解释。 |
+| `routing_strategy` / `policy_type` | 用户本次希望采用的选路偏好。 | 决定算法目标函数或候选节点排序。 |
+
+一句话：**模态回答“这是什么业务流”，路由策略回答“这次希望怎么选路”。二者可以相关，但不能互相替代。**
+
+路由策略数据字典如下，路由系统只需要识别这些键：
+
+| `routing_strategy` | `policy_type` | 展示名 | 含义 |
+|------|------|------|------|
+| `cost_priority` | `COST_CONSTRAINED` | 成本开销保障 | 优先选择成本较低的可用资源。 |
+| `low_latency_forwarding` | `LATENCY_CONSTRAINED` | 低时延转发 | 优先选择链路时延较低、跳数更少或网络更稳定的路径。 |
+| `resource_guarantee` | `RESOURCE_GUARANTEE` | 资源预留保障 | 默认策略，先保证资源满足需求和 GPU 独占。 |
+| `fastest_completion` | `TIME_CONSTRAINED` | 完成时间优先 | 优先选择预计完成更快的节点。 |
+| `load_balance` | `LOAD_BALANCE` | 资源负载均衡 | 优先把任务分散到负载较低的节点。 |
+
+平台只会为上表中的有效 `routing_strategy` 生成对应 `policy_type`。如果用户没有表达特殊偏好，新建工单默认使用 `resource_guarantee / RESOURCE_GUARANTEE`。旧版本历史数据不作为兼容目标；联调前应清理旧工单，并按当前策略字典重新创建。
+
+业务模态与默认优先级字典如下。`1` 表示最高业务流优先级，`8` 表示最低；平台系统设置可以调整该映射。
+
+| 业务模态 | 默认优先级 |
+|----------|------------|
+| 低时延转发模态 | 1 |
+| 确定性转发模态 | 2 |
+| 高安全传输模态 | 3 |
+| 智算中心模态 | 4 |
+| 高通量计算模态 | 5 |
+| 高能效边缘计算模态 | 6 |
+| 分布式存算模态 | 7 |
+| 大规模连接模态 | 8 |
 
 命名规则只保留两套概念：
 
@@ -55,6 +90,8 @@ topology_node_id  真实拓扑节点名，对应 nodes.hostname，例如 compute
 ```
 
 不要把 `task_node_id` 当成物理机器，也不要把 `topology_node_id` 写进 DAG 的 `edges.from/to`。`edges.from/to` 永远引用 `task_node_id`。
+
+路由回写只接受当前 placement 字段：`task_node_id`、`topology_node_id`、`gpu_device`。历史测试数据不迁移，清理后按当前格式重新创建。
 
 ## 3. 推荐部署方式
 
@@ -108,6 +145,25 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 | 确定无法路由 | `PATCH /api/routing-orders/{order_id}/fail` | 把工单标记为 `failed`，需要写清失败原因。 |
 | 查询释放事件 | `GET /api/routing-resource-events?event_type=release&unacked=true&limit=100` | 平台告诉路由系统哪些 GPU 已释放。 |
 | 确认释放事件 | `POST /api/routing-resource-events/ack` | 路由系统把资源加回后，确认这些事件已处理。 |
+
+平台仓库提供一个最小 mock 路由器用于接口自检。它不会替代路由算法，只用于证明 pending、claim、result、network-ready 和端口返回链路可用：
+
+```bash
+cd /home/bupt/manage_deploy
+python3 scripts/mock_external_router.py \
+  --base-url http://127.0.0.1:8181 \
+  --limit 3 \
+  --compute-nodes compute-1,compute-2,compute-3 \
+  --gpu-device 0
+```
+
+如果只想查看待路由工单而不回写：
+
+```bash
+python3 scripts/mock_external_router.py \
+  --base-url http://127.0.0.1:8181 \
+  --dry-run
+```
 
 ## 5. 最小主循环
 
@@ -227,6 +283,7 @@ LIMIT 100;
 | `modal` / `priority` | 模态和业务优先级，可辅助路径/QoS 决策。 |
 | `nodes[].task_node_id` | 子任务角色名，例如 `source/compute/sink`。 |
 | `nodes[].task_node_type` | 子任务类型，例如 `terminal/worker`。 |
+| `nodes[].resources` | 平台给出的 CPU、内存、磁盘、GPU 需求。 |
 | `nodes[].fixed_topology_node_id` | 用户输入并固定的真实拓扑节点，通常在 source/sink。 |
 | `nodes[].resources.gpu_units` | 判断该子任务是否需要 GPU。 |
 | `edges[].from/to` | 业务流两端，引用 `task_node_id`。 |
@@ -275,7 +332,7 @@ WHERE deleted_at IS NULL
 |------|----------|------------------------|------|
 | 终端节点需要承载 source/sink 容器 | `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
 | 终端节点参与某些任务但该任务不部署 source/sink 容器 | 通常仍为 `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 视任务而定 | 机器具备部署能力，但当前任务可用 `deployable_roles=["compute"]` 或 `[]` 只建立路由路径。 |
-| 少数纯网络节点确实没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 仅作为兼容场景用于 route-only 路径检查，不用于需要业务容器的测评。 |
+| 少数纯网络节点确实没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 仅用于 route-only 路径检查，不用于需要业务容器的测评。 |
 | 计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。 |
 | 专用计算节点 | `node_kind=worker`，`is_schedulable=1`，`is_routable=1` | 可以 | 路由系统可把它作为 `compute` placement，并按 GPU 独占规则扣减资源。 |
 
@@ -331,7 +388,45 @@ baseline 准备规则：
 - 如果某节点缺少当前 `task_type` 的 baseline，路由系统可以跳过该节点。
 - 如果所有可用节点都缺少 baseline，调用 `PATCH /api/routing-orders/{order_id}/requeue`，原因写“baseline not ready”，不要丢工单。
 
-### 6.4 `routing_resource_events`
+当前管理节点历史实测参考值如下，仅供路由排序、联调解释和异常排查使用；正式测评仍以当前轮次重新测得的稳定 baseline 为准。
+
+| 业务 | 节点 | 历史参考值 | 稳定性 | 说明 |
+|------|------|------------|--------|------|
+| 矩阵乘法计算 | `compute-1` | 5448.33 GFLOPS | 稳定 | GPU 路径历史基线。 |
+| 矩阵乘法计算 | `compute-2` | 5283.98 GFLOPS | 稳定 | GPU 路径历史基线。 |
+| 矩阵乘法计算 | `compute-3` | 5154.95 GFLOPS | 稳定 | 3 次原始值中位数。 |
+| 视频 AI 推理 | `compute-1` | 131.36 ms | 稳定 | `onnxruntime_cuda`，YOLOv5n，P90 帧时延。 |
+| 视频 AI 推理 | `compute-2` | 159.36 ms | 稳定 | `onnxruntime_cuda`，YOLOv5n，P90 帧时延。 |
+| 视频 AI 推理 | `compute-3` | 99.63 ms | 波动较大 | 历史原始值约 71.6-106.6 ms，正式测评前建议重测。 |
+
+### 6.4 DAG 资源需求从哪里来
+
+路由系统只需要消费 `routing_input_dag.nodes[].resources`，不需要自己生成这些值。平台当前生成顺序如下：
+
+1. 默认由平台资源估算器根据 `task_type + data_profile` 确定性计算。
+2. 如果系统设置中启用了“任务资源要求覆盖”，对应 `task_type + task_node_id` 的覆盖值优先于默认估算。
+3. 如果单个工单显式带有 `resource_requirement`，它优先级最高，用于临时专项联调。
+
+这三种方式都由平台在创建工单或预览 DAG 时完成，最终写入 `task_orders.routing_input_dag`。大模型/智能体不会随机生成资源值。
+
+当前默认参考值：
+
+| 业务 | 子任务 | CPU | 内存 MB | 磁盘 MB | GPU |
+|------|--------|-----|---------|---------|-----|
+| 矩阵乘法计算 | source/sink | 2 | 512 | 512 | 0 |
+| 矩阵乘法计算 | compute | 8 | 随矩阵规模估算，最低 1024 | 1024 | 1 |
+| 视频 AI 推理 | source/sink | 2 | 512 | 512 | 0 |
+| 视频 AI 推理 | compute | 4 | 2048 或 4096 | 1024 | 1 |
+
+后续如果要更精细，可以把 worker 容器的 Docker 运行指标和业务 baseline 结果沉淀到数据库，作为系统设置推荐值或估算器校准输入。当前 v1 联调不要求路由系统实现这部分。
+
+资源字段的运行时语义：
+
+- `gpu_units` 用于路由系统选择 GPU 资源；路由回写的 `placements[].gpu_device` 会进入平台部署参数，并由 Node Agent 转成 Docker GPU `device_requests`。
+- `cpu_units`、`mem_mb`、`disk_mb` 当前用于路由估算、前端展示和容器环境变量 `RESOURCE_REQUIREMENT`，不会自动转成 Docker `cpu_limit`、`memory_limit` 或磁盘硬限制。
+- 如果后续需要强限制 CPU/内存，应由平台在模板或实例覆盖字段中显式设置 `cpu_limit`、`memory_limit` 等 Docker runtime 参数；不建议在当前联调阶段自动强限，避免因限额过紧影响业务目标成功率。
+
+### 6.5 `routing_resource_events`
 
 资源释放事件表。平台在任务停止、失败、删除、清理实例后写入 release 事件，路由系统处理后调用 ack。
 
@@ -342,7 +437,7 @@ baseline 准备规则：
 | `order_id` / `job_id` | 统一工单 ID。 |
 | `benchmark_run_id` | 验收轮次，可选。 |
 | `task_type` | 业务类型。 |
-| `node_hostname` | 被释放资源所在节点。 |
+| `node_hostname` | 被释放资源所在节点，对应 `nodes.hostname`，也就是路由回写的 `placements[].topology_node_id`。 |
 | `resource_kind` | 第一阶段主要是 `gpu`。 |
 | `resource_id` | GPU 编号，如 `0`。 |
 | `amount` | 释放数量，GPU 默认 `1`。 |
@@ -368,7 +463,7 @@ LIMIT 100;
 - 这张表有唯一约束，平台会避免同一个工单、同一节点、同一 GPU 重复发 release。
 - 如果 ack 请求失败，下一轮还会读到同一事件，路由系统应按事件 ID 做幂等处理。
 
-### 6.5 路由系统自己的资源占用表
+### 6.6 路由系统自己的资源占用表
 
 平台不限制路由系统内部怎么建表。最小版本建议维护一张本地表或内存持久化结构：
 
@@ -388,7 +483,7 @@ LIMIT 100;
 - `/result` 超时但平台状态已是 `network_binding_ready/completed` 时，不要再次 reserve；按已有结果继续处理。
 - 收到 release 并 ack 成功后，再把资源正式释放为可用。
 
-### 6.6 最小字段结构清单
+### 6.7 最小字段结构清单
 
 下面不是要求路由系统建同样的表，而是说明扫平台 MySQL 时需要按这些字段理解数据：
 
@@ -446,7 +541,7 @@ routing_resource_events(
   external_routing_id varchar(255),
   benchmark_run_id varchar(255),
   task_type varchar(255),
-  node_hostname varchar(255),              -- 被释放的 topology_node_id
+  node_hostname varchar(255),              -- 被释放的 nodes.hostname，即 placements[].topology_node_id
   resource_kind varchar(50),               -- 第一阶段主要是 gpu
   resource_id varchar(64),                 -- GPU 编号
   amount int,
@@ -462,7 +557,7 @@ routing_resource_events(
 - 跨系统唯一 ID 只看 `task_orders.id`，它等于 DAG 里的 `job_id/order_id`。
 - 路由回写真实节点只用 `nodes.hostname`，不要回写 `nodes.id` 或 `nodes.topology_node_id`。
 - `node_baselines.node_id` 是平台内部外键，查询时通过 `JOIN nodes` 转成 `topology_node_id`。
-- `routing_resource_events.node_hostname` 对应 `nodes.hostname`，用于释放路由系统自己的 GPU 占用。
+- `routing_resource_events.node_hostname` 对应 `nodes.hostname`，也就是路由回写的 `placements[].topology_node_id`；它不是资产字段 `nodes.topology_node_id`。
 
 ## 7. 输入 DAG 格式
 
@@ -558,6 +653,7 @@ routing_resource_events(
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
 - `priority` 和 `edges[].flow.priority` 用于识别业务流优先级，取值 `1-8`，`1` 最高。该值由平台“系统设置 -> 模态优先级字典”维护。
 - `edges[].flow` 用于识别业务流和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。路由系统可结合 `priority` 对不同业务流下发 QoS 或路径策略。
+- 新生成的 DAG 中 `modal` 使用中文业务模态名，例如 `高通量计算模态`、`低时延转发模态`；`routing_strategy` 使用英文策略枚举，例如 `resource_guarantee`、`low_latency_forwarding`。不要把二者合并为一个字段。
 
 ## 8. 支持的 DAG 形态
 
@@ -651,7 +747,7 @@ Content-Type: application/json
 - 如果需要部署容器，平台会物化实例、动态分配端口，并返回 `network_bindings`。
 - 默认返回后工单进入 `routing_status=network_binding_ready`，等待路由系统下发流表/QoS。
 - 如果 GPU 冲突，平台返回 `409`，路由系统需要撤销本次资源扣减并重新路由或 requeue。
-- 回写接口是幂等的；如果 HTTP 超时，路由系统可以重新 POST 同一结果，平台会返回已有 `instance_id` 和 `network_bindings`。
+- 如果 HTTP 超时，路由系统应先查询该工单状态；若已进入 `network_binding_ready` 或 `completed`，按平台已有结果继续处理，不要重复扣资源。若仍为 `computing` 且没有结果，再按路由系统自己的幂等策略决定是否重新回写同一结果。
 
 典型响应：
 
@@ -688,17 +784,7 @@ Content-Type: application/json
 }
 ```
 
-路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态、`priority`、`routing_strategy` 和路由系统自身策略处理。
-
-策略字段约定：
-
-| `routing_strategy` | `policy_type` | 含义 |
-|------|------|------|
-| `resource_guarantee` | `RESOURCE_GUARANTEE` | 默认资源保障 |
-| `fastest_completion` | `TIME_CONSTRAINED` | 完成时间优先 |
-| `low_latency_forwarding` | `LATENCY_CONSTRAINED` | 低时延转发策略 |
-| `load_balance` | `LOAD_BALANCE` | 负载均衡 |
-| `cost_priority` | `COST_CONSTRAINED` | 成本优先 |
+路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态、`priority`、`routing_strategy` 和路由系统自身策略处理。策略字典见本文档第 2 节冻结约定，避免把“低时延转发模态”和“低时延转发策略”混为一个字段。
 
 ## 9.1 网络就绪确认
 
@@ -803,7 +889,7 @@ Content-Type: application/json
 
 ## 12. 联调测试用例
 
-路由同学或 AI 实现完最小版本后，按下面测试用例自测。测试前建议在平台前端新建一轮“外部路由系统”模式的 benchmark 工单，避免扫到历史旧格式数据。
+路由同学或 AI 实现完最小版本后，按下面测试用例自测。测试前建议在平台前端新建一轮“外部路由系统”模式的 benchmark 工单，并只处理当前轮次的 pending 工单。
 
 通用环境变量：
 
@@ -814,6 +900,14 @@ export PLATFORM_API_BASE=http://10.112.244.94:8181
 ### 用例 1：能读取并领取待路由工单
 
 目的：验证路由系统能拿到平台生成的新 DAG，并用 claim 防止重复处理。
+
+最短自检命令：
+
+```bash
+python3 scripts/mock_external_router.py \
+  --base-url "$PLATFORM_API_BASE" \
+  --dry-run
+```
 
 步骤：
 
@@ -836,6 +930,16 @@ curl -sS -X PATCH \
 ### 用例 2：能回写 compute placement 并完成物化
 
 目的：验证路由系统只回写 compute 节点，平台能自动补齐固定端点并物化实例。
+
+最短自检命令：
+
+```bash
+python3 scripts/mock_external_router.py \
+  --base-url "$PLATFORM_API_BASE" \
+  --limit 1 \
+  --compute-nodes compute-1,compute-2,compute-3 \
+  --gpu-device 0
+```
 
 步骤：
 
@@ -976,7 +1080,7 @@ curl -sS -X POST \
 5. 成功时调 POST /api/routing-orders/{order_id}/result，业务 placements 只需要回写 compute；平台会补齐 source/sink。未 claim 直接回写会返回 409。
 6. 如果 /result 返回 409，撤销本地资源扣减，requeue 或重新计算。
 7. 如果 /result 超时，查询该 order 状态；如果已经 network_binding_ready/completed，不要重复扣资源，直接继续读取已有 network_bindings。
-8. 根据 network_bindings 下发流表；如需要 QoS，可由路由系统结合业务模态自行决定。
+8. 根据 network_bindings 下发流表；如需要 QoS，可结合业务模态 `modal/priority` 和选路偏好 `routing_strategy` 决定。
 9. 下发完成后调 POST /api/routing-orders/{order_id}/network-ready。
 10. 临时资源不足调 PATCH /api/routing-orders/{order_id}/requeue。
 11. 确定无法路由调 PATCH /api/routing-orders/{order_id}/fail。

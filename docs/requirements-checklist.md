@@ -56,16 +56,18 @@ source → worker → sink
 
 ### 2.2 外部路由系统接口 ✅
 
-- 扫表：`GET /api/routing-requests`（routing_status=pending）
-- 认领：`PATCH /api/routing-requests/{id}/claim`
-- 回写：`POST /api/orders/{id}/routing-result`
-- 幂等性：重复回写返回 409
+- 扫表：`GET /api/routing-orders?status=pending`
+- 认领：`PATCH /api/routing-orders/{order_id}/claim`
+- 回写：`POST /api/routing-orders/{order_id}/result`
+- 网络就绪：`POST /api/routing-orders/{order_id}/network-ready`
+- 幂等性：重复回写返回已有结果
 - 无效节点：返回 422
 
 ### 2.3 路由结果处理 ✅
 
-- 校验 placements 覆盖 DAG 所有逻辑节点
-- 匹配 node_name → 平台 nodes 表
+- 路由系统只需回写工作节点 placement；平台按 DAG 中固定端点补齐 source/sink
+- placement 只接受 `task_node_id/topology_node_id/gpu_device`
+- 匹配 `topology_node_id` → 平台 `nodes.hostname`
 - 保存 GPU 编号 → 容器环境变量 `CUDA_VISIBLE_DEVICES`
 - 物化 TaskInstance + 注册调度 job
 
@@ -234,7 +236,7 @@ node_baselines:
 
 ## 9. 已知约束与风险
 
-- RoutingPlacement.node_id 语义依赖外部路由系统约定（必须传 role 名称）
+- 外部路由 placement 已冻结为 `task_node_id/topology_node_id/gpu_device`，历史旧字段不再兼容；旧数据需清理后按新协议重跑
 - business_start/end_time 为 None 时不注册调度 job，实例停留在 scheduled
 - `/ports/available` 不是强锁，查到可用到启动之间有竞态
 - 第一阶段不做端口预约表，冲突则失败

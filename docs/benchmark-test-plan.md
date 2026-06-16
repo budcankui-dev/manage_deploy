@@ -1,6 +1,6 @@
 # 业务目标验收测试方案
 
-> 最后更新：2026-06-12
+> 最后更新：2026-06-16
 > 状态：已实现业务目标成功率闭环、节点资源同步、按验收轮次自动补算成功率和清理实例保留证据。矩阵乘法当前可复现正式轮次为 `high_throughput_matmul-20260612095418`，30/30 达标，成功率 100.0%。视频 AI 推理链路已具备固定视频、YOLO 推理、带框预览和 4/4 联调轮次（`video-route-pool-check-20260612160633`），但正式 30 样本验收轮次仍需重新跑通并截图留档。
 
 ## 目标
@@ -26,7 +26,7 @@
 单任务达标条件：actual_gflops >= baseline_gflops x 0.8
 ```
 
-其中 `baseline_gflops` 是该节点在相同业务 profile 下的历史基准能力，`0.8` 是科研验收阶段的容忍系数。这样可以屏蔽输入数据量差异，重点评价“任务运行后的过程性能力是否达到该节点历史水平”。
+其中 `baseline_gflops` 是正式测评前在相同业务 profile、相同镜像和相同推理/计算路径下测出的节点基线能力。建议每个节点重复 3 次取中位数写入基线表；历史实测结果只作为系统设置推荐和异常排查参考，不能替代当前轮基线。`0.8` 是科研验收阶段的容忍系数，用于覆盖轻微环境波动，同时仍要求任务达到节点基线能力的主要水平。
 
 矩阵乘法任务不以端到端完成时间作为目标。Worker 在启动后先执行 warmup，再在固定观测窗口内持续采样，任务结束后由 sink 上报汇总指标。若任务运行时间不足、未达到最小采样数，或未上报指标，则不能作为成功样本；正式验收页面会将其保留在测试工单列表中，并通过“已评估任务数不足”或失败原因提示出来。
 
@@ -42,7 +42,7 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 
 等价写法：`actual_latency <= baseline_latency_p90_ms / 0.8`。
 
-其中 `baseline_latency_p90_ms` 是该节点在相同视频 profile、相同固定视频、相同 YOLO 权重和 GPU 推理路径下的历史基准 P90 帧时延。视频 worker 默认要求 compute 子任务分配 GPU；CPU 路径仅作为开发调试开关，不能写入正式验收基线。正式演示时，工单详情应展示 compute 节点、GPU 编号、模型名称、固定视频、检测框列表和带框预览图，证明业务真实执行而不是只上报静态数值。
+其中 `baseline_latency_p90_ms` 是正式测评前在相同视频 profile、相同固定视频、相同 YOLO 权重和 GPU 推理路径下测出的节点基线 P90 帧时延。视频时延是“越低越好”的指标，因此达标写作 `actual_latency <= baseline_latency_p90_ms / 0.8`；含义是正式任务的 P90 时延不能明显劣于当前节点基线。视频 worker 默认要求 compute 子任务分配 GPU；CPU 路径仅作为开发调试开关，不能写入正式验收基线。正式演示时，工单详情应展示 compute 节点、GPU 编号、模型名称、固定视频、检测框列表和带框预览图，证明业务真实执行而不是只上报静态数值。
 
 ## 测试环境
 
@@ -169,7 +169,7 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 
 ## 路由系统边界
 
-当前阶段路由策略可以是资源约束驱动的简单放置策略，例如选择 GPU 数量满足要求的节点。业务目标成功率不证明路由算法全局最优，而是证明平台能完成：
+当前阶段路由算法实现可以先采用资源约束驱动的简单放置算法，例如选择 GPU 数量满足要求且基线稳定的节点。该算法在 DAG 中通常对应 `routing_strategy=resource_guarantee`。业务目标成功率不证明路由算法全局最优，而是证明平台能完成：
 
 ```text
 用户/测试工单 -> DAG 生成 -> 路由放置 -> 实例部署 -> Worker 运行 -> 指标采集 -> 业务目标判定 -> 成功率统计
@@ -179,8 +179,10 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 
 - 工单创建时生成 `task_orders.routing_input_dag`。
 - `routing_input_dag.edges[]` 除 `data_mb` 外还包含 `bandwidth_mbps`，表达源节点、业务计算节点、目的节点之间的链路约束。当前值由任务类型和数据画像估算，后续可替换为实测基准。
-- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。对话/工单主链路使用 `POST /api/routing-results/{routing_request_id}`，验收工单可直接使用 `POST /api/orders/{order_id}/routing-result`。两者都要表达 `source`、`compute/worker`、`sink` placements，compute 节点可携带 `gpu_device` 或 `gpu_indices`。
-- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。当前 `/benchmark` 页面支持 list 形式 placements，例如 `[{node_id:"compute", worker_host:"compute-3", gpu_device:"0"}]`；正式路由系统可使用更丰富的 dict 形式，平台按角色解析。
+- `routing_input_dag.nodes[].resources` 由平台资源估算器根据任务类型和固定 profile 生成；如某轮基线或实测表明默认值需要调整，可在系统设置中启用任务资源要求覆盖，覆盖值优先写入 DAG。
+- DAG 资源字段中，GPU 需求会通过路由回写的 GPU 编号进入实际容器部署；CPU、内存和磁盘当前作为路由估算、展示和容器环境变量，不自动作为容器硬限制。若后续需要强限制 CPU/内存，应在模板或实例运行参数中显式设置。
+- 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。冻结联调接口使用 `POST /api/routing-orders/{order_id}/result`，业务 placements 通常只需要回写 `compute`，compute 节点可携带 `gpu_device`；source/sink 固定端点由平台根据 DAG 与工单配置补齐。
+- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。冻结 placement 格式为 `{"task_node_id":"compute","topology_node_id":"compute-3","gpu_device":"0"}`；历史测试数据不迁移，清理后按当前格式重新跑通。
 - 如果多个业务类型复用同一个 source/compute/sink 模板，平台会优先根据工单 `runtime_config.business_task.task_type` 定位 `business_template_catalog`，避免只按 `template_id` 查找时出现多条 catalog 歧义。
 - 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 
@@ -234,7 +236,7 @@ print(run_benchmark("low_latency_video_pipeline", runs=1))
 PY
 ```
 
-如果实验网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，可以复用 registry 中已验证为 `linux/amd64` 的旧 `scientific-matmul:dev` 镜像作为基础层，只刷新 `/app/src` 和 `/app/_common` 业务代码层：
+网络不可用应急说明：如果实验网络无法访问 Docker Hub、Ubuntu apt 或 NVIDIA 软件源，可以复用 registry 中已验证为 `linux/amd64` 的旧 `scientific-matmul:dev` 镜像作为基础层，只刷新 `/app/src` 和 `/app/_common` 业务代码层。该方式不是默认正式路径；使用前应记录镜像 digest，并确认旧镜像依赖、CUDA/GPU 路径和当前业务代码兼容。
 
 ```bash
 cd /home/bupt/manage_deploy

@@ -127,6 +127,6 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 风险记录：
 
-- `batch-auto-route` 是验收闭环 mock，不保证选中有 GPU 的 compute 节点；真实验收和外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"` 或 `gpu_indices`。
+- `batch-auto-route` 是平台内置自动分配流程；真实外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"`。
 - 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline / 0.8` 判定，即时延不超过节点同 profile 基线的 1.25 倍。该 25% 裕量用于覆盖容器化运行、网络转发和系统调度波动，不用于容忍同一 GPU 多任务争用；早期放宽口径已废弃。
 - 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。

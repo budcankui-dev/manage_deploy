@@ -22,7 +22,7 @@
 
 ## 技术栈
 - 后端：FastAPI + SQLAlchemy（异步）+ APScheduler + Docker SDK
-- 数据库：SQLite（开发用）/ MySQL（生产用）
+- 数据库：MySQL
 - Node Agent：FastAPI + docker-py
 - 前端：Vue3 + Element Plus（部分已实现）
 - 部署：每台机器一个 Docker Compose
@@ -114,7 +114,8 @@ docker compose -f docker-compose.agents.yml up -d
 - `POST /api/conversations` - 创建对话
 - `POST /api/conversations/{id}/messages` - 发送消息并解析意图
 - `POST /api/conversations/{id}/confirm-intent` - 确认意图草稿
-- `POST /api/routing-requests` - 请求外部路由
+- `GET /api/routing-orders?status=pending` - 外部路由系统获取待路由工单
+- `PATCH /api/routing-orders/{id}/claim` - 外部路由系统领取工单
 - `POST /api/routing-orders/{id}/result` - 外部路由回写 placements，返回 `network_bindings`（演示接口不加 token）
 - `POST /api/routing-orders/{id}/network-ready` - 外部路由下发流表/QoS 后确认网络就绪
 - `POST /api/conversations/{id}/submit` - 确认提交到部署系统
