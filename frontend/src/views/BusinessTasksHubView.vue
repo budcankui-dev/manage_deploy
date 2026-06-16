@@ -75,7 +75,7 @@
             @clear="applyFilters"
           />
           <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="applyFilters">
-            <el-option v-for="(label, key) in ROUTING_POLICY_LABELS" :key="key" :label="label" :value="key" />
+            <el-option v-for="item in ROUTING_POLICY_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
           <el-select v-model="filters.order_status" placeholder="工单状态" clearable style="width: 130px" @change="applyFilters">
             <el-option v-for="(label, key) in ORDER_STATUS_LABELS" :key="key" :label="label" :value="key" />
@@ -298,10 +298,11 @@ import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi, businessApi, instancesApi, nodesApi, ordersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
+import { extractErrorMessage } from '@/utils/errorMessage'
 import {
   DEPLOYMENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
-  ROUTING_POLICY_LABELS,
+  ROUTING_POLICY_OPTIONS,
   routingPolicyLabel,
 } from '@/constants/routingPolicy'
 import {
@@ -889,7 +890,7 @@ async function submitManualRouting() {
     manualRoutingVisible.value = false
     await refreshAll()
   } catch (err) {
-    ElMessage.error(err.response?.data?.detail || '路由分配失败')
+    ElMessage.error(extractErrorMessage(err, '路由分配失败'))
   } finally {
     manualRoutingLoading.value = false
   }
@@ -942,7 +943,7 @@ async function submitSample() {
       use_gpu: false,
     },
     routing_result: {
-      strategy: 'completion_time_first',
+      strategy: 'fastest_completion',
       placements: {
         source: nodes.value[0].id,
         compute: nodes.value[1].id,

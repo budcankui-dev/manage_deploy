@@ -69,6 +69,7 @@ import { useTemplatesStore } from '@/stores/templates'
 import { useNodesStore } from '@/stores/nodes'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import TemplateEditorForm from '@/components/TemplateEditorForm.vue'
+import { extractErrorMessage } from '@/utils/errorMessage'
 import {
   emptyTemplateForm,
   mapTemplateToForm,
@@ -204,8 +205,7 @@ async function submitSave() {
     }
     await templatesStore.fetchTemplates()
   } catch (error) {
-    const msg = error.response?.data?.detail || error.message || '保存失败'
-    ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    ElMessage.error(extractErrorMessage(error, '保存失败'))
   } finally {
     submitting.value = false
   }

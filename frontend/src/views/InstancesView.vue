@@ -270,6 +270,7 @@ import { useInstancesStore } from '@/stores/instances'
 import { instancesApi, nodesApi, templatesApi } from '@/api'
 import { useTemplatesStore } from '@/stores/templates'
 import { buildInstancePayload, INSTANCE_JSON_EXAMPLE, mapApiNodeToForm, mapApiNodeToOverride, mapFormNodeToOverride } from '@/utils/deployJson'
+import { extractErrorMessage, normalizeErrorMessage } from '@/utils/errorMessage'
 import NodeContainerConfig from '@/components/NodeContainerConfig.vue'
 
 dayjs.extend(relativeTime)
@@ -568,7 +569,7 @@ async function submitCreateFromJson() {
     await finalizeCreate(payload)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error.message || getErrorMessage(error, '从 JSON 创建失败'))
+    ElMessage.error(getErrorMessage(error, '从 JSON 创建失败'))
   } finally {
     creating.value = false
   }
@@ -703,7 +704,7 @@ async function stopInstance(id) { await storeStop(id); ElMessage.success('实例
 async function restartInstance(id) { await storeRestart(id); ElMessage.success('实例已重启') }
 function viewInstance(id) { router.push(`/dev/instances/${id}`) }
 function getErrorMessage(error, fallback) {
-  return error?.response?.data?.detail || error?.message || fallback
+  return extractErrorMessage(error, fallback)
 }
 async function confirmDelete(instance) {
   try {
@@ -750,7 +751,7 @@ async function handleBatchDelete() {
     await ElMessageBox.confirm(`确认删除选中的 ${selectedIds.value.length} 个实例吗？`, '批量删除', { type: 'warning' })
     const result = await instancesStore.batchDelete(selectedIds.value)
     if (Object.keys(result.failed || {}).length) {
-      const firstFailure = Object.values(result.failed)[0]
+      const firstFailure = normalizeErrorMessage(Object.values(result.failed)[0], '删除实例失败')
       ElMessage.warning(`批量删除部分完成，成功 ${result.succeeded.length} 个，失败 ${Object.keys(result.failed).length} 个：${firstFailure}`)
     } else {
       ElMessage.success(`批量删除完成，成功 ${result.succeeded.length} 个`)

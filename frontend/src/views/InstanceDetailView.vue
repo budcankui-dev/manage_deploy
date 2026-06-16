@@ -250,6 +250,7 @@ import {
 import { DOCKER_PARAM_DOCS } from '@/utils/dockerFieldHints'
 import NodeContainerConfig from '@/components/NodeContainerConfig.vue'
 import { ElMessage } from 'element-plus'
+import { extractErrorMessage } from '@/utils/errorMessage'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import utc from 'dayjs/plugin/utc'
@@ -501,7 +502,7 @@ async function submitEdit() {
     pendingEditPayload.value = null
     await refreshInstanceData()
   } catch (error) {
-    ElMessage.error(error?.response?.data?.detail || error?.message || '更新实例失败')
+    ElMessage.error(extractErrorMessage(error, '更新实例失败'))
   } finally {
     editing.value = false
   }

@@ -381,6 +381,7 @@ import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refre
 import { adminApi, conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { handleAuthExpired } from '@/utils/authExpired'
+import { extractErrorMessage } from '@/utils/errorMessage'
 import { getLastConversationId, setLastConversationId } from '@/utils/sessionState'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
@@ -720,7 +721,7 @@ async function deleteConversation(item) {
       }
     }
   } catch (err) {
-    ElMessage.error('删除失败：' + (err.response?.data?.detail || '未知错误'))
+    ElMessage.error(extractErrorMessage(err, '删除失败'))
   }
 }
 
@@ -935,7 +936,7 @@ async function confirmIntent() {
     if (detail?.validation_errors) {
       ElMessage.warning('参数不完整：' + detail.validation_errors.join('；'))
     } else {
-      ElMessage.error(typeof detail === 'string' ? detail : '确认失败')
+      ElMessage.error(extractErrorMessage(err, '确认失败'))
     }
   } finally {
     isConfirming.value = false
@@ -953,7 +954,7 @@ async function cancelOrder() {
     await refreshList()
     if (showOrders.value) loadOrders()
   } catch (err) {
-    ElMessage.error(err.response?.data?.detail || '取消失败')
+    ElMessage.error(extractErrorMessage(err, '取消失败'))
   }
 }
 
@@ -967,7 +968,7 @@ async function demoRoute() {
     if (showOrders.value) await loadOrders()
     ElMessage.success('部署流程已执行')
   } catch (err) {
-    ElMessage.error(err.response?.data?.detail || '部署流程执行失败')
+    ElMessage.error(extractErrorMessage(err, '部署流程执行失败'))
   } finally {
     isDemoRouting.value = false
   }

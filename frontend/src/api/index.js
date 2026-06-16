@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { handleAuthExpired } from '@/utils/authExpired'
+import { extractErrorMessage } from '@/utils/errorMessage'
 
 const api = axios.create({
   baseURL: '/api',
@@ -56,7 +57,7 @@ api.interceptors.response.use(
     }
     const message = error.response?.status === 401
       ? '登录失败，请检查用户名或密码'
-      : error.response?.data?.detail || error.message || '请求失败'
+      : extractErrorMessage(error, '请求失败')
     ElMessage.error(message)
     return Promise.reject(error)
   }

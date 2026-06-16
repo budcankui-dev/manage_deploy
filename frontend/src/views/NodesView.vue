@@ -285,6 +285,7 @@ import { useNodesStore } from '@/stores/nodes'
 import { nodesApi } from '@/api'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import { normalizeErrorMessage } from '@/utils/errorMessage'
 
 const store = useNodesStore()
 const { nodes } = storeToRefs(store)
@@ -511,7 +512,7 @@ async function cleanupSelectedOrphans() {
   await ElMessageBox.confirm(`确认清理选中的 ${selectedOrphanNames.value.length} 个孤儿容器吗？`, '清理孤儿容器', { type: 'warning' })
   const { data } = await nodesApi.cleanupOrphans(orphanNode.value.id, selectedOrphanNames.value)
   if (Object.keys(data.failed || {}).length) {
-    const firstFailure = Object.values(data.failed)[0]
+    const firstFailure = normalizeErrorMessage(Object.values(data.failed)[0], '清理容器失败')
     ElMessage.warning(`已清理 ${data.succeeded.length} 个，失败 ${Object.keys(data.failed).length} 个：${firstFailure}`)
   } else {
     ElMessage.success(`已清理 ${data.succeeded.length} 个孤儿容器`)
@@ -524,7 +525,7 @@ async function cleanupAllOrphans() {
   await ElMessageBox.confirm(`确认清理节点 ${orphanNode.value.hostname} 上的全部孤儿容器吗？`, '一键清理孤儿容器', { type: 'warning' })
   const { data } = await nodesApi.cleanupOrphans(orphanNode.value.id)
   if (Object.keys(data.failed || {}).length) {
-    const firstFailure = Object.values(data.failed)[0]
+    const firstFailure = normalizeErrorMessage(Object.values(data.failed)[0], '清理容器失败')
     ElMessage.warning(`已清理 ${data.succeeded.length} 个，失败 ${Object.keys(data.failed).length} 个：${firstFailure}`)
   } else {
     ElMessage.success(`已清理 ${data.succeeded.length} 个孤儿容器`)
