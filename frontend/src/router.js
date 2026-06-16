@@ -1,20 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-
-const ADMIN_ROUTES = new Set([
-  'Nodes',
-  'Templates',
-  'TemplateNew',
-  'TemplateDetail',
-  'DevInstances',
-  'InstanceDetail',
-  'BusinessTasksHub',
-  'AdminConsole',
-  'Users',
-  'Benchmark',
-  'IntentEvaluation',
-  'SystemSettings',
-])
+import { ADMIN_ROUTE_NAMES, USER_ROUTE_NAMES } from '@/utils/routeAccess'
 
 const routes = [
   {
@@ -135,7 +121,11 @@ router.beforeEach((to) => {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
 
-  if (ADMIN_ROUTES.has(to.name) && !auth.isAdmin) {
+  if (ADMIN_ROUTE_NAMES.has(to.name) && !auth.isAdmin) {
+    return auth.homePath
+  }
+
+  if (USER_ROUTE_NAMES.has(to.name) && auth.isAdmin) {
     return auth.homePath
   }
 

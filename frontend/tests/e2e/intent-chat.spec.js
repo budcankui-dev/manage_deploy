@@ -255,3 +255,54 @@ test('intent chat keeps incomplete video draft unsubmitted and compactly shows n
     fullPage: false,
   })
 })
+
+test('expired admin session shows Chinese login prompt and returns to admin home', async ({ page, request }) => {
+  const auth = await loginByApi(request)
+  const staleConversation = await createConversation(request, auth.access_token)
+
+  await page.goto('/login')
+  await page.evaluate(({ staleConversationId }) => {
+    window.localStorage.setItem('access_token', 'expired-token')
+    window.localStorage.setItem('role', 'user')
+    window.localStorage.setItem('username', 'stale-user')
+    window.localStorage.setItem('lastConversationId', staleConversationId)
+  }, {
+    staleConversationId: staleConversation.id,
+  })
+
+  await page.goto('/intent-chat')
+  await expect(page).toHaveURL(/\/login\?redirect=/)
+  await expect(page.getByText('登录已过期，请重新登录')).toBeVisible()
+  await expect.poll(
+    () => page.evaluate(() => window.localStorage.getItem('lastConversationId'))
+  ).toBeNull()
+
+  await page.getByPlaceholder('admin').fill(username)
+  await page.getByLabel('密码').fill(password)
+  await page.getByRole('button', { name: '登录' }).click()
+
+  await expect(page).toHaveURL(/\/business-tasks/)
+  await expect(page.getByRole('heading', { name: '业务工单中心' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '新对话' })).toHaveCount(0)
+})
+
+test('admin user cannot stay on intent chat route', async ({ page, request }) => {
+  const auth = await loginByApi(request)
+
+  await page.goto('/login')
+  await page.evaluate(({ token, role, username }) => {
+    window.localStorage.setItem('access_token', token)
+    window.localStorage.setItem('role', role)
+    window.localStorage.setItem('username', username)
+  }, {
+    token: auth.access_token,
+    role: auth.role,
+    username,
+  })
+
+  await page.goto('/intent-chat')
+
+  await expect(page).toHaveURL(/\/business-tasks/)
+  await expect(page.getByRole('heading', { name: '业务工单中心' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '新对话' })).toHaveCount(0)
+})

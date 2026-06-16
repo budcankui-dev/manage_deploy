@@ -36,10 +36,13 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { consumeAuthExpiredNotice } from '@/utils/authExpired'
+import { clearSessionState } from '@/utils/sessionState'
+import { resolvePostLoginTarget } from '@/utils/routeAccess'
 
 const router = useRouter()
 const route = useRoute()
@@ -50,9 +53,10 @@ const form = reactive({ username: '', password: '' })
 async function handleLogin() {
   loading.value = true
   try {
-    await auth.login(form)
+    const data = await auth.login(form)
+    clearSessionState({ keepAuth: true })
     ElMessage.success('登录成功')
-    router.push(route.query.redirect || auth.homePath)
+    router.push(resolvePostLoginTarget(router, route.query.redirect, data.role || auth.role))
   } finally {
     loading.value = false
   }
@@ -67,6 +71,12 @@ async function handleBootstrap() {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  if (consumeAuthExpiredNotice()) {
+    ElMessage.warning('登录已过期，请重新登录')
+  }
+})
 </script>
 
 <style scoped>

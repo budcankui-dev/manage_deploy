@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { authApi } from '@/api'
+import { clearSessionState } from '@/utils/sessionState'
 
 const BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true'
 const BYPASS_ROLE = import.meta.env.VITE_AUTH_BYPASS_ROLE || 'admin'
@@ -53,10 +54,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     role.value = BYPASS ? BYPASS_ROLE : ''
     username.value = BYPASS ? BYPASS_USERNAME : ''
-    const currentStorage = safeLocalStorage()
-    currentStorage?.removeItem('access_token')
-    currentStorage?.removeItem('role')
-    currentStorage?.removeItem('username')
+    clearSessionState()
   }
 
   return {

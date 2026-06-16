@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { handleAuthExpired } from '@/utils/authExpired'
 
 const api = axios.create({
   baseURL: '/api',
@@ -24,6 +25,14 @@ function safeLocalStorage() {
   }
 }
 
+function isAuthEndpoint(url = '') {
+  return [
+    '/auth/login',
+    '/auth/register',
+    '/auth/bootstrap',
+  ].some((path) => url.includes(path))
+}
+
 api.interceptors.request.use(config => {
   const token = safeLocalStorage()?.getItem('access_token')
   if (token) {
@@ -35,15 +44,19 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error.response?.status === 401) {
-      safeLocalStorage()?.removeItem('access_token')
-      const currentPath = window.location.pathname
-      if (currentPath !== '/login' && currentPath !== '/register') {
-        window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`
+    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+      handleAuthExpired()
+      error.__authExpired = true
+      if (!error.response.data || typeof error.response.data !== 'object') {
+        error.response.data = { detail: '登录已过期，请重新登录' }
+      } else {
+        error.response.data.detail = '登录已过期，请重新登录'
       }
       return Promise.reject(error)
     }
-    const message = error.response?.data?.detail || error.message || '请求失败'
+    const message = error.response?.status === 401
+      ? '登录失败，请检查用户名或密码'
+      : error.response?.data?.detail || error.message || '请求失败'
     ElMessage.error(message)
     return Promise.reject(error)
   }

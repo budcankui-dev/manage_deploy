@@ -380,6 +380,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled, WarningFilled } from '@element-plus/icons-vue'
 import { adminApi, conversationApi, ordersApi, businessApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import { handleAuthExpired } from '@/utils/authExpired'
+import { getLastConversationId, setLastConversationId } from '@/utils/sessionState'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   modalityLabel,
@@ -680,7 +682,7 @@ async function loadConversation(id) {
 
 function selectConversation(id) {
   showOrders.value = false
-  localStorage.setItem('lastConversationId', id)
+  setLastConversationId(id)
   loadConversation(id)
 }
 
@@ -689,6 +691,7 @@ async function startNewConversation() {
   const { data } = await conversationApi.create({})
   conversation.value = data
   utterance.value = ''
+  setLastConversationId(data.id)
   // Prepend to list immediately so it appears highlighted at the top
   conversations.value = [data, ...conversations.value.filter(c => c.id !== data.id)]
   updateRoutingPolling()
@@ -812,6 +815,11 @@ async function sendMessage() {
       body: JSON.stringify({ content: text }),
       signal: abortController.signal,
     })
+
+    if (response.status === 401) {
+      handleAuthExpired()
+      return
+    }
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
@@ -988,10 +996,10 @@ function logout() {
 onMounted(async () => {
   await loadSystemSettings()
   await refreshList()
-  if (conversations.value.length) {
-    const lastId = localStorage.getItem('lastConversationId')
-    const target = lastId && conversations.value.find(c => c.id === lastId)
-    await loadConversation(target ? lastId : conversations.value[0].id)
+  const lastId = getLastConversationId()
+  const target = lastId && conversations.value.find(c => c.id === lastId)
+  if (target) {
+    await loadConversation(lastId)
   } else {
     await startNewConversation()
   }
