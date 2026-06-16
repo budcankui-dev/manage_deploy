@@ -130,6 +130,30 @@ def post_json_to_named_peer(
     _post_json(peer_url, path, data, timeout_sec, interval_sec)
 
 
+def post_json_to_url(
+    url: str,
+    data: dict,
+    timeout_sec: float = 30.0,
+    interval_sec: float = 2.0,
+) -> None:
+    """Best-effort compatible helper for posting JSON to an external callback URL."""
+    if not url:
+        raise RuntimeError("No callback URL configured")
+    import httpx
+
+    deadline = time.time() + max(1.0, float(timeout_sec))
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            resp = httpx.post(url, json=data, timeout=min(10.0, timeout_sec))
+            resp.raise_for_status()
+            return
+        except (httpx.HTTPError, OSError) as exc:
+            last_error = exc
+            time.sleep(interval_sec)
+    raise TimeoutError(f"Timed out posting callback to {url}: {last_error}")
+
+
 def poll_and_post_json(
     get_url: str,
     post_url: str,
@@ -146,9 +170,10 @@ def poll_and_post_json(
 
 
 class PostDataHandler(BaseHTTPRequestHandler):
-    """Accepts POST /data and stores the JSON payload."""
+    """Accepts POST /data and optionally serves the latest result via GET /result."""
 
     received_data: dict | None = None
+    result_data: dict | None = None
 
     def do_POST(self):
         if self.path == "/data":
@@ -163,6 +188,16 @@ class PostDataHandler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_response(400)
                 self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/result" and PostDataHandler.result_data is not None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(PostDataHandler.result_data, ensure_ascii=False).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()

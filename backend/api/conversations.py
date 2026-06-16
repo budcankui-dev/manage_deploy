@@ -81,6 +81,16 @@ async def _endpoint_map_for_names(db: AsyncSession, names: list[str | None]) -> 
     return {node.hostname: _node_endpoint_payload(node) for node in rows.scalars().all()}
 
 
+def _callback_url_from_runtime_plan(runtime_plan: dict | None) -> str | None:
+    if not isinstance(runtime_plan, dict):
+        return None
+    value = runtime_plan.get("callback_url")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
     payload: ConversationCreate,
@@ -361,6 +371,15 @@ async def update_draft(
         raise HTTPException(status_code=404, detail="Intent draft not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    callback_url = updates.pop("callback_url", None)
+    if callback_url is not None:
+        runtime_plan = dict(draft.runtime_plan or {})
+        normalized_callback_url = str(callback_url).strip()
+        if normalized_callback_url:
+            runtime_plan["callback_url"] = normalized_callback_url
+        else:
+            runtime_plan.pop("callback_url", None)
+        draft.runtime_plan = runtime_plan or None
     for key, value in updates.items():
         setattr(draft, key, value)
 
@@ -424,16 +443,27 @@ async def confirm_intent(
         status=OrderStatus.PENDING,
         routing_status=RoutingStatus.PENDING,
     )
+    callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
+    business_task_config = {
+        "task_type": draft.task_type,
+        "modality": draft.modality,
+        "source_name": draft.source_name,
+        "destination_name": draft.destination_name,
+        "data_profile": draft.data_profile,
+        "runtime_plan": draft.runtime_plan,
+        "business_objective": draft.business_objective,
+    }
+    platform_deployment = {
+        "mode": "user_access_demo",
+        "deployable_roles": ["compute"],
+        "endpoint_policy": "source/sink are external user access endpoints by default",
+    }
+    if callback_url:
+        business_task_config["callback_url"] = callback_url
+        platform_deployment["external_endpoints"] = {"sink": {"callback_url": callback_url}}
     order.runtime_config = {
-        "business_task": {
-            "task_type": draft.task_type,
-            "modality": draft.modality,
-            "source_name": draft.source_name,
-            "destination_name": draft.destination_name,
-            "data_profile": draft.data_profile,
-            "runtime_plan": draft.runtime_plan,
-            "business_objective": draft.business_objective,
-        }
+        "business_task": business_task_config,
+        "platform_deployment": platform_deployment,
     }
     try:
         db.add(order)
@@ -461,6 +491,7 @@ async def confirm_intent(
         resource_requirement=draft.resource_requirement,
         modality_priority_map=modality_priority_map,
         routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
+        callback_url=callback_url,
         **resource_options,
     )
     order.routing_input_dag = input_payload
@@ -745,6 +776,7 @@ async def _get_conversation_detail(
     draft_response = None
     if draft:
         draft_response = IntentDraftResponse.model_validate(draft)
+        draft_response.callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
         endpoints = await _endpoint_map_for_names(db, [draft.source_name, draft.destination_name])
         draft_response.source_endpoint = endpoints.get(draft.source_name or "")
         draft_response.destination_endpoint = endpoints.get(draft.destination_name or "")
@@ -764,6 +796,7 @@ async def _get_conversation_detail(
                 resource_requirement=draft.resource_requirement,
                 modality_priority_map=modality_priority_map_from_settings(runtime_settings),
                 routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
+                callback_url=_callback_url_from_runtime_plan(draft.runtime_plan),
                 **resource_options,
             )
     return ConversationResponse(
@@ -793,5 +826,6 @@ def _draft_to_dict(draft: IntentDraft) -> dict:
         "data_profile": draft.data_profile or {},
         "business_objective": draft.business_objective or {},
         "runtime_plan": draft.runtime_plan or {},
+        "callback_url": _callback_url_from_runtime_plan(draft.runtime_plan),
         "resource_requirement": draft.resource_requirement or {},
     }

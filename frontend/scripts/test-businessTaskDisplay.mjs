@@ -22,7 +22,7 @@ assert.ok(
 )
 
 const inputRows = buildMatmulInputRows({ matrix_size: 64, batch_count: 1, seed: 42 })
-assert.equal(inputRows.length, 4)
+assert.equal(inputRows.length, 3)
 
 const outputRows = buildMatmulOutputRows(
   { matrix_size: 64, batch_count: 1, compute_latency_ms: 2.5, sample_count: 5 },

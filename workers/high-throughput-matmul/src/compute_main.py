@@ -154,12 +154,96 @@ def _run_observation_window(job: dict) -> dict:
 
 from _common.http_server import (
     get_listen_port,
+    get_peer_url_by_name,
     post_json_to_peer,
     post_json_to_named_peer,
+    post_json_to_url,
     PostDataHandler,
     start_server,
     wait_for_data_handler,
 )
+from _common.reporter import report_metric
+
+
+def _parse_objective() -> dict:
+    raw = os.environ.get("BUSINESS_OBJECTIVE", "{}")
+    return json.loads(raw) if raw else {}
+
+
+def _metric_tags(result: dict) -> dict:
+    metadata_keys = (
+        "compute_latency_ms",
+        "effective_gflops",
+        "matrix_size",
+        "batch_count",
+        "seed",
+        "backend",
+        "gpu_device",
+        "result_preview",
+        "aggregation",
+        "mean_effective_gflops",
+        "min_effective_gflops",
+        "max_effective_gflops",
+        "observation_duration_sec",
+        "observed_duration_sec",
+        "sample_interval_sec",
+        "sample_batch_count",
+        "warmup_batches",
+        "sample_count",
+        "min_samples",
+        "samples",
+    )
+    result_meta = {key: result[key] for key in metadata_keys if key in result}
+    instance_id = os.environ.get("TASK_INSTANCE_ID", "unknown-instance")
+    result_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/result.json"
+    return {
+        "objects": [
+            {
+                "name": "result.json",
+                "uri": result_uri,
+                "content_type": "application/json",
+            }
+        ],
+        "result": result_meta,
+        "reported_by": "compute",
+    }
+
+
+def _report_result_from_compute(result: dict) -> None:
+    objective = _parse_objective()
+    metric_key = objective.get("metric_key") or "effective_gflops"
+    if metric_key == "effective_gflops":
+        metric_value = float(result.get("effective_gflops", 0))
+    else:
+        metric_value = float(result.get(metric_key, result.get("compute_latency_ms", 0)))
+    report_metric(
+        metric_key,
+        metric_value,
+        unit=objective.get("unit") or "GFLOPS",
+        tags=_metric_tags(result),
+    )
+
+
+def _callback_payload(result: dict) -> dict:
+    return {
+        "order_id": os.environ.get("ORDER_ID") or os.environ.get("BUSINESS_TASK_ID"),
+        "task_instance_id": os.environ.get("TASK_INSTANCE_ID"),
+        "task_type": os.environ.get("TASK_TYPE", "high_throughput_matmul"),
+        "task_role": "compute",
+        "metric_key": "effective_gflops",
+        "result": result,
+    }
+
+
+def _post_result_callback(result: dict) -> None:
+    callback_url = os.environ.get("CALLBACK_URL") or os.environ.get("SINK_CALLBACK_URL")
+    if not callback_url:
+        return
+    try:
+        post_json_to_url(callback_url, _callback_payload(result), timeout_sec=10.0, interval_sec=1.0)
+        print(f"COMPUTE_POSTED_CALLBACK url={callback_url}", flush=True)
+    except Exception as exc:
+        print(f"COMPUTE_CALLBACK_FAILED {exc}", flush=True)
 
 
 def main() -> int:
@@ -170,8 +254,11 @@ def main() -> int:
     start_server(port, PostDataHandler)
 
     # POST "ready" 信号给 source，让 source 开始推送 job
-    post_json_to_named_peer("source", "/data", {"status": "ready"}, timeout_sec=30.0)
-    print("COMPUTE_READY_SIGNAL_SENT", flush=True)
+    if get_peer_url_by_name("source"):
+        post_json_to_named_peer("source", "/data", {"status": "ready"}, timeout_sec=30.0)
+        print("COMPUTE_READY_SIGNAL_SENT", flush=True)
+    else:
+        print("COMPUTE_WAITING_FOR_EXTERNAL_SOURCE", flush=True)
 
     # 等待 source POST 的 job 数据
     job = wait_for_data_handler(port, timeout_sec=120.0)
@@ -210,9 +297,15 @@ def main() -> int:
         flush=True,
     )
 
-    # POST result 给 sink
-    post_json_to_peer("compute", "/data", result, timeout_sec=120.0)
-    print("COMPUTE_POSTED_RESULT to sink", flush=True)
+    PostDataHandler.result_data = result
+    if get_peer_url_by_name("sink"):
+        # POST result 给 sink
+        post_json_to_peer("compute", "/data", result, timeout_sec=120.0)
+        print("COMPUTE_POSTED_RESULT to sink", flush=True)
+    else:
+        _report_result_from_compute(result)
+        _post_result_callback(result)
+        print("COMPUTE_REPORTED_RESULT metric=effective_gflops", flush=True)
 
     while True:
         time.sleep(3600)

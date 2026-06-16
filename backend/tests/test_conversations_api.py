@@ -86,6 +86,8 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     order = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
     ).scalar_one()
+    assert order.runtime_config["platform_deployment"]["mode"] == "user_access_demo"
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["compute"]
     assert order.materialized_instance_id
     order_placements = order.runtime_config["routing_result"]["placements"]
     compute_order_route = next(item for item in order_placements if item["task_node_id"] == "compute")
@@ -101,6 +103,61 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert by_role["compute"].node_id
     assert by_role["compute"].gpu_id == "0"
     assert by_role["compute"].env["GPU_DEVICE"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_preserves_explicit_callback_url(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="callback-url-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "回调矩阵任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    assert message_response.json()["latest_draft"]["parse_status"] == "valid"
+
+    callback_url = "https://user.example.test/api/matmul-result"
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"callback_url": callback_url},
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["latest_draft"]["callback_url"] == callback_url
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    business_task = order.runtime_config["business_task"]
+    assert business_task["callback_url"] == callback_url
+    assert order.runtime_config["platform_deployment"]["external_endpoints"]["sink"]["callback_url"] == callback_url
+    sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
+    assert sink_node["callback_url"] == callback_url
 
 
 @pytest.mark.asyncio

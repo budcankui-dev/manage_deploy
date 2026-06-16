@@ -17,12 +17,119 @@ sys.path.insert(0, "/app")
 
 from _common.http_server import (
     get_listen_port,
+    get_peer_url_by_name,
     post_json_to_named_peer,
     post_json_to_peer,
+    post_json_to_url,
     PostDataHandler,
     start_server,
     wait_for_data_handler,
 )
+from _common.reporter import report_metric
+
+
+def _parse_objective() -> dict:
+    raw = os.environ.get("BUSINESS_OBJECTIVE", "{}")
+    return json.loads(raw) if raw else {}
+
+
+def _metric_tags(result: dict) -> dict:
+    metadata_keys = (
+        "frame_latency_p90_ms",
+        "frame_latency_avg_ms",
+        "frame_latency_min_ms",
+        "frame_latency_max_ms",
+        "observed_duration_sec",
+        "profile_id",
+        "resolution",
+        "fps",
+        "frame_count",
+        "frame_stride",
+        "warmup_frames",
+        "measured_frames",
+        "work_units",
+        "seed",
+        "aggregation",
+        "detector_backend",
+        "actual_backend",
+        "backend",
+        "device",
+        "detector_fallback_reason",
+        "model_name",
+        "video_asset",
+        "confidence_threshold",
+        "nms_threshold",
+        "gpu_device",
+        "gpu_requested",
+        "gpu_available",
+        "gpu_assigned",
+        "gpu_error",
+        "annotated_frame_index",
+        "preview_frame_width",
+        "preview_frame_height",
+        "annotated_frame_latency_ms",
+        "annotated_frame_content_type",
+        "annotated_frame_data_url",
+        "annotated_frame_overlay",
+        "detection_count",
+        "top_label",
+        "top_label_zh",
+        "top_confidence",
+        "detections",
+        "samples",
+    )
+    result_meta = {key: result[key] for key in metadata_keys if key in result}
+    instance_id = os.environ.get("TASK_INSTANCE_ID", "unknown-instance")
+    return {
+        "objects": [
+            {
+                "name": "video-result.json",
+                "uri": f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/video-result.json",
+                "content_type": "application/json",
+            },
+            {
+                "name": "annotated-frame-preview",
+                "uri": "inline://result_metadata/annotated_frame_data_url",
+                "content_type": result_meta.get("annotated_frame_content_type", "image/jpeg"),
+            },
+        ],
+        "result": result_meta,
+        "reported_by": "compute",
+    }
+
+
+def _report_result_from_compute(result: dict) -> None:
+    objective = _parse_objective()
+    metric_key = objective.get("metric_key") or "frame_latency_p90_ms"
+    metric_value = float(result.get(metric_key, result.get("frame_latency_p90_ms", 0.0)))
+    report_metric(
+        metric_key,
+        metric_value,
+        unit=objective.get("unit") or "ms",
+        tags=_metric_tags(result),
+    )
+
+
+def _callback_payload(result: dict) -> dict:
+    return {
+        "order_id": os.environ.get("ORDER_ID") or os.environ.get("BUSINESS_TASK_ID"),
+        "task_instance_id": os.environ.get("TASK_INSTANCE_ID"),
+        "task_type": os.environ.get("TASK_TYPE", "low_latency_video_pipeline"),
+        "task_role": "compute",
+        "metric_key": "frame_latency_p90_ms",
+        "result": result,
+    }
+
+
+def _post_result_callback(result: dict) -> None:
+    callback_url = os.environ.get("CALLBACK_URL") or os.environ.get("SINK_CALLBACK_URL")
+    if not callback_url:
+        return
+    try:
+        post_json_to_url(callback_url, _callback_payload(result), timeout_sec=10.0, interval_sec=1.0)
+        print(f"VIDEO_COMPUTE_POSTED_CALLBACK url={callback_url}", flush=True)
+    except Exception as exc:
+        print(f"VIDEO_COMPUTE_CALLBACK_FAILED {exc}", flush=True)
 
 
 def _benchmark_job_from_env() -> dict:
@@ -81,8 +188,11 @@ def main() -> int:
     print(f"VIDEO_COMPUTE_STARTING port={port}", flush=True)
     start_server(port, PostDataHandler)
 
-    post_json_to_named_peer("source", "/data", {"status": "ready"}, timeout_sec=30.0)
-    print("VIDEO_COMPUTE_READY_SIGNAL_SENT", flush=True)
+    if get_peer_url_by_name("source"):
+        post_json_to_named_peer("source", "/data", {"status": "ready"}, timeout_sec=30.0)
+        print("VIDEO_COMPUTE_READY_SIGNAL_SENT", flush=True)
+    else:
+        print("VIDEO_COMPUTE_WAITING_FOR_EXTERNAL_SOURCE", flush=True)
 
     job = wait_for_data_handler(port, timeout_sec=120.0)
     print(
@@ -97,8 +207,14 @@ def main() -> int:
         f"frames={result['measured_frames']}",
         flush=True,
     )
-    post_json_to_peer("compute", "/data", result, timeout_sec=120.0)
-    print("VIDEO_COMPUTE_POSTED_RESULT to sink", flush=True)
+    PostDataHandler.result_data = result
+    if get_peer_url_by_name("sink"):
+        post_json_to_peer("compute", "/data", result, timeout_sec=120.0)
+        print("VIDEO_COMPUTE_POSTED_RESULT to sink", flush=True)
+    else:
+        _report_result_from_compute(result)
+        _post_result_callback(result)
+        print("VIDEO_COMPUTE_REPORTED_RESULT metric=frame_latency_p90_ms", flush=True)
 
     while True:
         time.sleep(3600)

@@ -40,6 +40,44 @@ def modality_from_business_task(business_task: dict[str, Any] | None) -> str:
     return normalize_modality(str(raw_modality), task_type) or modality_for_task_type(task_type) or str(raw_modality or "")
 
 
+def callback_url_from_config(
+    business_task: dict[str, Any],
+    runtime_plan: dict[str, Any],
+    platform_deployment: dict[str, Any],
+) -> str:
+    for value in (business_task.get("callback_url"), runtime_plan.get("callback_url")):
+        if value:
+            return str(value)
+
+    endpoints = platform_deployment.get("external_endpoints")
+    if isinstance(endpoints, dict):
+        sink_endpoint = endpoints.get("sink")
+        if isinstance(sink_endpoint, dict) and sink_endpoint.get("callback_url"):
+            return str(sink_endpoint["callback_url"])
+    return ""
+
+
+def _is_compute_only_external_source(task_role: str | None, platform_deployment: dict[str, Any]) -> bool:
+    if str(task_role or "").lower() != "compute":
+        return False
+    deployable_roles = platform_deployment.get("deployable_roles")
+    if not isinstance(deployable_roles, list):
+        return False
+    normalized_roles = {str(role).lower() for role in deployable_roles}
+    return "compute" in normalized_roles and "source" not in normalized_roles
+
+
+def _external_input_wait_timeout(platform_deployment: dict[str, Any]) -> str:
+    value = platform_deployment.get("external_input_wait_timeout_sec")
+    if value is None:
+        value = 3600
+    try:
+        seconds = max(60, int(value))
+    except (TypeError, ValueError):
+        seconds = 3600
+    return str(seconds)
+
+
 def build_business_env(
     *,
     order: TaskOrder | None = None,
@@ -69,6 +107,12 @@ def build_business_env(
             merged_resource_requirement = role_resources
     merged_result_storage = result_storage if result_storage is not None else bt.get("result_storage")
     merged_routing_result = routing_result if routing_result is not None else bt.get("routing_result")
+    config = getattr(order, "runtime_config", None) if order is not None else None
+    platform_deployment = {}
+    if isinstance(config, dict) and isinstance(config.get("platform_deployment"), dict):
+        platform_deployment = config["platform_deployment"]
+    deployable_roles = platform_deployment.get("deployable_roles") if isinstance(platform_deployment, dict) else None
+    callback_url = callback_url_from_config(bt, runtime_plan, platform_deployment)
 
     env = {
         "BUSINESS_TASK_ID": str(external_id),
@@ -88,10 +132,17 @@ def build_business_env(
         "ROUTING_RESULT": json_env(merged_routing_result),
         "RESULT_STORAGE": json_env(merged_result_storage),
         "BUSINESS_TASK_JSON": json_env(bt),
+        "PLATFORM_DEPLOYMENT": json_env(platform_deployment),
+        "DEPLOYABLE_ROLES": ",".join(str(role) for role in deployable_roles or []),
     }
+    if callback_url:
+        env["CALLBACK_URL"] = callback_url
+        env["SINK_CALLBACK_URL"] = callback_url
     normalized_role = str(task_role or "").lower()
     if task_role:
         env["TASK_ROLE"] = str(task_role)
+    if _is_compute_only_external_source(task_role, platform_deployment):
+        env.setdefault("PEER_WAIT_TIMEOUT_SEC", _external_input_wait_timeout(platform_deployment))
     if task_type in GPU_TASK_TYPES and normalized_role in {"compute", "worker", "infer", "train"}:
         env["USE_GPU"] = "true"
     return env

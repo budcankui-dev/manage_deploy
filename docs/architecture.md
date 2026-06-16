@@ -19,6 +19,7 @@
 - **TaskOrder**：业务层工单，关联业务输入、路由结果和物化后的实例。
 - **BusinessObjectiveEvaluation**：业务目标评估结果。当前统一口径见 `docs/business-objective-success-rate-design.md`，按业务类型采集过程性指标并与节点历史基准比较。
 - **Conversation / IntentDraft / RoutingRequest**：普通用户从自然语言到部署请求的前置工作流。
+- **Endpoint Deployment Policy**：source / sink 是否由平台部署容器由工单 `runtime_config.platform_deployment.deployable_roles` 决定。测评模式可部署 source / compute / sink 三类容器；真实用户接入模式默认只部署 compute，source / sink 是外部端点。详见 `docs/端点部署与用户接入模型.md`。
 
 ## DAG 生命周期
 
@@ -40,12 +41,13 @@ pending -> starting -> running -> ready -> stopping -> stopped | failed
 
 DAG 边在平台层主要表达容器生命周期依赖：谁先启动、谁等待上游 `ready`、停止时如何反向清理。它保证部署安全和回滚一致性，但不是产品要展示的核心能力。
 
-业务演示要突出的是外部路由算法的选路效果，因此测试业务遵循 **随路计算** 原则：数据从 source 节点产生，经过一个或多个中间业务节点处理，再到 sink 节点汇总和上报指标。常用最小形态是 source -> compute -> sink。外部路由输出的 placements 决定这些角色落在哪些 Node 上，业务数据实际沿 `PEER_*` 网络地址流转。
+业务演示要突出的是外部路由算法的选路效果，因此测试业务遵循 **随路计算** 原则：数据从 source 端点产生，经过一个或多个中间业务节点处理，再到 sink 端点汇总或接收结果。常用最小形态是 source -> compute -> sink。外部路由输出的 placements 决定核心计算角色落在哪些 Node 上，业务数据实际沿 `PEER_*` 或 `network_bindings` 返回的业务面地址流转。
 
 因此：
 
 - 容器启动顺序可以服务于健康检查和依赖安全，不应被当成业务价值本身。
 - 数据流转顺序必须清晰体现路由路径，即 source -> 中间业务节点 -> sink。
+- 逻辑 source/sink 可以是平台可控测试容器，也可以是真实用户外部接入端点；是否部署容器由当前工单的部署策略决定。
 - 测试业务要避免“所有节点各自本地完成后汇总”的形态，因为那不能证明外部路由选路。
 
 ## 网络模型

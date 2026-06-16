@@ -13,6 +13,7 @@ COMMON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(COMMON_DIR))
 
 from http_server import start_server  # noqa: E402
+from http_server import post_json_to_url  # noqa: E402
 
 
 class PingHandler(BaseHTTPRequestHandler):
@@ -24,6 +25,20 @@ class PingHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"pong")
+
+    def log_message(self, format, *args):
+        pass
+
+
+class CallbackHandler(BaseHTTPRequestHandler):
+    received_body: bytes | None = None
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        CallbackHandler.received_body = self.rfile.read(content_length)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
 
     def log_message(self, format, *args):
         pass
@@ -66,3 +81,16 @@ def test_start_server_accepts_ipv6_and_ipv4_loopback():
 
     assert _eventually_get("::1", port) == "pong"
     assert _eventually_get("127.0.0.1", port) == "pong"
+
+
+def test_post_json_to_url_posts_external_callback():
+    CallbackHandler.received_body = None
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    start_server(port, CallbackHandler)
+
+    post_json_to_url(f"http://127.0.0.1:{port}/callback", {"ok": True}, timeout_sec=3, interval_sec=0.1)
+
+    assert CallbackHandler.received_body == b'{"ok":true}'

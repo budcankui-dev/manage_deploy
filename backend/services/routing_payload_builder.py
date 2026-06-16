@@ -34,6 +34,7 @@ def build_routing_payload(
     template_nodes: list[dict[str, Any]] | None = None,
     modality_priority_map: dict[str, Any] | None = None,
     routing_strategy: str | None = None,
+    callback_url: str | None = None,
     task_resource_override_enabled: bool = False,
     task_resource_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -55,6 +56,7 @@ def build_routing_payload(
         data_profile,
         source_name,
         destination_name,
+        callback_url,
         task_resource_override_enabled=task_resource_override_enabled,
         task_resource_overrides=task_resource_overrides,
     )
@@ -110,6 +112,7 @@ def _build_dag_nodes(
     data_profile: dict[str, Any] | None = None,
     source_name: str | None = None,
     destination_name: str | None = None,
+    callback_url: str | None = None,
     task_resource_override_enabled: bool = False,
     task_resource_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -131,7 +134,7 @@ def _build_dag_nodes(
                 },
             }
             node["network"] = _network_requirements_for_role(task_node_id, n.get("port_defs"))
-            node.update(_endpoint_identity(task_node_id, source_name, destination_name))
+            node.update(_endpoint_identity(task_node_id, source_name, destination_name, callback_url))
             nodes.append(node)
         return nodes
 
@@ -146,7 +149,7 @@ def _build_dag_nodes(
         task_node_id = node["task_node_id"]
         node.setdefault("task_role", _infer_role(task_node_id))
         node.setdefault("network", _network_requirements_for_role(task_node_id))
-        node.update(_endpoint_identity(task_node_id, source_name, destination_name))
+        node.update(_endpoint_identity(task_node_id, source_name, destination_name, callback_url))
     return defaults
 
 
@@ -236,13 +239,17 @@ def _endpoint_identity(
     role: Any,
     source_name: str | None,
     destination_name: str | None,
+    callback_url: str | None = None,
 ) -> dict[str, str]:
     """Expose user-selected topology endpoints while keeping task_node_id as the DAG role."""
     text = str(role or "").lower()
     if text in {"source", "video", "input"} and source_name:
         return {"fixed_topology_node_id": source_name}
     if text in {"sink", "output"} and destination_name:
-        return {"fixed_topology_node_id": destination_name}
+        result = {"fixed_topology_node_id": destination_name}
+        if callback_url:
+            result["callback_url"] = callback_url
+        return result
     return {}
 
 

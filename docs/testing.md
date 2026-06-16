@@ -237,10 +237,43 @@ http://<manager-host>/intent-chat
 验证要点：
 
 1. 对话气泡返回解析说明，右侧“意图参数”显示任务类型、所属模态、源节点、目的节点、开始/结束时间和对应数据画像。
-2. 展开“路由 DAG JSON 预览”，确认 `job_id/order_id` 为同一个工单 ID，`nodes` 包含 source/compute/sink，source/sink 的 `fixed_topology_node_id` 来自用户输入。
+2. 展开“路由 DAG JSON 预览”，确认 `job_id/order_id` 为同一个工单 ID，`nodes` 包含 source/compute/sink，source/sink 的 `fixed_topology_node_id` 来自用户输入。普通用户工单默认采用用户端外部接入模式，平台只部署 compute，source/sink 不作为受控容器启动。
 3. 点击“确认提交任务”后，系统创建工单并进入待路由。外部路由未接入时，可在系统设置页切换为“系统自动分配”完成链路验证。
-4. 打开“我的工单”详情，确认“基本信息”展示业务类型和模态，“路由结果”展示 compute 节点和 GPU 编号，“部署状态”展示实例 ID。
-5. 业务运行并上报指标后，在“结果”页查看矩阵计算数字结果，或视频AI推理的检测类别、画框坐标、P90 帧时延和带框预览图。
+4. 打开“我的工单”详情，确认“基本信息”展示业务类型和模态，“节点分配”展示部署模式为用户端外部接入，平台受控角色为 compute，并展示 source -> compute 的业务链路接入地址。
+5. 业务运行并上报指标后，在“结果”页查看矩阵计算数字结果，或视频AI推理的检测类别、画框坐标、P90 帧时延和带框预览图。compute-only 模式下由 compute 上报平台业务指标；三容器测评模式仍由 sink 上报。
+
+测评与用户演示的边界见 `docs/端点部署与用户接入模型.md`：`/benchmark` 使用可控测试设备模拟 source/sink 以批量统计成功率；`/intent-chat` 展示真实用户端自行接入，平台不控制用户终端。
+
+### compute-only 用户接入 E2E
+
+在已启动后端、已注册业务节点且 compute worker 镜像可用时，可跑对话式 compute-only 验证：
+
+```bash
+cd backend
+PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url http://127.0.0.1:8000
+```
+
+脚本会创建对话工单、确认 `user_access_demo` + `deployable_roles=["compute"]`、模拟仅 compute 的路由回写，并断言 `network_bindings` 含 `src_external=true` 与 `dst_access_url`。
+
+如需演示外部目的端回调，可先通过 `PATCH /api/conversations/{id}/draft` 写入 `{"callback_url":"https://user.example.com/api/result-callback"}`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
+
+若 compute 容器已运行且业务面可达，可用轻量用户端客户端提交任务：
+
+```bash
+# 直接指定 compute 接入基址
+python scripts/user_source_client.py \
+  --compute-url http://<compute-business-ip>:<port> \
+  --matrix-size 256 --batch-count 10 --wait-result
+
+# 或从工单 API 解析 network_bindings
+python scripts/user_source_client.py \
+  --base-url http://127.0.0.1:8000 \
+  --order-id <order-uuid> \
+  --token <access_token> \
+  --wait-result
+```
+
+成功时客户端输出 `GET /result` 的 JSON；平台上报指标后，工单详情「结果」页应展示业务评估。
 
 ## 视频推理扩展业务验证
 

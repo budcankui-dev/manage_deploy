@@ -58,7 +58,7 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 ## 前置条件
 
 1. `admin-server` 已部署前端、后端、数据库、对象存储和私有镜像仓库。
-2. `compute-1/2/3` 已注册为可调度节点，可作为 source / compute / sink。
+2. `compute-1/2/3` 已注册为可调度节点。业务目标成功率测评中，平台可从这些可管控测试设备中部署 source / compute / sink 容器，用于模拟业务源端、计算节点和目的端；真实用户接入演示不要求平台控制用户终端。
 3. 业务节点已运行 Node Agent，管理面能访问各节点 Agent API。
 4. 矩阵乘法 worker 镜像已在 AMD64 环境构建并推送到 `10.112.244.94:5000/scientific-matmul:dev`。
 5. 每个参与测试的节点已完成相同 profile 的 baseline 测试，且 `stable=true`。
@@ -110,6 +110,8 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 在一行内配置任务数和当前任务类型的固定 profile 参数，然后点击“创建测评工单”。矩阵乘法展示矩阵规模、批次数、观测秒数和最少样本数；视频 AI 推理展示帧数、抽帧间隔和有效帧数。内部 CPU 调试测评参数不作为专家验收页面参数展示，仅在开发调试场景使用。
 
 创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。测评工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
+
+测评工单使用运营商可控测试域，运行配置中 `platform_deployment.deployable_roles=["source","compute","sink"]`。这表示平台会部署测试 source/sink 容器来产生和汇总业务数据，目的是批量、可复现地统计业务目标成功率；它不代表平台需要或应该控制真实用户终端。普通用户对话工单默认采用 `deployable_roles=["compute"]`，source/sink 作为外部接入端点。
 
 每次创建批量测评都会生成一个 `benchmark_run_id`，并写入工单 `runtime_config.benchmark.run_id`。页面顶部展示“当前验收轮次”，后续工单列表、路由执行、运行测评和 Step 4 结果默认只统计当前轮次。验收页支持用 `/benchmark?benchmark_run_id=<run_id>` 直接打开指定轮次，便于截图留档和复核。旧版本历史工单没有轮次标记时，页面会退回到“全部历史测评工单”口径，仅用于调试回看，不建议作为正式验收截图。
 
@@ -182,7 +184,7 @@ actual_latency <= baseline_latency_p90_ms / 0.8
 - `routing_input_dag.nodes[].resources` 由平台资源估算器根据任务类型和固定 profile 生成；如某轮基线或实测表明默认值需要调整，可在系统设置中启用任务资源要求覆盖，覆盖值优先写入 DAG。
 - DAG 资源字段中，GPU 需求会通过路由回写的 GPU 编号进入实际容器部署；CPU、内存和磁盘当前作为路由估算、展示和容器环境变量，不自动作为容器硬限制。若后续需要强限制 CPU/内存，应在模板或实例运行参数中显式设置。
 - 外部路由系统写回每个 DAG 子任务的目标节点和 GPU 编号。冻结联调接口使用 `POST /api/routing-orders/{order_id}/result`，业务 placements 通常只需要回写 `compute`，compute 节点可携带 `gpu_device`；source/sink 固定端点由平台根据 DAG 与工单配置补齐。
-- 平台接收结果后把 `routing_result` 同步写入工单运行配置，物化实例，并按 source -> compute -> sink 的随路计算数据流部署执行。冻结 placement 格式为 `{"task_node_id":"compute","topology_node_id":"compute-3","gpu_device":"0"}`；历史测试数据不迁移，清理后按当前格式重新跑通。
+- 平台接收结果后把 `routing_result` 同步写入工单运行配置，并根据 `platform_deployment.deployable_roles` 物化实例。测评工单按 source -> compute -> sink 三容器随路计算数据流部署执行；普通用户接入工单默认只部署 compute，并返回外部 source 访问 compute 的业务链路。冻结 placement 格式为 `{"task_node_id":"compute","topology_node_id":"compute-3","gpu_device":"0"}`；历史测试数据不迁移，清理后按当前格式重新跑通。
 - 如果多个业务类型复用同一个 source/compute/sink 模板，平台会优先根据工单 `runtime_config.business_task.task_type` 定位 `business_template_catalog`，避免只按 `template_id` 查找时出现多条 catalog 歧义。
 - 业务目标评估根据 `routing_result` 中的 compute/worker 放置节点查找该节点 baseline，判定任务是否达到历史基准阈值。
 

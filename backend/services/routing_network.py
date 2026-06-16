@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from enums import RoutingStatus
 from models import Node as NodeModel, TaskInstance, TaskInstanceEdge, TaskInstanceNode, TaskOrder
-from services.port_plan import extract_host_ports, get_business_address
+from services.port_plan import extract_host_ports, format_service_url, get_business_address
 
 
 def routing_result(order: TaskOrder) -> dict[str, Any]:
@@ -106,6 +106,143 @@ def _dag_edge_map(order: TaskOrder) -> dict[tuple[str, str], dict[str, Any]]:
     return result
 
 
+def _dag_nodes_by_role(order: TaskOrder) -> dict[str, dict[str, Any]]:
+    dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
+    nodes = dag.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        for key in (node.get("task_node_id"), node.get("task_role")):
+            if key:
+                result[str(key).lower()] = node
+    return result
+
+
+def _placement_map(order: TaskOrder) -> dict[str, dict[str, Any]]:
+    result = routing_result(order)
+    placements = result.get("placements")
+    if not isinstance(placements, list):
+        return {}
+    mapped: dict[str, dict[str, Any]] = {}
+    for placement in placements:
+        if not isinstance(placement, dict):
+            continue
+        role = str(placement.get("task_node_id") or "").lower()
+        if role:
+            mapped[role] = placement
+    return mapped
+
+
+def _fixed_topology_name(order: TaskOrder, role: str, dag_nodes: dict[str, dict[str, Any]]) -> str | None:
+    placement = _placement_map(order).get(role) or {}
+    value = placement.get("topology_node_id")
+    if value:
+        return str(value)
+    dag_node = dag_nodes.get(role) or {}
+    value = dag_node.get("fixed_topology_node_id")
+    if value:
+        return str(value)
+    if role == "source" and order.source_name:
+        return str(order.source_name)
+    if role == "sink" and order.destination_name:
+        return str(order.destination_name)
+    return None
+
+
+def _external_callback_url(order: TaskOrder, role: str, dag_nodes: dict[str, dict[str, Any]]) -> str | None:
+    dag_node = dag_nodes.get(role) or {}
+    value = dag_node.get("callback_url")
+    if value:
+        return str(value)
+
+    config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    deployment = config.get("platform_deployment") if isinstance(config.get("platform_deployment"), dict) else {}
+    endpoints = deployment.get("external_endpoints") if isinstance(deployment.get("external_endpoints"), dict) else {}
+    endpoint = endpoints.get(role) if isinstance(endpoints.get(role), dict) else {}
+    value = endpoint.get("callback_url")
+    if value:
+        return str(value)
+
+    business_task = config.get("business_task") if isinstance(config.get("business_task"), dict) else {}
+    value = business_task.get("callback_url") if role == "sink" else None
+    return str(value) if value else None
+
+
+def _binding_for_roles(
+    *,
+    order: TaskOrder,
+    src_role: str,
+    dst_role: str,
+    dag_edge: dict[str, Any],
+    priority: int | None,
+    modality: str | None,
+    task_type: str | None,
+    role_nodes: dict[str, TaskInstanceNode],
+    machines_by_id: dict[str, NodeModel],
+    machines_by_hostname: dict[str, NodeModel],
+    dag_nodes: dict[str, dict[str, Any]],
+    binding_source: str,
+) -> dict[str, Any] | None:
+    src_node = role_nodes.get(src_role)
+    dst_node = role_nodes.get(dst_role)
+    src_machine = machines_by_id.get(src_node.node_id) if src_node else None
+    dst_machine = machines_by_id.get(dst_node.node_id) if dst_node else None
+
+    src_topology = src_machine.hostname if src_machine else _fixed_topology_name(order, src_role, dag_nodes)
+    dst_topology = dst_machine.hostname if dst_machine else _fixed_topology_name(order, dst_role, dag_nodes)
+    if not src_machine and src_topology:
+        src_machine = machines_by_hostname.get(src_topology)
+    if not dst_machine and dst_topology:
+        dst_machine = machines_by_hostname.get(dst_topology)
+
+    port_map = _port_map(dst_node) if dst_node else {}
+    dst_ports = sorted(set(port_map.values()))
+    primary_port = dst_ports[0] if dst_ports else None
+    flow = dag_edge.get("flow") if isinstance(dag_edge.get("flow"), dict) else {}
+    dst_ip = get_business_address(dst_machine, settings.prefer_business_ipv6) if dst_machine else None
+    src_ip = get_business_address(src_machine, settings.prefer_business_ipv6) if src_machine else None
+    src_callback_url = _external_callback_url(order, src_role, dag_nodes) if src_node is None else None
+    dst_callback_url = _external_callback_url(order, dst_role, dag_nodes) if dst_node is None else None
+    dst_access_url = (
+        dst_callback_url
+        or (format_service_url(dst_ip, primary_port) if dst_ip and primary_port else None)
+    )
+
+    binding = {
+        "flow_id": flow.get("flow_id") or f"{order.id}:{src_role}->{dst_role}",
+        "from": src_role,
+        "to": dst_role,
+        "task_type": task_type,
+        "modal": modality,
+        "priority": priority,
+        "src_topology_node_id": src_topology,
+        "src_host": src_machine.hostname if src_machine else src_topology,
+        "src_ip": src_ip,
+        "dst_topology_node_id": dst_topology,
+        "dst_host": dst_machine.hostname if dst_machine else dst_topology,
+        "dst_ip": dst_ip,
+        "dst_port": primary_port,
+        "dst_ports": dst_ports,
+        "dst_named_ports": port_map,
+        "dst_port_ref": flow.get("dst_port_ref") or f"{dst_role}.{next(iter(port_map), 'default')}",
+        "dst_access_url": dst_access_url,
+        "src_callback_url": src_callback_url,
+        "dst_callback_url": dst_callback_url,
+        "protocol": flow.get("protocol") or "tcp",
+        "data_mb": dag_edge.get("data_mb"),
+        "bandwidth_mbps": dag_edge.get("bandwidth_mbps"),
+        "src_external": src_node is None,
+        "dst_external": dst_node is None,
+        "binding_source": binding_source,
+    }
+    if not any(binding.get(key) for key in ("src_host", "src_ip", "dst_host", "dst_ip", "dst_port")):
+        return None
+    return binding
+
+
 async def build_network_bindings(
     db: AsyncSession,
     order: TaskOrder,
@@ -127,10 +264,25 @@ async def build_network_bindings(
         machines = {}
 
     dag_edges = _dag_edge_map(order)
+    dag_nodes = _dag_nodes_by_role(order)
     priority = _routing_priority(order)
     modality = _routing_modality(order)
     task_type = _business_task_type(order)
     bindings: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str]] = set()
+    role_nodes = {_role_for_node(node): node for node in instance.nodes}
+
+    endpoint_names = {
+        name
+        for role in dag_nodes
+        for name in [_fixed_topology_name(order, role, dag_nodes)]
+        if name
+    }
+    if endpoint_names:
+        endpoint_rows = await db.execute(select(NodeModel).where(NodeModel.hostname.in_(endpoint_names)))
+        machines_by_hostname = {machine.hostname: machine for machine in endpoint_rows.scalars().all()}
+    else:
+        machines_by_hostname = {}
 
     for edge in edges:
         src_node = nodes_by_id.get(edge.from_node_id)
@@ -139,41 +291,44 @@ async def build_network_bindings(
             continue
         src_role = role_by_node_id.get(src_node.id, src_node.name)
         dst_role = role_by_node_id.get(dst_node.id, dst_node.name)
-        src_machine = machines.get(src_node.node_id)
-        dst_machine = machines.get(dst_node.node_id)
-        if not dst_machine:
-            continue
-
         dag_edge = dag_edges.get((src_role, dst_role), {})
-        flow = dag_edge.get("flow") if isinstance(dag_edge.get("flow"), dict) else {}
-        port_map = _port_map(dst_node)
-        dst_ports = sorted(set(port_map.values()))
-        primary_port = dst_ports[0] if dst_ports else None
-        dst_address = get_business_address(dst_machine, settings.prefer_business_ipv6)
-
-        bindings.append(
-            {
-                "flow_id": flow.get("flow_id") or f"{order.id}:{src_role}->{dst_role}",
-                "from": src_role,
-                "to": dst_role,
-                "task_type": task_type,
-                "modal": modality,
-                "priority": priority,
-                "src_topology_node_id": src_machine.hostname if src_machine else None,
-                "src_host": src_machine.hostname if src_machine else None,
-                "src_ip": get_business_address(src_machine, settings.prefer_business_ipv6) if src_machine else None,
-                "dst_topology_node_id": dst_machine.hostname,
-                "dst_host": dst_machine.hostname,
-                "dst_ip": dst_address,
-                "dst_port": primary_port,
-                "dst_ports": dst_ports,
-                "dst_named_ports": port_map,
-                "dst_port_ref": flow.get("dst_port_ref") or f"{dst_role}.{next(iter(port_map), 'default')}",
-                "protocol": flow.get("protocol") or "tcp",
-                "data_mb": dag_edge.get("data_mb"),
-                "bandwidth_mbps": dag_edge.get("bandwidth_mbps"),
-            }
+        binding = _binding_for_roles(
+            order=order,
+            src_role=src_role,
+            dst_role=dst_role,
+            dag_edge=dag_edge,
+            priority=priority,
+            modality=modality,
+            task_type=task_type,
+            role_nodes=role_nodes,
+            machines_by_id=machines,
+            machines_by_hostname=machines_by_hostname,
+            dag_nodes=dag_nodes,
+            binding_source="instance_edge",
         )
+        if binding:
+            bindings.append(binding)
+            seen_edges.add((src_role, dst_role))
+
+    for (src_role, dst_role), dag_edge in dag_edges.items():
+        if (src_role, dst_role) in seen_edges:
+            continue
+        binding = _binding_for_roles(
+            order=order,
+            src_role=src_role,
+            dst_role=dst_role,
+            dag_edge=dag_edge,
+            priority=priority,
+            modality=modality,
+            task_type=task_type,
+            role_nodes=role_nodes,
+            machines_by_id=machines,
+            machines_by_hostname=machines_by_hostname,
+            dag_nodes=dag_nodes,
+            binding_source="routing_dag",
+        )
+        if binding:
+            bindings.append(binding)
     return bindings
 
 

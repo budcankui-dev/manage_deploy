@@ -35,6 +35,8 @@
 | `ROUTING_RESULT` | JSON 字符串，已回写的节点/GPU 放置结果 |
 | `RESULT_STORAGE` | JSON 字符串，结果归档配置 |
 | `BUSINESS_TASK_JSON` | JSON 字符串，完整业务任务上下文；新增 Worker 可优先读取该变量 |
+| `CALLBACK_URL` / `SINK_CALLBACK_URL` | 用户或外部系统显式提供的目的端回调地址；compute-only 无受控 sink 时，演示 worker 会在平台指标上报后短超时 best-effort POST 回调 |
+| `PEER_WAIT_TIMEOUT_SEC` | 等待上游 `/data` 输入的最长时间；compute-only 外部接入默认注入 `3600`，避免用户端稍晚提交导致任务过早失败 |
 
 ### INPUT_OBJECTS 与 INPUT_MANIFEST_URI 优先级
 

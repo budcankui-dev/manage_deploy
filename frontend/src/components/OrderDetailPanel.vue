@@ -17,6 +17,7 @@
             优先级 {{ businessPriorityText }}
           </el-tag>
           <el-tag v-if="detail.is_benchmark" type="warning" effect="plain" size="large">验收测评工单</el-tag>
+          <el-tag v-if="deploymentModeText" type="info" effect="plain" size="large">{{ deploymentModeText }}</el-tag>
         </div>
       </section>
 
@@ -90,6 +91,8 @@
             <el-descriptions-item label="任务策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="网络确认">{{ networkReadyText }}</el-descriptions-item>
+            <el-descriptions-item label="部署模式">{{ deploymentModeText || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="平台受控角色">{{ deployableRolesText }}</el-descriptions-item>
           </el-descriptions>
 
           <h3 class="section-title">节点放置与端口</h3>
@@ -123,27 +126,52 @@
             <el-table-column label="链路" min-width="160">
               <template #default="{ row }">{{ roleLabel(row.from) }} → {{ roleLabel(row.to) }}</template>
             </el-table-column>
-            <el-table-column label="源业务面" min-width="210">
+            <el-table-column label="源端点" min-width="200">
               <template #default="{ row }">
+                <el-tag v-if="row.src_external" type="warning" size="small" effect="plain">外部</el-tag>
+                <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
                 <span>{{ row.src_host || '-' }}</span>
                 <code v-if="row.src_ip">{{ formatHost(row.src_ip) }}</code>
               </template>
             </el-table-column>
-            <el-table-column label="目的业务面 IP:端口" min-width="260">
+            <el-table-column label="目的端点" min-width="200">
               <template #default="{ row }">
+                <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部</el-tag>
+                <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
                 <span>{{ row.dst_host || '-' }}</span>
                 <code v-if="row.dst_ip && row.dst_port">{{ formatHostPort(row.dst_ip, row.dst_port) }}</code>
                 <code v-else-if="row.dst_ip">{{ formatHost(row.dst_ip) }}</code>
-                <span v-else class="muted">等待端口分配</span>
+                <code v-else-if="row.dst_callback_url">{{ row.dst_callback_url }}</code>
+                <span v-else class="muted">{{ row.dst_external ? '外部端点未提供回调地址' : '等待端口分配' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="端口名" min-width="160">
+            <el-table-column label="接入/回调地址" min-width="280">
+              <template #default="{ row }">
+                <el-tag v-if="row.dst_callback_url" type="warning" size="small" effect="plain">回调</el-tag>
+                <code v-if="row.dst_access_url">{{ row.dst_access_url }}</code>
+                <span v-else class="muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="端口名" min-width="140">
               <template #default="{ row }">{{ namedPortsText(row.dst_named_ports) }}</template>
             </el-table-column>
-            <el-table-column label="带宽需求" width="120">
+            <el-table-column label="带宽需求" width="110">
               <template #default="{ row }">{{ row.bandwidth_mbps ? `${row.bandwidth_mbps} Mbps` : '-' }}</template>
             </el-table-column>
           </el-table>
+
+          <el-alert
+            v-if="userAccessHints.length"
+            class="user-access-alert"
+            type="info"
+            show-icon
+            :closable="false"
+            title="外部用户接入说明"
+          >
+            <ul class="user-access-hints">
+              <li v-for="(hint, index) in userAccessHints" :key="index">{{ hint }}</li>
+            </ul>
+          </el-alert>
 
           <el-collapse v-if="showRoutingDagJson && (detail.routing_input_dag || routingResult)" class="raw-collapse">
             <el-collapse-item v-if="detail.routing_input_dag" title="提交给路由系统的 DAG JSON" name="routing-input">
@@ -382,6 +410,11 @@ const detail = computed(() => props.detail)
 const resultObjects = computed(() => props.resultObjects || [])
 const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
+const platformDeployment = computed(() => detail.value?.runtime_config?.platform_deployment || null)
+const deployableRoles = computed(() => {
+  const roles = platformDeployment.value?.deployable_roles
+  return Array.isArray(roles) ? roles.map(role => String(role).toLowerCase()) : null
+})
 const evaluation = computed(() => detail.value?.evaluation || null)
 const resultMetadata = computed(() => evaluation.value?.result_metadata || null)
 const taskType = computed(() => businessTask.value?.task_type || detail.value?.task_type || '')
@@ -403,7 +436,52 @@ const objectiveForDisplay = computed(() => {
 })
 const objectiveSentence = computed(() => formatObjectiveSentence(objectiveForDisplay.value))
 const objectiveMeaning = computed(() => describeObjectiveMeaning(taskType.value, objectiveForDisplay.value))
+const isComputeOnlyDeployment = computed(() => (
+  Array.isArray(deployableRoles.value)
+  && deployableRoles.value.length === 1
+  && deployableRoles.value[0] === 'compute'
+))
+const userAccessHints = computed(() => {
+  if (!isUserAccessDemo.value || !networkBindingRows.value.length) return []
+  const hints = []
+  networkBindingRows.value.forEach((row) => {
+    if (row.src_external && row.dst_access_url) {
+      const base = String(row.dst_access_url).replace(/\/$/, '')
+      hints.push(`向 compute 提交业务输入：POST ${base}/data（JSON 任务参数，矩阵乘法含 matrix_size / batch_count / seed）`)
+      hints.push(`查询 compute 本地结果：GET ${base}/result（任务完成后返回 JSON）`)
+    }
+    if (row.dst_external && row.dst_callback_url) {
+      hints.push(`compute 业务完成后可回调外部目的端：POST ${row.dst_callback_url}`)
+    }
+  })
+  if (isComputeOnlyDeployment.value) {
+    hints.push('compute-only 模式下由 compute 直接向平台上报业务指标，无需部署 sink 容器。')
+  }
+  return [...new Set(hints)]
+})
+const isUserAccessDemo = computed(() => (
+  platformDeployment.value?.mode === 'user_access_demo'
+  || (!detail.value?.is_benchmark && isComputeOnlyDeployment.value)
+))
 const pipelineSteps = computed(() => {
+  if (isComputeOnlyDeployment.value) {
+    if (isMatmulTask.value) {
+      return [
+        { role: 'source', title: '外部提交输入', detail: '用户终端按 network_bindings 中的接入地址 POST /data 提交矩阵任务' },
+        { role: 'compute', title: '执行并上报', detail: 'compute 完成观测窗口后直接上报 effective_gflops，可通过 GET /result 查询结果' },
+      ]
+    }
+    if (isVideoTask.value) {
+      return [
+        { role: 'source', title: '外部提交输入', detail: '用户终端向 compute 接入地址 POST /data 提交视频抽帧任务' },
+        { role: 'compute', title: '推理并上报', detail: 'compute 执行 YOLO 检测后直接上报 frame_latency_p90_ms 等指标' },
+      ]
+    }
+    return [
+      { role: 'source', title: '外部提交输入', detail: '用户终端向 compute 接入地址 POST /data' },
+      { role: 'compute', title: '执行并上报', detail: 'compute 完成后直接上报业务指标' },
+    ]
+  }
   if (isMatmulTask.value) return MATMUL_PIPELINE_STEPS
   if (isVideoTask.value) return VIDEO_PIPELINE_STEPS
   return [
@@ -437,7 +515,7 @@ const placementRows = computed(() => {
 })
 
 const containerPlacementRows = computed(() => (
-  placementRows.value.filter((row) => row.statusLabel !== '不部署' && row.hostname !== '未部署')
+  placementRows.value.filter((row) => !['不部署', '外部端点'].includes(row.statusLabel) && row.hostname !== '未部署')
 ))
 
 const networkBindingRows = computed(() => {
@@ -519,6 +597,18 @@ const networkReadyText = computed(() => {
   if (routingResult.value.network_ready_required && routingResult.value.network_ready) return '已确认'
   return '无需额外确认'
 })
+const deploymentModeText = computed(() => {
+  const mode = platformDeployment.value?.mode
+  if (mode === 'automated_benchmark') return '可控测评部署'
+  if (mode === 'user_access_demo') return '用户端外部接入'
+  if (detail.value?.is_benchmark) return '可控测评部署'
+  return ''
+})
+const deployableRolesText = computed(() => {
+  if (!deployableRoles.value) return '默认按路由角色部署'
+  if (!deployableRoles.value.length) return '不部署容器'
+  return deployableRoles.value.map(roleLabel).join(' / ')
+})
 const businessPriorityText = computed(() => {
   const value = detail.value?.routing_input_dag?.priority
     ?? businessTask.value?.priority
@@ -533,19 +623,25 @@ function normalizePlacementRow(role, placement) {
   const gpu = item.gpu_device ?? null
   const portValues = item.port_values || {}
   const portAccessUrls = item.port_access_urls || {}
+  const deployable = isRoleDeployable(roleKey)
   return {
     roleKey,
     roleLabel: roleLabel(roleKey),
     instance_node_name: item.instance_node_name || item.template_node_name || roleKey,
-    hostname: item.topology_node_id || '未部署',
+    hostname: item.topology_node_id || (deployable ? '未部署' : '外部端点'),
     business_address: item.business_address || item.business_ip || item.business_ipv6 || '',
     gpu,
     requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline'].includes(taskType.value),
     portValues,
     portAccessUrls,
     portText: namedPortsText(portValues),
-    statusLabel: item.skip_deploy ? '不部署' : nodeStatusLabel(item.status),
+    statusLabel: item.skip_deploy || !deployable ? '外部端点' : nodeStatusLabel(item.status),
   }
+}
+
+function isRoleDeployable(role) {
+  if (!deployableRoles.value) return true
+  return deployableRoles.value.includes(String(role || '').toLowerCase())
 }
 
 function roleLabel(value) {
@@ -957,6 +1053,18 @@ function nodeStatusLabel(value) {
 
 .raw-collapse {
   margin-top: 14px;
+}
+
+.user-access-alert {
+  margin-top: 14px;
+}
+
+.user-access-hints {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .json-block {

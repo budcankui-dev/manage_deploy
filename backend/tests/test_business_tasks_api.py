@@ -1409,6 +1409,7 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
                     "name": "compute",
                     "image": "busybox:latest",
                     "command": "sleep 3600",
+                    "port_defs": [{"name": "compute", "label": "compute HTTP", "auto": True, "range": [18800, 18899]}],
                     "node_id": compute_node_id,
                 }
             ],
@@ -1469,6 +1470,133 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     assert compute_node.env["SOURCE_NAME"] == "endpoint-source"
     assert compute_node.env["DESTINATION_NAME"] == "compute-dest"
     assert compute_node.env["GPU_DEVICE"] == "0"
+    assert compute_node.env["DEPLOYABLE_ROLES"] == "compute"
+    assert compute_node.env["PEER_WAIT_TIMEOUT_SEC"] == "3600"
+
+    bindings = response.json()["network_bindings"]
+    assert len(bindings) == 1
+    binding = bindings[0]
+    assert binding["from"] == "source"
+    assert binding["to"] == "compute"
+    assert binding["binding_source"] == "routing_dag"
+    assert binding["src_external"] is True
+    assert binding["dst_external"] is False
+    assert binding["src_host"] == "endpoint-source"
+    assert binding["src_ip"] == "10.10.1.1"
+    assert binding["dst_host"] == "compute-dest"
+    assert binding["dst_ip"] == "10.10.1.2"
+    assert isinstance(binding["dst_port"], int)
+    assert binding["dst_access_url"] == f"http://10.10.1.2:{binding['dst_port']}"
+
+
+@pytest.mark.asyncio
+async def test_compute_only_external_sink_binding_uses_callback_url(client, db_session):
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "callback-compute",
+            "agent_address": "http://127.0.0.1:8304",
+            "management_ip": "10.12.0.2",
+            "business_ip": "10.12.1.2",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+    compute_node_id = compute_response.json()["id"]
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "compute-with-external-callback-template",
+            "description": "compute is deployed and calls back external sink",
+            "nodes": [
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "port_defs": [{"name": "compute", "label": "compute HTTP", "auto": True, "range": [18800, 18899]}],
+                    "node_id": compute_node_id,
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    callback_url = "https://user.example.test/result-callback"
+    start = datetime.now(UTC)
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="compute-external-sink-callback",
+        source_name="endpoint-source",
+        destination_name="user-sink",
+        business_start_time=start,
+        business_end_time=start + timedelta(minutes=5),
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul", "data_profile": {}},
+            "platform_deployment": {
+                "deployable_roles": ["compute"],
+                "external_endpoints": {
+                    "sink": {
+                        "callback_url": callback_url,
+                    },
+                },
+            },
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "compute-external-sink-callback",
+            "order_id": "compute-external-sink-callback",
+            "nodes": [
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "endpoint-source"},
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
+                {
+                    "task_node_id": "sink",
+                    "task_role": "sink",
+                    "task_node_type": "terminal",
+                    "fixed_topology_node_id": "user-sink",
+                    "callback_url": callback_url,
+                },
+            ],
+            "edges": [
+                {"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10},
+                {"from": "compute", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10},
+            ],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "callback-compute", "gpu_device": "0"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    instance_id = response.json()["instance_id"]
+
+    nodes = await db_session.execute(select(TaskInstanceNode).where(TaskInstanceNode.instance_id == instance_id))
+    compute_node = nodes.scalars().one()
+    assert compute_node.env["CALLBACK_URL"] == callback_url
+    assert compute_node.env["PEER_WAIT_TIMEOUT_SEC"] == "3600"
+
+    bindings = response.json()["network_bindings"]
+    assert len(bindings) == 2
+    sink_binding = next(item for item in bindings if item["to"] == "sink")
+    assert sink_binding["from"] == "compute"
+    assert sink_binding["dst_external"] is True
+    assert sink_binding["dst_host"] == "user-sink"
+    assert sink_binding["dst_callback_url"] == callback_url
+    assert sink_binding["dst_access_url"] == callback_url
 
 
 @pytest.mark.asyncio

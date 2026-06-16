@@ -76,8 +76,6 @@ class RoutingRequestStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
 class RoutingStatus(str, Enum):
     NOT_REQUIRED = "not_required"
     PENDING = "pending"
@@ -86,8 +84,6 @@ class RoutingStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
 class NodeKind(str, Enum):
     WORKER = "worker"
     TERMINAL = "terminal"
