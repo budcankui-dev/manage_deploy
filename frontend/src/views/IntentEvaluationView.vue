@@ -47,6 +47,7 @@
             <strong>{{ onlineProgressText }}</strong>
           </div>
           <el-progress :percentage="onlineProgressPercent" />
+          <p class="progress-note">{{ onlineProgressNote }}</p>
         </div>
       </div>
     </header>
@@ -614,7 +615,16 @@ const onlineProgressText = computed(() => {
   const completed = status.completed ?? 0
   if (status.status === 'completed') return `${completed}/${total} 已完成`
   if (status.status === 'failed') return `评测失败：${status.error || '未知错误'}`
-  return `${completed}/${total} 运行中`
+  const correct = status.correct ?? 0
+  const accuracy = completed ? `${Math.round((correct / completed) * 1000) / 10}%` : '-'
+  return `${completed}/${total} 运行中，当前准确率 ${accuracy}`
+})
+const onlineProgressNote = computed(() => {
+  const status = onlineStatus.value || {}
+  const concurrency = status.concurrency ?? 8
+  const retries = status.retries ?? 5
+  const resume = status.resume ? '，已启用断点续跑' : ''
+  return `评测按合理并发执行：并发 ${concurrency}，单条失败最多重试 ${retries} 次${resume}。`
 })
 const isLlmReportCurrent = computed(() => {
   if (!llmReport.value || !batchJob.value) return true
@@ -1120,10 +1130,10 @@ async function runOnline() {
   try {
     const { data } = await adminApi.runIntentEvalOnline({
       model: selectedModel.value,
-      concurrency: 1,
-      retries: 3,
-      retry_delay_seconds: 3,
-      resume: false,
+      concurrency: 8,
+      retries: 5,
+      retry_delay_seconds: 5,
+      resume: onlineStatus.value?.status === 'failed',
     })
     onlineStatus.value = data
     startOnlineRefresh()
@@ -1716,6 +1726,13 @@ onUnmounted(() => {
   border: 1px solid #dbeafe;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.76);
+}
+
+.progress-note {
+  margin: 8px 0 0;
+  color: #243447;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .sample-expand {

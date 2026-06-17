@@ -40,6 +40,9 @@ from services.intent_batch_eval import (
 )
 from services.intent_online_eval import (
     ONLINE_REPORT_PATH,
+    DEFAULT_ONLINE_EVAL_CONCURRENCY,
+    DEFAULT_ONLINE_EVAL_RETRIES,
+    DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS,
     fail_online_evaluation,
     online_evaluation_is_running,
     read_online_status,
@@ -115,9 +118,13 @@ def _online_eval_params(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": payload.get("model"),
         "limit": _optional_int(payload, "limit"),
-        "concurrency": _optional_int(payload, "concurrency", 4),
-        "retries": _optional_int(payload, "retries", 2),
-        "retry_delay_seconds": _optional_float(payload, "retry_delay_seconds", 1.0),
+        "concurrency": _optional_int(payload, "concurrency", DEFAULT_ONLINE_EVAL_CONCURRENCY),
+        "retries": _optional_int(payload, "retries", DEFAULT_ONLINE_EVAL_RETRIES),
+        "retry_delay_seconds": _optional_float(
+            payload,
+            "retry_delay_seconds",
+            DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS,
+        ),
         "resume": _optional_bool(payload, "resume", False),
     }
 

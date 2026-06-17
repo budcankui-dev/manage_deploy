@@ -202,17 +202,17 @@ PY
 
 ```bash
 cd backend
-PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --limit 5 --concurrency 1
+PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --limit 5 --concurrency 2
 ```
 
 在线模型全量评测：
 
 ```bash
 cd backend
-PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 1 --retries 3 --retry-delay-seconds 3
+PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 8 --retries 5 --retry-delay-seconds 5
 ```
 
-期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。正式验收建议使用并发 1 的保守参数，减少在线 API 限流风险；如平台额度确认充足，可临时把 `--concurrency` 调到 2。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
+期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。正式验收建议使用并发 8、单条最多重试 5 次、失败间隔 5 秒的参数；在当前固定数据集规模下，正常应在 10 多分钟内完成。若评测中断，可追加 `--resume` 续跑已完成样本。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
 
 ## 用户端意图对话闭环
 

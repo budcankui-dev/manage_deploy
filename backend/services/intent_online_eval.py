@@ -33,6 +33,10 @@ from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _v
 ONLINE_REPORT_PATH = REPORTS_DIR / "intent_eval_online.json"
 ONLINE_PROGRESS_PATH = REPORTS_DIR / "intent_eval_online.progress.jsonl"
 ONLINE_STATUS_PATH = REPORTS_DIR / "intent_eval_online.status.json"
+DEFAULT_ONLINE_EVAL_CONCURRENCY = 8
+DEFAULT_ONLINE_EVAL_RETRIES = 5
+DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS = 5.0
+MAX_ONLINE_EVAL_CONCURRENCY = 16
 
 
 def _now_iso() -> str:
@@ -67,9 +71,9 @@ def start_online_evaluation(
     *,
     model: str | None = None,
     limit: int | None = None,
-    concurrency: int = 1,
-    retries: int = 3,
-    retry_delay_seconds: float = 3.0,
+    concurrency: int = DEFAULT_ONLINE_EVAL_CONCURRENCY,
+    retries: int = DEFAULT_ONLINE_EVAL_RETRIES,
+    retry_delay_seconds: float = DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS,
     resume: bool = False,
 ) -> dict[str, Any]:
     rows = _load_online_dataset()
@@ -79,6 +83,8 @@ def start_online_evaluation(
         raise ValueError("Intent evaluation dataset is empty")
     if concurrency <= 0:
         raise ValueError("concurrency must be positive")
+    if concurrency > MAX_ONLINE_EVAL_CONCURRENCY:
+        raise ValueError(f"concurrency must be <= {MAX_ONLINE_EVAL_CONCURRENCY}")
     if retries < 0:
         raise ValueError("retries must be non-negative")
     selected_model = normalize_eval_model(model)
@@ -282,9 +288,9 @@ async def run_online_evaluation(
     *,
     model: str | None = None,
     limit: int | None = None,
-    concurrency: int = 1,
-    retries: int = 3,
-    retry_delay_seconds: float = 3.0,
+    concurrency: int = DEFAULT_ONLINE_EVAL_CONCURRENCY,
+    retries: int = DEFAULT_ONLINE_EVAL_RETRIES,
+    retry_delay_seconds: float = DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS,
     resume: bool = False,
     evaluation_id: str | None = None,
     started_at: str | None = None,
@@ -296,6 +302,8 @@ async def run_online_evaluation(
         raise ValueError("Intent evaluation dataset is empty")
     if concurrency <= 0:
         raise ValueError("concurrency must be positive")
+    if concurrency > MAX_ONLINE_EVAL_CONCURRENCY:
+        raise ValueError(f"concurrency must be <= {MAX_ONLINE_EVAL_CONCURRENCY}")
     if retries < 0:
         raise ValueError("retries must be non-negative")
 
@@ -442,4 +450,8 @@ def online_eval_config() -> dict[str, Any]:
         "online_report_path": str(ONLINE_REPORT_PATH),
         "online_progress_path": str(ONLINE_PROGRESS_PATH),
         "online_status_path": str(ONLINE_STATUS_PATH),
+        "default_concurrency": DEFAULT_ONLINE_EVAL_CONCURRENCY,
+        "default_retries": DEFAULT_ONLINE_EVAL_RETRIES,
+        "default_retry_delay_seconds": DEFAULT_ONLINE_EVAL_RETRY_DELAY_SECONDS,
+        "max_concurrency": MAX_ONLINE_EVAL_CONCURRENCY,
     }

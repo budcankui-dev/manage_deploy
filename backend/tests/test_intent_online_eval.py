@@ -206,6 +206,30 @@ async def test_online_eval_api_parses_false_resume_string(client, db_session, tm
 
 
 @pytest.mark.asyncio
+async def test_online_eval_api_uses_fast_safe_defaults(client, db_session, tmp_path, monkeypatch):
+    dataset_path, _report_path, _progress_path, _status_path = _patch_online_paths(monkeypatch, tmp_path)
+    dataset_path.write_text(json.dumps(_sample(), ensure_ascii=False) + "\n", encoding="utf-8")
+    headers, _admin = await _auth_headers(client, db_session, username="online-eval-default-admin", role=UserRole.ADMIN)
+
+    async def fake_run_online_evaluation(**_params):
+        return {}
+
+    monkeypatch.setattr(admin_api, "run_online_evaluation", fake_run_online_evaluation)
+
+    response = await client.post(
+        "/api/admin/intent-parser/evaluations/llm-online/run",
+        json={"limit": 1},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["concurrency"] == intent_online_eval.DEFAULT_ONLINE_EVAL_CONCURRENCY
+    assert payload["retries"] == intent_online_eval.DEFAULT_ONLINE_EVAL_RETRIES
+    assert payload["resume"] is False
+
+
+@pytest.mark.asyncio
 async def test_online_eval_api_rejects_duplicate_running_job(client, db_session, tmp_path, monkeypatch):
     dataset_path, _report_path, _progress_path, status_path = _patch_online_paths(monkeypatch, tmp_path)
     dataset_path.write_text(json.dumps(_sample(), ensure_ascii=False) + "\n", encoding="utf-8")
