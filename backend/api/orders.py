@@ -343,6 +343,158 @@ def _gpu_from_routing_result(routing_result: dict | None, role: str) -> str | No
     return None
 
 
+def _routing_decision_task_type(order: TaskOrder, business_task: dict[str, Any] | None) -> str | None:
+    if isinstance(business_task, dict) and business_task.get("task_type"):
+        return str(business_task["task_type"])
+    return _benchmark_task_type(order)
+
+
+def _routing_decision_metric_key(
+    order: TaskOrder,
+    business_task: dict[str, Any] | None,
+) -> str | None:
+    objective = (business_task or {}).get("business_objective") if isinstance(business_task, dict) else None
+    if isinstance(objective, dict) and objective.get("metric_key"):
+        return str(objective["metric_key"])
+    task_type = _routing_decision_task_type(order, business_task)
+    if not task_type:
+        return None
+    try:
+        return _benchmark_config(task_type)["business_objective"].get("metric_key")
+    except HTTPException:
+        return None
+
+
+def _node_identity(node: NodeModel | None) -> dict[str, Any] | None:
+    if node is None:
+        return None
+    return {
+        "id": node.id,
+        "hostname": node.hostname,
+        "display_name": node.display_name,
+        "topology_node_id": node.topology_node_id or node.hostname,
+        "business_ip": node.business_ip,
+        "business_ipv6": node.business_ipv6,
+        "node_kind": node.node_kind,
+        "gpu_count": node.gpu_count,
+        "gpu_model": node.gpu_model,
+        "gpu_memory_mb": node.gpu_memory_mb,
+        "cpu_model": node.cpu_model,
+        "cpu_cores": node.cpu_cores,
+        "memory_mb": node.memory_mb,
+    }
+
+
+def _baseline_summary(baseline: NodeBaseline | None) -> dict[str, Any] | None:
+    if baseline is None:
+        return None
+    return {
+        "task_type": baseline.task_type,
+        "metric_key": baseline.metric_key,
+        "baseline_value": baseline.baseline_value,
+        "operator": baseline.operator,
+        "unit": baseline.unit,
+        "run_count": baseline.run_count,
+        "raw_values": baseline.raw_values,
+    }
+
+
+def _placement_topology_key(value: dict[str, Any]) -> str | None:
+    raw = value.get("topology_node_id") or value.get("hostname")
+    return str(raw) if raw else None
+
+
+async def _build_routing_decision_summary(
+    db: AsyncSession,
+    order: TaskOrder,
+    routing_result: dict[str, Any] | None,
+    business_task: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(routing_result, dict):
+        return None
+    placements = routing_result.get("placements")
+    if not isinstance(placements, list):
+        placements = []
+
+    topology_ids = {
+        key
+        for item in placements
+        if isinstance(item, dict)
+        for key in [_placement_topology_key(item)]
+        if key
+    }
+    metadata = routing_result.get("metadata") if isinstance(routing_result.get("metadata"), dict) else {}
+    candidate_scores = metadata.get("candidate_scores") if isinstance(metadata, dict) else None
+    if isinstance(candidate_scores, list):
+        for item in candidate_scores:
+            if isinstance(item, dict):
+                key = _placement_topology_key(item)
+                if key:
+                    topology_ids.add(key)
+
+    nodes_by_key: dict[str, NodeModel] = {}
+    if topology_ids:
+        rows = await db.execute(
+            select(NodeModel).where(
+                NodeModel.deleted_at.is_(None),
+                NodeModel.hostname.in_(topology_ids) | NodeModel.topology_node_id.in_(topology_ids),
+            )
+        )
+        for node in rows.scalars().all():
+            nodes_by_key[node.hostname] = node
+            if node.topology_node_id:
+                nodes_by_key[node.topology_node_id] = node
+
+    task_type = _routing_decision_task_type(order, business_task)
+    metric_key = _routing_decision_metric_key(order, business_task)
+    baseline_by_node_id: dict[str, NodeBaseline] = {}
+    node_ids = {node.id for node in nodes_by_key.values()}
+    if node_ids and task_type:
+        query = select(NodeBaseline).where(
+            NodeBaseline.node_id.in_(node_ids),
+            NodeBaseline.task_type == task_type,
+        )
+        if metric_key:
+            query = query.where(NodeBaseline.metric_key == metric_key)
+        rows = await db.execute(query)
+        for baseline in rows.scalars().all():
+            baseline_by_node_id.setdefault(baseline.node_id, baseline)
+
+    def enrich(item: dict[str, Any]) -> dict[str, Any]:
+        result = dict(item)
+        key = _placement_topology_key(item)
+        node = nodes_by_key.get(key or "")
+        if node:
+            result["node"] = _node_identity(node)
+            result["baseline"] = _baseline_summary(baseline_by_node_id.get(node.id))
+        return result
+
+    selected_compute = None
+    for item in placements:
+        if isinstance(item, dict) and _placement_role(item) in {"compute", "worker", "infer", "inference", "train"}:
+            selected_compute = enrich(item)
+            break
+
+    enriched_candidates = [
+        enrich(item)
+        for item in candidate_scores
+        if isinstance(item, dict)
+    ] if isinstance(candidate_scores, list) else []
+
+    decision = {
+        "strategy": routing_result.get("strategy"),
+        "selected_strategy": routing_result.get("selected_strategy"),
+        "external_routing_id": routing_result.get("external_routing_id"),
+        "selected_compute": selected_compute,
+        "path": metadata.get("path") if isinstance(metadata, dict) else None,
+        "selected_reason": metadata.get("selected_reason") if isinstance(metadata, dict) else None,
+        "candidate_scores": enriched_candidates,
+        "estimated_metric": routing_result.get("estimated_metric"),
+        "metadata": metadata,
+    }
+    return {key: value for key, value in decision.items() if value not in (None, [], {})}
+
+
 def _order_to_response(
     order: TaskOrder,
     instance_exists: bool | None = None,
@@ -555,6 +707,12 @@ async def get_order(
     detail = TaskOrderDetailResponse.model_validate(base.model_dump())
     detail.business_task = business_task if isinstance(business_task, dict) else None
     detail.routing_result = routing_result if isinstance(routing_result, dict) else None
+    detail.routing_decision = await _build_routing_decision_summary(
+        db,
+        order,
+        detail.routing_result,
+        detail.business_task,
+    )
 
     if instance:
         # Build port_access_urls from instance nodes

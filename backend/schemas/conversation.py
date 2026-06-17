@@ -19,6 +19,10 @@ class IntentDraftUpdate(BaseModel):
     modality: Optional[str] = None
     source_name: Optional[str] = None
     destination_name: Optional[str] = None
+    source_endpoint_input: Optional[str] = None
+    destination_endpoint_input: Optional[str] = None
+    destination_port: Optional[int] = None
+    route_only: Optional[bool] = None
     callback_url: Optional[str] = None
     business_start_time: Optional[datetime] = None
     business_end_time: Optional[datetime] = None

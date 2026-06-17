@@ -1123,6 +1123,101 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
 
 
 @pytest.mark.asyncio
+async def test_route_only_with_compute_placement_does_not_materialize_instance(client, db_session):
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "route-only-compute",
+            "agent_address": "http://127.0.0.1:8191",
+            "management_ip": "10.9.10.1",
+            "business_ip": "10.9.11.1",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "route-only-compute-template",
+            "description": "route decision only; no platform deployment",
+            "nodes": [
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "node_id": compute_response.json()["id"],
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="route-only-compute-decision",
+        source_name="h1",
+        destination_name="h2",
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul"},
+            "platform_deployment": {"mode": "route_only", "deployable_roles": []},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "route-only-compute-decision",
+            "order_id": "route-only-compute-decision",
+            "nodes": [
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "deployable": False},
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker", "deployable": False},
+                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "deployable": False},
+            ],
+            "edges": [{"from": "source", "to": "compute"}, {"from": "compute", "to": "sink"}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
+            "strategy": "low_latency_forwarding",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "route-only-compute", "gpu_device": "0"},
+            ],
+            "metadata": {
+                "selected_reason": "仅返回本策略下推荐节点，不触发平台部署",
+                "candidate_scores": [{"topology_node_id": "route-only-compute", "latency_ms": 18.2}],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["deployment_required"] is False
+    assert body["instance_id"] is None
+
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    saved = row.scalar_one()
+    assert saved.status == OrderStatus.COMPLETED
+    assert saved.routing_status == RoutingStatus.COMPLETED.value
+    assert saved.materialized_instance_id is None
+    assert saved.runtime_config["deployment_required"] is False
+    routing_result = saved.runtime_config["routing_result"]
+    assert routing_result["placements"] == [
+        {"task_node_id": "compute", "topology_node_id": "route-only-compute", "gpu_device": "0"}
+    ]
+    assert routing_result["metadata"]["candidate_scores"][0]["latency_ms"] == 18.2
+
+    instances = await db_session.execute(select(TaskInstance).where(TaskInstance.source_order_id == order.id))
+    assert instances.scalars().all() == []
+
+
+@pytest.mark.asyncio
 async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client, db_session):
     source_response = await client.post(
         "/api/nodes",
@@ -2777,6 +2872,58 @@ async def test_business_task_list_api(client, db_session):
     placements = {item["role"]: item for item in detail["node_placements"]}
     assert placements["compute"]["hostname"] == "worker-b"
     assert placements["compute"]["gpu_id"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_order_detail_exposes_routing_decision_summary(client, db_session):
+    node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="routing-decision-user")
+    await _seed_stable_baselines(db_session, node_ids, "low_latency_video_pipeline")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "decision-summary-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    payload = {
+        "strategy": "low_latency_forwarding",
+        "selected_strategy": "LATENCY_CONSTRAINED",
+        "placements": [
+            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+        ],
+        "metadata": {
+            "path": ["worker-a", "worker-b", "worker-c"],
+            "selected_reason": "worker-b 在低时延转发策略下链路更短，且 GPU baseline 稳定",
+            "candidate_scores": [
+                {"topology_node_id": "worker-b", "latency_ms": 18.2, "score": 0.93},
+                {"topology_node_id": "worker-c", "latency_ms": 24.8, "score": 0.81},
+            ],
+            "rent": {"amount": 1.6, "currency": "CNY", "billing_unit": "task"},
+        },
+    }
+    response = await _submit_routing_result(client, order_id, payload)
+    assert response.status_code == 200, response.text
+
+    detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+    assert detail_response.status_code == 200, detail_response.text
+    decision = detail_response.json()["routing_decision"]
+    assert decision["strategy"] == "low_latency_forwarding"
+    assert decision["selected_strategy"] == "LATENCY_CONSTRAINED"
+    assert decision["selected_compute"]["topology_node_id"] == "worker-b"
+    assert decision["selected_compute"]["gpu_device"] == "0"
+    assert decision["selected_compute"]["baseline"]["metric_key"] == "frame_latency_p90_ms"
+    assert decision["selected_compute"]["baseline"]["baseline_value"] == 120.0
+    assert decision["path"] == ["worker-a", "worker-b", "worker-c"]
+    assert decision["selected_reason"].startswith("worker-b")
+    assert decision["candidate_scores"][0]["baseline"]["baseline_value"] == 120.0
+    assert decision["metadata"]["rent"]["amount"] == 1.6
 
 
 @pytest.mark.parametrize("tags,expected_keys", [

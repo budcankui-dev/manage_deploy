@@ -528,6 +528,7 @@ class TaskOrderNodePlacementSummary(BaseModel):
 class TaskOrderDetailResponse(TaskOrderResponse):
     business_task: Optional[dict[str, Any]] = None
     routing_result: Optional[dict[str, Any]] = None
+    routing_decision: Optional[dict[str, Any]] = None
     instance: Optional[TaskOrderInstanceSummary] = None
     evaluation: Optional[TaskOrderEvaluationSummary] = None
     node_placements: list[TaskOrderNodePlacementSummary] = Field(default_factory=list)

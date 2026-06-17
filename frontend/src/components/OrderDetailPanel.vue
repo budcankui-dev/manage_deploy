@@ -86,6 +86,43 @@
         </el-tab-pane>
 
         <el-tab-pane label="节点分配" name="routing">
+          <div v-if="routingDecision" class="routing-decision-card">
+            <div class="decision-main">
+              <p class="eyebrow">路由决策摘要</p>
+              <h3>{{ selectedComputeTitle }}</h3>
+              <p>{{ routingDecision.selected_reason || '已根据当前策略返回节点分配结果。' }}</p>
+            </div>
+            <div class="decision-facts">
+              <div>
+                <span>策略</span>
+                <strong>{{ routingPolicyLabel(routingDecision.strategy || routingDecision.selected_strategy || detail.routing_policy) }}</strong>
+              </div>
+              <div>
+                <span>GPU</span>
+                <strong>{{ selectedComputeGpu }}</strong>
+              </div>
+              <div>
+                <span>基线能力</span>
+                <strong>{{ selectedComputeBaselineText }}</strong>
+              </div>
+              <div>
+                <span>业务链路</span>
+                <strong>{{ decisionPathText }}</strong>
+              </div>
+            </div>
+            <el-table v-if="decisionCandidateRows.length" :data="decisionCandidateRows" size="small" border class="decision-table">
+              <el-table-column label="候选节点" min-width="150">
+                <template #default="{ row }">{{ row.nodeName }}</template>
+              </el-table-column>
+              <el-table-column label="基线能力" min-width="150">
+                <template #default="{ row }">{{ row.baselineText }}</template>
+              </el-table-column>
+              <el-table-column label="评分/代价" min-width="180">
+                <template #default="{ row }">{{ row.scoreText }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+
           <el-descriptions :column="2" border class="detail-desc">
             <el-descriptions-item label="分配状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
             <el-descriptions-item label="任务策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
@@ -410,6 +447,7 @@ const detail = computed(() => props.detail)
 const resultObjects = computed(() => props.resultObjects || [])
 const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
+const routingDecision = computed(() => detail.value?.routing_decision || null)
 const platformDeployment = computed(() => detail.value?.runtime_config?.platform_deployment || null)
 const deployableRoles = computed(() => {
   const roles = platformDeployment.value?.deployable_roles
@@ -601,6 +639,7 @@ const deploymentModeText = computed(() => {
   const mode = platformDeployment.value?.mode
   if (mode === 'automated_benchmark') return '可控测评部署'
   if (mode === 'user_access_demo') return '用户端外部接入'
+  if (mode === 'route_only') return '仅生成路由方案'
   if (detail.value?.is_benchmark) return '可控测评部署'
   return ''
 })
@@ -615,6 +654,36 @@ const businessPriorityText = computed(() => {
     ?? routingResult.value?.priority
     ?? routingResult.value?.metadata?.priority
   return value === null || value === undefined || value === '' ? '-' : String(value)
+})
+
+const selectedCompute = computed(() => routingDecision.value?.selected_compute || null)
+const selectedComputeTitle = computed(() => {
+  const node = selectedCompute.value?.node || {}
+  const topologyId = selectedCompute.value?.topology_node_id || node.topology_node_id || node.hostname
+  const displayName = node.display_name || node.hostname || topologyId
+  return displayName ? `本策略下推荐节点：${displayName}` : '本策略下推荐节点待返回'
+})
+const selectedComputeGpu = computed(() => {
+  const gpu = selectedCompute.value?.gpu_device
+  return hasGpuValue(gpu) ? `GPU ${gpu}` : '未指定'
+})
+const selectedComputeBaselineText = computed(() => formatBaseline(selectedCompute.value?.baseline))
+const decisionPathText = computed(() => {
+  const path = routingDecision.value?.path
+  return Array.isArray(path) && path.length ? path.join(' → ') : '-'
+})
+const decisionCandidateRows = computed(() => {
+  const rows = routingDecision.value?.candidate_scores
+  if (!Array.isArray(rows)) return []
+  return rows.map((row) => {
+    const node = row.node || {}
+    const nodeName = node.display_name || node.hostname || row.topology_node_id || '-'
+    return {
+      nodeName,
+      baselineText: formatBaseline(row.baseline),
+      scoreText: formatCandidateScore(row),
+    }
+  })
 })
 
 function normalizePlacementRow(role, placement) {
@@ -677,6 +746,22 @@ function hasGpuValue(value) {
 function gpuDisplay(row) {
   if (hasGpuValue(row.gpu)) return String(row.gpu)
   return row.requiresGpu ? '未记录' : '不需要'
+}
+
+function formatBaseline(value) {
+  if (!value) return '-'
+  const metric = value.metric_key || 'baseline'
+  const formatted = value.baseline_value == null ? '-' : formatMetric(value.baseline_value)
+  return `${metric}: ${formatted}${value.unit ? ` ${value.unit}` : ''}`
+}
+
+function formatCandidateScore(row) {
+  const parts = []
+  if (row.score != null) parts.push(`评分 ${formatMetric(row.score)}`)
+  if (row.latency_ms != null) parts.push(`时延 ${formatMetric(row.latency_ms)} ms`)
+  if (row.estimated_cost != null) parts.push(`成本 ${formatMetric(row.estimated_cost)}`)
+  if (row.cost != null && typeof row.cost !== 'object') parts.push(`成本 ${row.cost}`)
+  return parts.join(' / ') || '-'
 }
 
 function videoBoxStyle(row) {
@@ -843,6 +928,60 @@ function nodeStatusLabel(value) {
 
 .detail-desc {
   margin-bottom: 8px;
+}
+
+.routing-decision-card {
+  display: grid;
+  gap: 14px;
+  margin: 4px 0 16px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.12), transparent 30%),
+    linear-gradient(135deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.decision-main h3 {
+  margin: 0 0 6px;
+  color: #111827;
+  font-size: 17px;
+}
+
+.decision-main p:last-child {
+  margin: 0;
+  color: #334155;
+  line-height: 1.65;
+}
+
+.decision-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.decision-facts div {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.decision-facts span {
+  display: block;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.decision-facts strong {
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.decision-table {
+  margin-top: 2px;
 }
 
 .data-evidence-card {

@@ -1120,8 +1120,9 @@ async function runOnline() {
   try {
     const { data } = await adminApi.runIntentEvalOnline({
       model: selectedModel.value,
-      concurrency: 4,
-      retries: 2,
+      concurrency: 1,
+      retries: 3,
+      retry_delay_seconds: 3,
       resume: false,
     })
     onlineStatus.value = data

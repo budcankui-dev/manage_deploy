@@ -259,6 +259,44 @@
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
+
+        <div v-if="draft && draft.parse_status !== 'rejected' && !conversation?.materialized_order_id && !isStreaming" class="endpoint-config-card">
+          <div class="endpoint-config-header">
+            <div>
+              <strong>用户端接入配置</strong>
+              <p>源端和目的端使用已登记的终端别名、拓扑节点 ID 或业务面 IP；用户演示默认只部署计算节点。</p>
+            </div>
+            <el-tag :type="endpointForm.route_only ? 'warning' : 'success'" effect="plain">
+              {{ endpointForm.route_only ? '仅生成路由方案' : '用户端演示' }}
+            </el-tag>
+          </div>
+          <el-form class="endpoint-form" label-position="top" size="small">
+            <el-row :gutter="12">
+              <el-col :span="8">
+                <el-form-item label="源端">
+                  <el-input v-model="endpointForm.source_endpoint_input" placeholder="如 h1 或 10.112.x.x" clearable />
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="目的端">
+                  <el-input v-model="endpointForm.destination_endpoint_input" placeholder="如 h2 或 10.112.x.x" clearable />
+                </el-form-item>
+              </el-col>
+              <el-col :span="5">
+                <el-form-item label="目的端口">
+                  <el-input-number v-model="endpointForm.destination_port" :min="1" :max="65535" controls-position="right" placeholder="9000" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="3" class="endpoint-action-col">
+                <el-button type="primary" plain :loading="isSavingEndpointConfig" @click="saveEndpointConfig">保存</el-button>
+              </el-col>
+            </el-row>
+            <div class="endpoint-extra-row">
+              <el-checkbox v-model="endpointForm.route_only">仅生成路由方案，不自动部署容器</el-checkbox>
+              <span v-if="draft?.callback_url" class="callback-preview">目的端回调地址：<code>{{ draft.callback_url }}</code></span>
+            </div>
+          </el-form>
+        </div>
       </section>
 
       <footer class="composer">
@@ -331,6 +369,7 @@
         v-model:active-tab="orderDetailTab"
         :detail="selectedOrderDetail"
         :result-objects="orderResultObjects"
+        :show-routing-dag-json="showRoutingDagJson"
       />
     </el-drawer>
 
@@ -346,10 +385,12 @@
           <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
           <el-descriptions-item label="源节点">{{ formatDraftEndpoint('source') }}</el-descriptions-item>
           <el-descriptions-item label="目的节点">{{ formatDraftEndpoint('destination') }}</el-descriptions-item>
+          <el-descriptions-item label="目的端回调">{{ draft.callback_url || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
           <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
           <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
+          <el-descriptions-item label="运行模式">{{ draft.runtime_plan?.route_only ? '仅生成路由方案' : '用户端演示' }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draftValidationErrors.length" class="errors">
@@ -402,6 +443,7 @@ const loading = ref(false)
 const isStreaming = ref(false)
 const isConfirming = ref(false)
 const isDemoRouting = ref(false)
+const isSavingEndpointConfig = ref(false)
 const messagesRef = ref(null)
 const myOrders = ref([])
 const ordersLoading = ref(false)
@@ -414,6 +456,12 @@ const orderStatusFilter = ref('')
 const orderDetailTab = ref('business')
 const orderResultObjects = ref([])
 const showRoutingDagJson = ref(false)
+const endpointForm = ref({
+  source_endpoint_input: '',
+  destination_endpoint_input: '',
+  destination_port: null,
+  route_only: false,
+})
 
 let routingTimer = null
 let abortController = null
@@ -458,6 +506,18 @@ const canCancelOrder = computed(() => {
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
+
+watch(draft, syncEndpointFormFromDraft, { immediate: true })
+
+function syncEndpointFormFromDraft(currentDraft) {
+  const runtimePlan = currentDraft?.runtime_plan || {}
+  endpointForm.value = {
+    source_endpoint_input: runtimePlan.source_endpoint_input || currentDraft?.source_name || '',
+    destination_endpoint_input: runtimePlan.destination_endpoint_input || currentDraft?.destination_name || '',
+    destination_port: runtimePlan.destination_port ?? null,
+    route_only: Boolean(runtimePlan.route_only),
+  }
+}
 
 function formatTime(value) {
   if (!value) return '-'
@@ -940,6 +1000,27 @@ async function confirmIntent() {
     }
   } finally {
     isConfirming.value = false
+  }
+}
+
+async function saveEndpointConfig() {
+  if (!conversation.value?.id || !draft.value || isSavingEndpointConfig.value) return
+  const payload = {
+    source_endpoint_input: endpointForm.value.source_endpoint_input || null,
+    destination_endpoint_input: endpointForm.value.destination_endpoint_input || null,
+    destination_port: endpointForm.value.destination_port || null,
+    route_only: Boolean(endpointForm.value.route_only),
+  }
+  isSavingEndpointConfig.value = true
+  try {
+    const { data } = await conversationApi.updateDraft(conversation.value.id, payload)
+    conversation.value = data
+    await refreshList()
+    ElMessage.success('用户端接入配置已更新')
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '接入配置保存失败'))
+  } finally {
+    isSavingEndpointConfig.value = false
   }
 }
 
@@ -1593,6 +1674,64 @@ onBeforeUnmount(stopRoutingPolling)
   color: #7c2d12;
   font-size: 12px;
   font-weight: 600;
+}
+
+.endpoint-config-card {
+  margin: 10px 24px;
+  padding: 14px 18px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.endpoint-config-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.endpoint-config-header strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #111827;
+  font-size: 14px;
+}
+
+.endpoint-config-header p {
+  margin: 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.endpoint-form :deep(.el-form-item) {
+  margin-bottom: 8px;
+}
+
+.endpoint-form :deep(.el-input-number) {
+  width: 100%;
+}
+
+.endpoint-action-col {
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 8px;
+}
+
+.endpoint-extra-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.callback-preview code {
+  color: #0f172a;
 }
 
 /* ── Composer ── */

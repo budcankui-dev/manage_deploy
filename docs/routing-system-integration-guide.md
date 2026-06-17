@@ -42,7 +42,7 @@
 | 子任务节点 ID | `routing_input_dag.nodes[].task_node_id`，常见为 `source`、`compute`、`sink` |
 | 固定拓扑节点 | `routing_input_dag.nodes[].fixed_topology_node_id`，表示用户已指定源/目的真实节点 |
 | 算力选择 | 路由系统回写 `placements[].task_node_id=compute`、`topology_node_id=<nodes.hostname>`、可选 `gpu_device` |
-| 端点部署 | 业务工单默认由平台在 `source/sink` 固定拓扑节点部署端点容器；路由系统通常不需要回写 source/sink placement |
+| 端点部署 | 是否部署由 `runtime_config.platform_deployment.deployable_roles` 决定；用户演示通常只部署 `compute`，自动化测评会部署 `source/compute/sink` |
 | GPU 独占 | 同一 `topology_node_id + gpu_device` 同一时刻只能分配给一个未释放任务 |
 | 业务优先级 | `routing_input_dag.priority`，取值 `1-8`，由平台系统设置中的模态优先级字典生成 |
 | 资源需求 | `routing_input_dag.nodes[].resources`，由平台确定性生成；路由系统直接读取，不需要调用大模型 |
@@ -668,7 +668,10 @@ routing_resource_events(
 
 ### 8.1 `source -> compute -> sink`
 
-默认演示业务。平台会根据 DAG 的 `fixed_topology_node_id` 在真实源/目的节点部署 `source/sink` 容器；路由系统只需要选择 `compute` 的 `topology_node_id/gpu_device`，路径可放到 `metadata.path`。
+默认业务链路。路由系统只需要选择 `compute` 的 `topology_node_id/gpu_device`，路径可放到 `metadata.path`。平台是否部署 `source/sink` 容器由 `runtime_config.platform_deployment.deployable_roles` 决定：
+
+- 用户演示模式通常是 `["compute"]`，`source/sink` 只作为用户端数据面端点。
+- 自动化测评模式通常是 `["source","compute","sink"]`，平台会在管控测试端点部署三类容器。
 
 如果路由系统只回写 compute：
 
@@ -684,7 +687,7 @@ routing_resource_events(
 }
 ```
 
-平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定。
+如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
 
 ### 8.2 `source -> sink`
 
@@ -1073,7 +1076,7 @@ curl -sS -X POST \
 硬性约定：
 1. 统一任务 ID 是 task_orders.id，也等于 routing_input_dag.job_id 和 routing_input_dag.order_id。
 2. 路由系统只负责选择 compute 节点、GPU 和路径解释，不要判断平台是否给 source/sink/compute 部署容器。
-3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改；业务工单中平台会在这些节点部署端点容器。
+3. source/sink 的真实节点名来自 routing_input_dag.nodes[].fixed_topology_node_id，不要改；是否部署端点容器只看平台工单里的 platform_deployment.deployable_roles。
 4. GPU 任务必须独占 GPU，同一 topology_node_id + gpu_device 不能分配给多个未释放任务。
 5. 资源暂时不足要 requeue，不要 failed；确定无法满足才 failed。
 6. 平台路由接口不需要 token；HTTP 超时建议设置为 120 秒。

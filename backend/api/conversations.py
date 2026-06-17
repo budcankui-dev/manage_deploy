@@ -28,6 +28,7 @@ from schemas import (
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
+from services.endpoint_resolver import EndpointResolutionError, ResolvedEndpoint, resolve_user_endpoint
 from services.routing_payload_builder import build_routing_payload
 from services.system_settings import (
     get_runtime_settings,
@@ -89,6 +90,68 @@ def _callback_url_from_runtime_plan(runtime_plan: dict | None) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _runtime_value(runtime_plan: dict | None, key: str):
+    if not isinstance(runtime_plan, dict):
+        return None
+    return runtime_plan.get(key)
+
+
+def _destination_port_from_runtime_plan(runtime_plan: dict | None) -> int | None:
+    value = _runtime_value(runtime_plan, "destination_port")
+    if value in (None, ""):
+        return None
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def _route_only_from_runtime_plan(runtime_plan: dict | None) -> bool:
+    return bool(_runtime_value(runtime_plan, "route_only"))
+
+
+def _endpoint_dict(endpoint: ResolvedEndpoint | None) -> dict | None:
+    return endpoint.model_dump() if endpoint else None
+
+
+def _callback_url_for_destination(endpoint: ResolvedEndpoint, port: int) -> str:
+    host = endpoint.business_ip or endpoint.business_ipv6
+    if not host:
+        raise EndpointResolutionError("Destination endpoint has no data-plane IP")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}/callback"
+
+
+async def _resolve_endpoint_from_plan(
+    db: AsyncSession,
+    runtime_plan: dict | None,
+    key: str,
+) -> ResolvedEndpoint | None:
+    value = _runtime_value(runtime_plan, key)
+    if not value:
+        return None
+    return await resolve_user_endpoint(db, str(value))
+
+
+async def _resolve_endpoint_from_plan_or_name(
+    db: AsyncSession,
+    runtime_plan: dict | None,
+    key: str,
+    fallback_name: str | None,
+) -> ResolvedEndpoint | None:
+    endpoint = await _resolve_endpoint_from_plan(db, runtime_plan, key)
+    if endpoint:
+        return endpoint
+    if not fallback_name:
+        return None
+    try:
+        return await resolve_user_endpoint(db, fallback_name)
+    except EndpointResolutionError:
+        return None
 
 
 @router.post("", response_model=ConversationResponse)
@@ -371,15 +434,66 @@ async def update_draft(
         raise HTTPException(status_code=404, detail="Intent draft not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    runtime_plan = dict(draft.runtime_plan or {})
+    source_endpoint_input = updates.pop("source_endpoint_input", None)
+    destination_endpoint_input = updates.pop("destination_endpoint_input", None)
+    destination_port = updates.pop("destination_port", None)
+    route_only = updates.pop("route_only", None)
     callback_url = updates.pop("callback_url", None)
+
+    if source_endpoint_input is not None:
+        text = str(source_endpoint_input).strip()
+        if text:
+            try:
+                resolved = await resolve_user_endpoint(db, text)
+            except EndpointResolutionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            runtime_plan["source_endpoint_input"] = text
+            draft.source_name = resolved.topology_alias
+        else:
+            runtime_plan.pop("source_endpoint_input", None)
+
+    if destination_endpoint_input is not None:
+        text = str(destination_endpoint_input).strip()
+        if text:
+            try:
+                resolved = await resolve_user_endpoint(db, text)
+            except EndpointResolutionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            runtime_plan["destination_endpoint_input"] = text
+            draft.destination_name = resolved.topology_alias
+        else:
+            runtime_plan.pop("destination_endpoint_input", None)
+
+    if destination_port is not None:
+        try:
+            port = int(destination_port)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
+        if port < 1 or port > 65535:
+            raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
+        runtime_plan["destination_port"] = port
+
+    if route_only is not None:
+        runtime_plan["route_only"] = bool(route_only)
+
     if callback_url is not None:
-        runtime_plan = dict(draft.runtime_plan or {})
         normalized_callback_url = str(callback_url).strip()
         if normalized_callback_url:
             runtime_plan["callback_url"] = normalized_callback_url
         else:
             runtime_plan.pop("callback_url", None)
-        draft.runtime_plan = runtime_plan or None
+
+    if destination_endpoint_input is not None or destination_port is not None:
+        try:
+            destination_endpoint = await _resolve_endpoint_from_plan(db, runtime_plan, "destination_endpoint_input")
+        except EndpointResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        port = _destination_port_from_runtime_plan(runtime_plan)
+        if destination_endpoint and port:
+            runtime_plan["callback_url"] = _callback_url_for_destination(destination_endpoint, port)
+
+    draft.runtime_plan = runtime_plan or None
     for key, value in updates.items():
         setattr(draft, key, value)
 
@@ -443,7 +557,22 @@ async def confirm_intent(
         status=OrderStatus.PENDING,
         routing_status=RoutingStatus.PENDING,
     )
+    source_endpoint = await _resolve_endpoint_from_plan_or_name(
+        db,
+        draft.runtime_plan,
+        "source_endpoint_input",
+        draft.source_name,
+    )
+    destination_endpoint = await _resolve_endpoint_from_plan_or_name(
+        db,
+        draft.runtime_plan,
+        "destination_endpoint_input",
+        draft.destination_name,
+    )
+    destination_port = _destination_port_from_runtime_plan(draft.runtime_plan)
     callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
+    route_only = _route_only_from_runtime_plan(draft.runtime_plan)
+    deployable_roles = [] if route_only else ["compute"]
     business_task_config = {
         "task_type": draft.task_type,
         "modality": draft.modality,
@@ -454,13 +583,25 @@ async def confirm_intent(
         "business_objective": draft.business_objective,
     }
     platform_deployment = {
-        "mode": "user_access_demo",
-        "deployable_roles": ["compute"],
+        "mode": "route_only" if route_only else "user_access_demo",
+        "deployable_roles": deployable_roles,
         "endpoint_policy": "source/sink are external user access endpoints by default",
     }
+    external_endpoints = {}
+    if source_endpoint:
+        business_task_config["source_endpoint"] = _endpoint_dict(source_endpoint)
+        external_endpoints["source"] = _endpoint_dict(source_endpoint)
+    if destination_endpoint:
+        sink_endpoint = _endpoint_dict(destination_endpoint) or {}
+        if destination_port:
+            sink_endpoint["business_port"] = destination_port
+        business_task_config["destination_endpoint"] = sink_endpoint
+        external_endpoints["sink"] = dict(sink_endpoint)
     if callback_url:
         business_task_config["callback_url"] = callback_url
-        platform_deployment["external_endpoints"] = {"sink": {"callback_url": callback_url}}
+        external_endpoints.setdefault("sink", {})["callback_url"] = callback_url
+    if external_endpoints:
+        platform_deployment["external_endpoints"] = external_endpoints
     order.runtime_config = {
         "business_task": business_task_config,
         "platform_deployment": platform_deployment,
@@ -492,6 +633,10 @@ async def confirm_intent(
         modality_priority_map=modality_priority_map,
         routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
         callback_url=callback_url,
+        source_endpoint=_endpoint_dict(source_endpoint),
+        destination_endpoint=_endpoint_dict(destination_endpoint),
+        destination_port=destination_port,
+        deployable_roles=deployable_roles,
         **resource_options,
     )
     order.routing_input_dag = input_payload
@@ -778,11 +923,30 @@ async def _get_conversation_detail(
         draft_response = IntentDraftResponse.model_validate(draft)
         draft_response.callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
         endpoints = await _endpoint_map_for_names(db, [draft.source_name, draft.destination_name])
-        draft_response.source_endpoint = endpoints.get(draft.source_name or "")
-        draft_response.destination_endpoint = endpoints.get(draft.destination_name or "")
+        source_endpoint = None
+        destination_endpoint = None
+        try:
+            source_endpoint = await _resolve_endpoint_from_plan_or_name(
+                db,
+                draft.runtime_plan,
+                "source_endpoint_input",
+                draft.source_name,
+            )
+            destination_endpoint = await _resolve_endpoint_from_plan_or_name(
+                db,
+                draft.runtime_plan,
+                "destination_endpoint_input",
+                draft.destination_name,
+            )
+        except EndpointResolutionError:
+            source_endpoint = None
+            destination_endpoint = None
+        draft_response.source_endpoint = _endpoint_dict(source_endpoint) or endpoints.get(draft.source_name or "")
+        draft_response.destination_endpoint = _endpoint_dict(destination_endpoint) or endpoints.get(draft.destination_name or "")
         if draft.parse_status == ParseStatus.VALID:
             runtime_settings = await get_runtime_settings(db)
             resource_options = routing_resource_options_from_settings(runtime_settings)
+            deployable_roles = [] if _route_only_from_runtime_plan(draft.runtime_plan) else ["compute"]
             draft_response.routing_dag_preview = build_routing_payload(
                 order_id=conversation.id,
                 order_name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
@@ -797,6 +961,10 @@ async def _get_conversation_detail(
                 modality_priority_map=modality_priority_map_from_settings(runtime_settings),
                 routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
                 callback_url=_callback_url_from_runtime_plan(draft.runtime_plan),
+                source_endpoint=_endpoint_dict(source_endpoint),
+                destination_endpoint=_endpoint_dict(destination_endpoint),
+                destination_port=_destination_port_from_runtime_plan(draft.runtime_plan),
+                deployable_roles=deployable_roles,
                 **resource_options,
             )
     return ConversationResponse(

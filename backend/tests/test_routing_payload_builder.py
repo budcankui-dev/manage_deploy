@@ -164,3 +164,54 @@ def test_routing_payload_includes_clean_dynamic_port_requirements():
         ]
     assert payload["edges"][0]["flow"]["dst_port_ref"] == "compute.compute"
     assert payload["edges"][1]["flow"]["dst_port_ref"] == "sink.sink"
+
+
+def test_routing_payload_includes_external_user_endpoint_identity():
+    now = datetime(2026, 6, 16, 10, 0, 0)
+
+    payload = build_routing_payload(
+        order_id="order-user-endpoints",
+        order_name="用户端点演示",
+        task_type="low_latency_video_pipeline",
+        modality="低时延转发模态",
+        source_name="h1",
+        destination_name="h3",
+        business_start_time=now,
+        business_end_time=now + timedelta(hours=1),
+        data_profile={"frame_count": 90, "resolution": "720p", "fps": 30},
+        source_endpoint={
+            "topology_node_id": "h18001001",
+            "topology_alias": "h1",
+            "business_ip": "10.112.126.124",
+            "business_ipv6": "2001:db8::1",
+        },
+        destination_endpoint={
+            "topology_node_id": "h18005003",
+            "topology_alias": "h3",
+            "business_ip": "10.112.20.40",
+        },
+        destination_port=9000,
+        callback_url="http://10.112.20.40:9000/callback",
+        deployable_roles=["compute"],
+    )
+
+    by_role = {node["task_node_id"]: node for node in payload["nodes"]}
+
+    source = by_role["source"]
+    assert source["task_role"] == "source"
+    assert source["task_node_type"] == "terminal"
+    assert source["deployable"] is False
+    assert source["fixed_topology_node_id"] == "h18001001"
+    assert source["topology_node_id"] == "h18001001"
+    assert source["topology_alias"] == "h1"
+    assert source["business_ip"] == "10.112.126.124"
+    assert source["business_ipv6"] == "2001:db8::1"
+    assert by_role["compute"]["deployable"] is True
+    assert by_role["sink"]["deployable"] is False
+    assert by_role["sink"]["fixed_topology_node_id"] == "h18005003"
+    assert by_role["sink"]["topology_node_id"] == "h18005003"
+    assert by_role["sink"]["topology_alias"] == "h3"
+    assert by_role["sink"]["business_ip"] == "10.112.20.40"
+    assert by_role["sink"]["business_port"] == 9000
+    assert by_role["sink"]["callback_url"] == "http://10.112.20.40:9000/callback"
+    assert [(edge["from"], edge["to"]) for edge in payload["edges"]] == [("source", "compute"), ("compute", "sink")]

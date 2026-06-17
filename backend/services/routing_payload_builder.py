@@ -35,6 +35,10 @@ def build_routing_payload(
     modality_priority_map: dict[str, Any] | None = None,
     routing_strategy: str | None = None,
     callback_url: str | None = None,
+    source_endpoint: dict[str, Any] | None = None,
+    destination_endpoint: dict[str, Any] | None = None,
+    destination_port: int | None = None,
+    deployable_roles: list[str] | set[str] | tuple[str, ...] | None = None,
     task_resource_override_enabled: bool = False,
     task_resource_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -57,6 +61,10 @@ def build_routing_payload(
         source_name,
         destination_name,
         callback_url,
+        source_endpoint,
+        destination_endpoint,
+        destination_port,
+        deployable_roles,
         task_resource_override_enabled=task_resource_override_enabled,
         task_resource_overrides=task_resource_overrides,
     )
@@ -113,6 +121,10 @@ def _build_dag_nodes(
     source_name: str | None = None,
     destination_name: str | None = None,
     callback_url: str | None = None,
+    source_endpoint: dict[str, Any] | None = None,
+    destination_endpoint: dict[str, Any] | None = None,
+    destination_port: int | None = None,
+    deployable_roles: list[str] | set[str] | tuple[str, ...] | None = None,
     task_resource_override_enabled: bool = False,
     task_resource_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -134,7 +146,18 @@ def _build_dag_nodes(
                 },
             }
             node["network"] = _network_requirements_for_role(task_node_id, n.get("port_defs"))
-            node.update(_endpoint_identity(task_node_id, source_name, destination_name, callback_url))
+            node.update(_deployment_identity(task_node_id, deployable_roles))
+            node.update(
+                _endpoint_identity(
+                    task_node_id,
+                    source_name,
+                    destination_name,
+                    callback_url,
+                    source_endpoint=source_endpoint,
+                    destination_endpoint=destination_endpoint,
+                    destination_port=destination_port,
+                )
+            )
             nodes.append(node)
         return nodes
 
@@ -149,7 +172,18 @@ def _build_dag_nodes(
         task_node_id = node["task_node_id"]
         node.setdefault("task_role", _infer_role(task_node_id))
         node.setdefault("network", _network_requirements_for_role(task_node_id))
-        node.update(_endpoint_identity(task_node_id, source_name, destination_name, callback_url))
+        node.update(_deployment_identity(task_node_id, deployable_roles))
+        node.update(
+            _endpoint_identity(
+                task_node_id,
+                source_name,
+                destination_name,
+                callback_url,
+                source_endpoint=source_endpoint,
+                destination_endpoint=destination_endpoint,
+                destination_port=destination_port,
+            )
+        )
     return defaults
 
 
@@ -240,17 +274,55 @@ def _endpoint_identity(
     source_name: str | None,
     destination_name: str | None,
     callback_url: str | None = None,
-) -> dict[str, str]:
+    *,
+    source_endpoint: dict[str, Any] | None = None,
+    destination_endpoint: dict[str, Any] | None = None,
+    destination_port: int | None = None,
+) -> dict[str, Any]:
     """Expose user-selected topology endpoints while keeping task_node_id as the DAG role."""
     text = str(role or "").lower()
-    if text in {"source", "video", "input"} and source_name:
-        return {"fixed_topology_node_id": source_name}
+    if text in {"source", "video", "input"}:
+        if source_endpoint:
+            return _endpoint_fields(source_endpoint, fallback_name=source_name)
+        if source_name:
+            return {"fixed_topology_node_id": source_name}
     if text in {"sink", "output"} and destination_name:
-        result = {"fixed_topology_node_id": destination_name}
+        result = (
+            _endpoint_fields(destination_endpoint, fallback_name=destination_name)
+            if destination_endpoint
+            else {"fixed_topology_node_id": destination_name}
+        )
+        if destination_port is not None:
+            result["business_port"] = int(destination_port)
         if callback_url:
             result["callback_url"] = callback_url
         return result
     return {}
+
+
+def _endpoint_fields(endpoint: dict[str, Any] | None, *, fallback_name: str | None = None) -> dict[str, Any]:
+    if not isinstance(endpoint, dict):
+        return {}
+    topology_id = endpoint.get("topology_node_id") or fallback_name
+    result: dict[str, Any] = {}
+    if topology_id:
+        result["fixed_topology_node_id"] = str(topology_id)
+        result["topology_node_id"] = str(topology_id)
+    for key in ("topology_alias", "business_ip", "business_ipv6"):
+        value = endpoint.get(key)
+        if value:
+            result[key] = str(value)
+    return result
+
+
+def _deployment_identity(
+    role: Any,
+    deployable_roles: list[str] | set[str] | tuple[str, ...] | None,
+) -> dict[str, bool]:
+    if deployable_roles is None:
+        return {}
+    normalized = {str(item).lower() for item in deployable_roles}
+    return {"deployable": str(role or "").lower() in normalized}
 
 
 def _network_requirements_for_role(

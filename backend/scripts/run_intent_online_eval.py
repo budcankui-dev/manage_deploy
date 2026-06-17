@@ -3,8 +3,8 @@
 
 Examples:
     cd backend
-    PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --limit 5 --concurrency 2
-    PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 4 --retries 2
+    PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --limit 5 --concurrency 1
+    PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 1 --retries 3 --retry-delay-seconds 3
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run online chat/completions intent evaluation")
     parser.add_argument("--model", default=None)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--retries", type=int, default=2)
-    parser.add_argument("--retry-delay-seconds", type=float, default=1.0)
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument("--retry-delay-seconds", type=float, default=3.0)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 

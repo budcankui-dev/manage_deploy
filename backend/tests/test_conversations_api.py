@@ -51,6 +51,15 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     confirm_body = confirm_response.json()
     assert confirm_body["status"] == "awaiting_routing"
     assert confirm_body["materialized_order_id"] == conversation_id
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    source_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "source")
+    sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
+    assert source_node["topology_node_id"] == "worker-a"
+    assert source_node["business_ip"] == "10.0.1.1"
+    assert sink_node["topology_node_id"] == "worker-c"
+    assert sink_node["business_ip"] == "10.0.1.3"
 
     claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
     assert claim_response.status_code == 200
@@ -158,6 +167,162 @@ async def test_confirm_intent_preserves_explicit_callback_url(client, db_session
     assert order.runtime_config["platform_deployment"]["external_endpoints"]["sink"]["callback_url"] == callback_url
     sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
     assert sink_node["callback_url"] == callback_url
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="endpoint-input-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h1",
+            "display_name": "h1",
+            "agent_address": "http://172.16.0.11:8001",
+            "management_ip": "172.16.0.11",
+            "business_ip": "10.112.126.124",
+            "business_ipv6": "2001:db8::1",
+            "node_kind": "terminal",
+            "topology_node_id": "h18001001",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert source_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h3",
+            "display_name": "h3",
+            "agent_address": "http://172.16.0.13:8001",
+            "management_ip": "172.16.0.13",
+            "business_ip": "10.112.20.40",
+            "node_kind": "terminal",
+            "topology_node_id": "h18005003",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "用户端点矩阵任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    assert message_response.json()["latest_draft"]["parse_status"] == "valid"
+
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={
+            "source_endpoint_input": "h1",
+            "destination_endpoint_input": "10.112.20.40",
+            "destination_port": 9000,
+        },
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+    draft = patch_response.json()["latest_draft"]
+    assert draft["source_name"] == "h1"
+    assert draft["destination_name"] == "h3"
+    assert draft["source_endpoint"]["business_ip"] == "10.112.126.124"
+    assert draft["destination_endpoint"]["business_ip"] == "10.112.20.40"
+    assert draft["callback_url"] == "http://10.112.20.40:9000/callback"
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["compute"]
+    assert order.runtime_config["platform_deployment"]["external_endpoints"]["sink"]["business_port"] == 9000
+    source_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "source")
+    sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
+    assert source_node["deployable"] is False
+    assert source_node["topology_node_id"] == "h18001001"
+    assert source_node["topology_alias"] == "h1"
+    assert source_node["business_ip"] == "10.112.126.124"
+    assert sink_node["deployable"] is False
+    assert sink_node["topology_node_id"] == "h18005003"
+    assert sink_node["topology_alias"] == "h3"
+    assert sink_node["business_ip"] == "10.112.20.40"
+    assert sink_node["business_port"] == 9000
+    assert sink_node["callback_url"] == "http://10.112.20.40:9000/callback"
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_supports_route_only_mode(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="route-only-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "只路由矩阵任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    assert message_response.json()["latest_draft"]["parse_status"] == "valid"
+
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"route_only": True},
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+    preview_nodes = patch_response.json()["latest_draft"]["routing_dag_preview"]["nodes"]
+    assert all(node["deployable"] is False for node in preview_nodes)
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    assert order.runtime_config["platform_deployment"]["mode"] == "route_only"
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == []
+    assert all(node["deployable"] is False for node in order.routing_input_dag["nodes"])
 
 
 @pytest.mark.asyncio
