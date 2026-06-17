@@ -135,6 +135,26 @@ def test_routing_payload_unknown_strategy_falls_back_to_resource_guarantee():
     assert payload["policy_type"] == "RESOURCE_GUARANTEE"
 
 
+def test_routing_payload_normalizes_legacy_completion_time_strategy_alias():
+    now = datetime(2026, 6, 16, 10, 0, 0)
+
+    payload = build_routing_payload(
+        order_id="order-legacy-routing-strategy",
+        order_name="旧策略名兼容测试",
+        task_type="high_throughput_matmul",
+        modality="高通量计算模态",
+        source_name="h1",
+        destination_name="h2",
+        business_start_time=now,
+        business_end_time=now + timedelta(hours=1),
+        data_profile={"matrix_size": 1024, "batch_count": 50},
+        routing_strategy="completion_time_first",
+    )
+
+    assert payload["routing_strategy"] == "fastest_completion"
+    assert payload["policy_type"] == "TIME_CONSTRAINED"
+
+
 def test_routing_payload_includes_clean_dynamic_port_requirements():
     now = datetime(2026, 6, 16, 10, 0, 0)
 

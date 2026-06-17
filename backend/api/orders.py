@@ -1032,6 +1032,15 @@ def _platform_deployment_policy(order: TaskOrder) -> tuple[set[str] | None, set[
     )
 
 
+def _platform_deployment_mode(order: TaskOrder) -> str | None:
+    config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    deployment = config.get("platform_deployment") or config.get("deployment_plan") or {}
+    if not isinstance(deployment, dict):
+        return None
+    mode = deployment.get("mode")
+    return str(mode) if mode else None
+
+
 def _placement_is_deployable(
     order: TaskOrder,
     placement: RoutingPlacement,
@@ -1492,16 +1501,23 @@ async def receive_routing_result(
             enabled_template_node_names.append(template_node_name)
 
     if not enabled_template_node_names:
+        deployment_mode = _platform_deployment_mode(order)
+        route_only = deployment_mode == "route_only"
         order.materialized_instance_id = None
         order.status = OrderStatus.COMPLETED
         order.routing_status = RoutingStatus.COMPLETED.value
         rc["deployment_required"] = False
+        if route_only:
+            rc["deployment_mode"] = "route_only"
         rc["routing_result"] = {
             **routing_result,
             "network_bindings": [],
             "network_ready_required": False,
             "network_ready": True,
         }
+        if route_only:
+            rc["routing_result"]["deployment_mode"] = "route_only"
+            rc["routing_result"]["route_only"] = True
         order.runtime_config = rc
         flag_modified(order, "runtime_config")
         await _sync_conversation_after_order_routing(
@@ -1518,6 +1534,7 @@ async def receive_routing_result(
             "order_id": order_id,
             "routing_status": "completed",
             "deployment_required": False,
+            "deployment_mode": deployment_mode,
             "instance_id": None,
             "network_bindings": [],
             "network_ready_required": False,

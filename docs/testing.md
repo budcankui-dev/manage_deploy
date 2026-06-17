@@ -92,12 +92,12 @@ cd frontend
 E2E_TRIGGER_MATMUL_DEMO=1 npm run test:e2e:headed
 ```
 
-用户端意图对话 E2E 覆盖两类演示业务：
+用户端意图对话 E2E 覆盖两类演示业务，并与业务测评域分开理解：
 
-- 矩阵乘法计算任务：自然语言输入 -> 参数完整 -> 确认生成工单 -> 状态进入待路由。
-- 视频AI推理任务：自然语言输入 -> 参数完整 -> 确认生成工单 -> 用户端“自动路由部署” -> 同一工单物化实例并显示已部署。
+- 用户端接入演示：自然语言输入 -> 参数完整 -> 确认生成工单 -> 进入待路由；平台默认只部署 compute，source/sink 是用户自行接入的外部端点。
+- 自动化测评域：`/benchmark` 为批量业务目标成功率测评，source/compute/sink 都由平台部署，便于稳定复现指标。
 
-该 E2E 可在系统设置页启用开发调试路由流程，只验证用户端链路和部署物化能力；正式路由系统仍通过 `/api/routing-orders/{order_id}/result` 回写 placements。
+该 E2E 可在系统设置页启用开发调试路由流程，只验证用户端链路和 compute 物化能力；正式路由系统仍通过 `/api/routing-orders/{order_id}/result` 回写 placements。
 
 Worker 和脚本语法：
 
@@ -239,7 +239,7 @@ http://<manager-host>/intent-chat
 1. 对话气泡返回解析说明，右侧“意图参数”显示任务类型、所属模态、源节点、目的节点、开始/结束时间和对应数据画像。
 2. 展开“路由 DAG JSON 预览”，确认 `job_id/order_id` 为同一个工单 ID，`nodes` 包含 source/compute/sink，source/sink 的 `fixed_topology_node_id` 来自用户输入。普通用户工单默认采用用户端外部接入模式，平台只部署 compute，source/sink 不作为受控容器启动。
 3. 点击“确认提交任务”后，系统创建工单并进入待路由。外部路由未接入时，可在系统设置页切换为“系统自动分配”完成链路验证。
-4. 打开“我的工单”详情，确认“基本信息”展示业务类型和模态，“节点分配”展示部署模式为用户端外部接入，平台受控角色为 compute，并展示 source -> compute 的业务链路接入地址。
+4. 打开“我的工单”详情，确认“基本信息”展示业务类型和模态，“路由与节点”展示部署模式为用户端外部接入，平台受控角色为 compute，并展示 source -> compute 的业务链路接入地址。
 5. 业务运行并上报指标后，在“结果”页查看矩阵计算数字结果，或视频AI推理的检测类别、画框坐标、P90 帧时延和带框预览图。compute-only 模式下由 compute 上报平台业务指标；三容器测评模式仍由 sink 上报。
 
 测评与用户演示的边界见 `docs/端点部署与用户接入模型.md`：`/benchmark` 使用可控测试设备模拟 source/sink 以批量统计成功率；`/intent-chat` 展示真实用户端自行接入，平台不控制用户终端。

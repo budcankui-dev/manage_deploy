@@ -85,7 +85,7 @@
           </el-descriptions>
         </el-tab-pane>
 
-        <el-tab-pane label="节点分配" name="routing">
+        <el-tab-pane label="路由与节点" name="routing">
           <div v-if="routingDecision" class="routing-decision-card">
             <div class="decision-main">
               <p class="eyebrow">路由决策摘要</p>
@@ -132,10 +132,10 @@
             <el-descriptions-item label="平台受控角色">{{ deployableRolesText }}</el-descriptions-item>
           </el-descriptions>
 
-          <h3 class="section-title">节点放置与端口</h3>
+          <h3 class="section-title">拓扑节点与端口</h3>
           <el-table :data="placementRows" size="small" border empty-text="暂无节点放置信息">
             <el-table-column prop="roleLabel" label="子任务" width="110" />
-            <el-table-column prop="hostname" label="部署节点" min-width="150" />
+            <el-table-column prop="hostname" label="拓扑节点" min-width="150" />
             <el-table-column label="业务面地址" min-width="180">
               <template #default="{ row }">
                 <code v-if="row.business_address">{{ row.business_address }}</code>
@@ -203,7 +203,7 @@
             type="info"
             show-icon
             :closable="false"
-            title="外部用户接入说明"
+            title="用户端接入说明"
           >
             <ul class="user-access-hints">
               <li v-for="(hint, index) in userAccessHints" :key="index">{{ hint }}</li>
@@ -289,7 +289,7 @@
             show-icon
             :closable="false"
             title="暂无业务评估结果"
-            description="该工单还未完成指标上报，或属于清理/迁移前的历史数据。输入参数和节点分配仍可作为工单记录查看；任务重新运行并上报指标后会自动展示结果预览。"
+            description="该工单还未完成指标上报，或属于清理/迁移前的历史数据。输入参数和路由节点仍可作为工单记录查看；任务重新运行并上报指标后会自动展示结果预览。"
           />
 
           <template v-if="isVideoTask">

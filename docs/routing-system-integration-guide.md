@@ -69,7 +69,7 @@
 | `fastest_completion` | `TIME_CONSTRAINED` | 完成时间优先 | 优先选择预计完成更快的节点。 |
 | `load_balance` | `LOAD_BALANCE` | 资源负载均衡 | 优先把任务分散到负载较低的节点。 |
 
-平台只会为上表中的有效 `routing_strategy` 生成对应 `policy_type`。如果用户没有表达特殊偏好，新建工单默认使用 `resource_guarantee / RESOURCE_GUARANTEE`。旧版本历史数据不作为兼容目标；联调前应清理旧工单，并按当前策略字典重新创建。
+平台只会为上表中的有效 `routing_strategy` 生成对应 `policy_type`。如果用户没有表达特殊偏好，新建工单默认使用 `resource_guarantee / RESOURCE_GUARANTEE`。平台内部会把少量旧别名规范化到上表，例如 `completion_time_first` 会输出为 `fastest_completion`；路由系统只需要消费上表中的冻结键。旧版本历史数据不作为兼容目标；联调前应清理旧工单，并按当前策略字典重新创建。
 
 业务模态与默认优先级字典如下。`1` 表示最高业务流优先级，`8` 表示最低；平台系统设置可以调整该映射。
 
@@ -756,6 +756,7 @@ Content-Type: application/json
 - 平台会根据业务模板决定哪些逻辑节点要物化为容器。
 - 如果 source/sink 是固定端点且平台需要部署对应容器，平台会自动补齐，不要求路由系统回写。
 - 如果没有任何节点需要部署，平台只保存结果并把工单标记完成，不创建容器实例。
+- `route_only` 工单也属于“不创建容器实例”：响应会包含 `deployment_required=false`、`deployment_mode=route_only`、`instance_id=null`。这表示“路由方案已生成”，不是“业务容器已部署完成”。
 - 如果需要部署容器，平台会物化实例、动态分配端口，并返回 `network_bindings`。
 - 默认返回后工单进入 `routing_status=network_binding_ready`，等待路由系统下发流表/QoS。
 - 如果 GPU 冲突，平台返回 `409`，路由系统需要撤销本次资源扣减并重新路由或 requeue。

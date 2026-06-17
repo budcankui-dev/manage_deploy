@@ -1208,6 +1208,8 @@ async def test_route_only_with_compute_placement_does_not_materialize_instance(c
     assert saved.materialized_instance_id is None
     assert saved.runtime_config["deployment_required"] is False
     routing_result = saved.runtime_config["routing_result"]
+    assert routing_result["deployment_mode"] == "route_only"
+    assert routing_result["route_only"] is True
     assert routing_result["placements"] == [
         {"task_node_id": "compute", "topology_node_id": "route-only-compute", "gpu_device": "0"}
     ]

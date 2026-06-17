@@ -264,10 +264,10 @@
           <div class="endpoint-config-header">
             <div>
               <strong>用户端接入配置</strong>
-              <p>源端和目的端使用已登记的终端别名、拓扑节点 ID 或业务面 IP；用户演示默认只部署计算节点。</p>
+              <p>源端和目的端使用已登记的终端别名、拓扑节点 ID 或业务面 IP；用户端接入演示默认只由平台部署计算节点。</p>
             </div>
             <el-tag :type="endpointForm.route_only ? 'warning' : 'success'" effect="plain">
-              {{ endpointForm.route_only ? '仅生成路由方案' : '用户端演示' }}
+              {{ endpointForm.route_only ? '仅生成路由方案' : '用户端接入演示' }}
             </el-tag>
           </div>
           <el-form class="endpoint-form" label-position="top" size="small">
@@ -292,7 +292,7 @@
               </el-col>
             </el-row>
             <div class="endpoint-extra-row">
-              <el-checkbox v-model="endpointForm.route_only">仅生成路由方案，不自动部署容器</el-checkbox>
+              <el-checkbox v-model="endpointForm.route_only">仅生成路由方案，不执行平台部署</el-checkbox>
               <span v-if="draft?.callback_url" class="callback-preview">目的端回调地址：<code>{{ draft.callback_url }}</code></span>
             </div>
           </el-form>
@@ -390,7 +390,7 @@
           <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
           <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
           <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
-          <el-descriptions-item label="运行模式">{{ draft.runtime_plan?.route_only ? '仅生成路由方案' : '用户端演示' }}</el-descriptions-item>
+          <el-descriptions-item label="运行模式">{{ draft.runtime_plan?.route_only ? '仅生成路由方案' : '用户端接入演示' }}</el-descriptions-item>
         </el-descriptions>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draftValidationErrors.length" class="errors">
