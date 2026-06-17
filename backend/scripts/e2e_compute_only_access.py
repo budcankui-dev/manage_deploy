@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 
@@ -32,6 +33,8 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--username", default="user")
     parser.add_argument("--password", default="user")
+    parser.add_argument("--compute-nodes", default="compute-1,compute-2,compute-3")
+    parser.add_argument("--gpu-device", default="0")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
@@ -73,17 +76,40 @@ def main() -> None:
     claim = requests.patch(f"{base}/api/routing-orders/{order_id}/claim")
     _assert(claim.status_code == 200, f"claim 失败: {claim.text}")
 
-    result_payload = {
-        "placements": [
-            {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
-        ],
-        "strategy": "resource_guarantee",
-    }
-    route = requests.post(f"{base}/api/routing-orders/{order_id}/result", json=result_payload)
-    if route.status_code != 200:
+    route = None
+    attempted: list[str] = []
+    candidates = [item.strip() for item in args.compute_nodes.split(",") if item.strip()]
+    _assert(bool(candidates), "compute-nodes 不能为空")
+    for index, node_name in enumerate(candidates):
+        attempted.append(node_name)
+        if index > 0:
+            requeued = requests.patch(
+                f"{base}/api/routing-orders/{order_id}/requeue",
+                json={"reason": "retry compute-only e2e on next candidate"},
+            )
+            _assert(requeued.status_code == 200, f"requeue 失败: {requeued.text}")
+            claim = requests.patch(f"{base}/api/routing-orders/{order_id}/claim")
+            _assert(claim.status_code == 200, f"重新 claim 失败: {claim.text}")
+        result_payload = {
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": node_name, "gpu_device": args.gpu_device},
+            ],
+            "strategy": "resource_guarantee",
+            "metadata": {"source": "e2e_compute_only_access", "candidate": node_name},
+        }
+        route = requests.post(f"{base}/api/routing-orders/{order_id}/result", json=result_payload)
+        if route.status_code == 200:
+            print(f"  OK placement={node_name}:gpu{args.gpu_device}")
+            break
+        conflict = route.status_code == 409 and re.search(r"GPU slot conflict", route.text or "")
+        if conflict and index + 1 < len(candidates):
+            print(f"  SKIP {node_name}:gpu{args.gpu_device} 已占用，尝试下一个候选")
+            continue
         print(f"  WARN: 路由回写 {route.status_code}: {route.text}")
         print("  (无真实节点时物化可能失败，但 network_bindings 仍应可检查)")
         sys.exit(0)
+
+    _assert(route is not None and route.status_code == 200, f"候选节点均不可用: {attempted}")
 
     body = route.json()
     bindings = body.get("network_bindings") or []
