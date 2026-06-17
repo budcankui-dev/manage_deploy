@@ -52,15 +52,23 @@ def _build_job() -> dict:
     }
 
 
+def _should_wait_for_compute_ready() -> bool:
+    raw = os.environ.get("WAIT_FOR_COMPUTE_READY", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def main() -> int:
     job = _build_job()
     port = get_listen_port("source")
     print(f"VIDEO_SOURCE_STARTING port={port} job={job}", flush=True)
 
     start_server(port, PostDataHandler)
-    print("VIDEO_SOURCE_READY waiting for compute signal", flush=True)
-    ready = wait_for_data_handler(port, timeout_sec=300.0)
-    print(f"VIDEO_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)
+    if _should_wait_for_compute_ready():
+        print("VIDEO_SOURCE_READY waiting for compute signal", flush=True)
+        ready = wait_for_data_handler(port, timeout_sec=300.0)
+        print(f"VIDEO_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)
+    else:
+        print("VIDEO_SOURCE_READY skip compute-ready wait", flush=True)
     post_json_to_peer("source", "/data", job, timeout_sec=120.0)
     print("VIDEO_SOURCE_POSTED_JOB to compute", flush=True)
 

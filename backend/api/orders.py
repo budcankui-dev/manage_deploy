@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
 
+from agents.agent_client import AgentClient
 from api.auth import get_current_user
 from config import settings
 from database import get_db
@@ -1748,12 +1749,15 @@ async def batch_auto_route(
         _benchmark_config(task_type)
         orders = [order for order in orders if _benchmark_task_type(order) == task_type]
 
-    pools_by_task_type: dict[str, dict[str, list[NodeModel]]] = {}
+    pools_by_task_type: dict[str, dict[str, Any]] = {}
+    skipped_unhealthy_nodes: list[dict[str, str]] = []
     required_task_types = {t for t in (_benchmark_task_type(order) for order in orders) if t}
     if task_type:
         required_task_types.add(task_type)
     for required_type in required_task_types:
-        pools_by_task_type[required_type] = await _benchmark_routing_pool(db, required_type)
+        pool = await _benchmark_routing_pool(db, required_type)
+        pools_by_task_type[required_type] = pool
+        skipped_unhealthy_nodes.extend(pool.get("skipped_unhealthy_nodes", []))
 
     routed = 0
     failed = []
@@ -1772,7 +1776,11 @@ async def batch_auto_route(
             failed.append({"order_id": order.id, "error": str(exc)})
 
     await db.commit()
-    return {"routed": routed, "failed": failed}
+    return {
+        "routed": routed,
+        "failed": failed,
+        "skipped_unhealthy_nodes": skipped_unhealthy_nodes,
+    }
 
 
 @router.post("/start-all-routed")
@@ -2219,7 +2227,39 @@ def _baseline_is_stable(raw_values: list[float] | None) -> bool:
     return statistics.stdev(raw_values) < median * 0.10
 
 
-async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> dict[str, list[NodeModel]]:
+async def _filter_nodes_with_healthy_agents(
+    nodes: list[NodeModel],
+) -> tuple[list[NodeModel], list[dict[str, str]]]:
+    """Keep local demo routing away from nodes whose Node Agent is unreachable."""
+    if not nodes:
+        return [], []
+
+    client = AgentClient(timeout=2)
+
+    async def probe(node: NodeModel) -> tuple[NodeModel, bool, str | None]:
+        endpoint = node.agent_address or node.management_ip
+        if not endpoint:
+            return node, False, "missing agent endpoint"
+        ok, payload = await client.health(endpoint)
+        if ok:
+            return node, True, None
+        reason = payload.get("error") if isinstance(payload, dict) else None
+        return node, False, reason or "node_agent unhealthy"
+
+    results = await asyncio.gather(*(probe(node) for node in nodes))
+    healthy = [node for node, ok, _reason in results if ok]
+    skipped = [
+        {
+            "hostname": node.hostname,
+            "reason": reason or "node_agent unhealthy",
+        }
+        for node, ok, reason in results
+        if not ok
+    ]
+    return healthy, skipped
+
+
+async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> dict[str, Any]:
     schedulable_rows = await db.execute(
         select(NodeModel).where(
             NodeModel.is_schedulable == True,
@@ -2230,6 +2270,12 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
     schedulable = schedulable_rows.scalars().all()
     if not schedulable:
         raise HTTPException(status_code=400, detail="No schedulable nodes available")
+
+    skipped_unhealthy_nodes: list[dict[str, str]] = []
+    schedulable, skipped = await _filter_nodes_with_healthy_agents(schedulable)
+    skipped_unhealthy_nodes.extend(skipped)
+    if not schedulable:
+        raise HTTPException(status_code=400, detail="No healthy schedulable nodes available")
 
     stable_compute: list[NodeModel] = []
     if task_type:
@@ -2247,7 +2293,11 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
     terminal_nodes = [
         node for node in schedulable if _node_can_host_endpoint_container(node)
     ] or [node for node in schedulable if node.deleted_at is None]
-    return {"terminal": terminal_nodes, "compute": stable_compute}
+    return {
+        "terminal": terminal_nodes,
+        "compute": stable_compute,
+        "skipped_unhealthy_nodes": skipped_unhealthy_nodes,
+    }
 
 
 def _pick_fixed_or_random_endpoint(

@@ -22,9 +22,10 @@
 #   WORKER_IMAGE     Full image repo name. Default: manage-deploy/scientific-matmul.
 #                    Set to e.g. 10.112.244.94:5000/scientific-matmul when pushing
 #                    to the test-lab private registry.
-#   WORKER_KIND      Worker type. Default: matmul. Supported: matmul, video.
-#                    When WORKER_KIND=video and WORKER_IMAGE is not set, the
-#                    default image is manage-deploy/low-latency-video.
+#   WORKER_KIND      Worker type. Default: matmul.
+#                    Supported: matmul, video, matmul-endpoint, video-endpoint.
+#                    Endpoint images are lightweight source/sink/receiver images
+#                    used by automated benchmark endpoints and manual user demos.
 #   WORKER_TAG       Image tag. Default: dev.
 #   WORKER_PLATFORM  Target platform passed to buildx (e.g. linux/amd64,
 #                    linux/arm64, or linux/amd64,linux/arm64 for multi-arch).
@@ -66,12 +67,20 @@ case "${KIND}" in
     DOCKERFILE="${CTX}/high-throughput-matmul/Dockerfile"
     DEFAULT_IMAGE="manage-deploy/scientific-matmul"
     ;;
+  matmul-endpoint)
+    DOCKERFILE="${CTX}/high-throughput-matmul/Dockerfile.endpoint"
+    DEFAULT_IMAGE="manage-deploy/scientific-matmul-endpoint"
+    ;;
   video)
     DOCKERFILE="${CTX}/low-latency-video/Dockerfile"
     DEFAULT_IMAGE="manage-deploy/low-latency-video"
     ;;
+  video-endpoint)
+    DOCKERFILE="${CTX}/low-latency-video/Dockerfile.endpoint"
+    DEFAULT_IMAGE="manage-deploy/low-latency-video-endpoint"
+    ;;
   *)
-    echo "ERROR: unsupported WORKER_KIND=${KIND}; expected matmul or video." >&2
+    echo "ERROR: unsupported WORKER_KIND=${KIND}; expected matmul, video, matmul-endpoint, or video-endpoint." >&2
     exit 1
     ;;
 esac

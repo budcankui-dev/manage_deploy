@@ -2339,7 +2339,14 @@ async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu
 
 
 @pytest.mark.asyncio
-async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
+async def test_batch_auto_route_can_scope_by_task_type(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    async def all_agents_healthy(nodes):
+        return list(nodes), []
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", all_agents_healthy)
+
     node_ids, template_id = await _seed_business_fixture(client)
     await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
     headers, _user = await _auth_headers(client, db_session, username="benchmark-scope-user")
@@ -2426,7 +2433,14 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_batch_auto_route_skips_non_routable_nodes(client, db_session):
+async def test_batch_auto_route_skips_non_routable_nodes(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    async def all_agents_healthy(nodes):
+        return list(nodes), []
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", all_agents_healthy)
+
     node_ids, template_id = await _seed_business_fixture(client)
     await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
     headers, _user = await _auth_headers(client, db_session, username="benchmark-routable-user")
@@ -2473,6 +2487,70 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session):
     )
     assert route_response.status_code == 200
     assert route_response.json()["routed"] == 6
+
+    for order_id in order_ids:
+        detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+        assert detail_response.status_code == 200
+        placements = detail_response.json()["routing_result"]["placements"]
+        assert all(item["topology_node_id"] != "worker-b" for item in placements)
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_skips_unhealthy_agent_nodes(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    node_ids, template_id = await _seed_business_fixture(client)
+    await _seed_stable_baselines(db_session, node_ids, "high_throughput_matmul")
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-healthy-agent-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    async def fake_probe(nodes):
+        healthy = [node for node in nodes if node.hostname != "worker-b"]
+        skipped = [
+            {"hostname": node.hostname, "reason": "node_agent unreachable"}
+            for node in nodes
+            if node.hostname == "worker-b"
+        ]
+        return healthy, skipped
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", fake_probe)
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 3,
+            "benchmark_run_id": "healthy-agent-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_ids = create_response.json()["order_ids"]
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "healthy-agent-run"},
+    )
+    assert route_response.status_code == 200
+    body = route_response.json()
+    assert body["routed"] == 3
+    assert body["skipped_unhealthy_nodes"] == [
+        {"hostname": "worker-b", "reason": "node_agent unreachable"}
+    ]
 
     for order_id in order_ids:
         detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)

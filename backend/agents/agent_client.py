@@ -249,6 +249,18 @@ class AgentClient:
         except httpx.RequestError as e:
             return False, {"error": str(e), "status_code": None}
 
+    async def health(self, management_ip: str) -> tuple[bool, dict]:
+        url = self._build_url(management_ip, "/health")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("status") == "healthy", data
+                return False, {"error": response.text, "status_code": response.status_code}
+        except httpx.RequestError as e:
+            return False, {"error": str(e), "status_code": None}
+
     async def delete_container_by_name(
         self,
         management_ip: str,
