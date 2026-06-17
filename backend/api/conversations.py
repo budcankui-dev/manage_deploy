@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from api.auth import get_current_user
 from database import async_session_maker, get_db
@@ -533,6 +534,7 @@ async def update_draft(
             runtime_plan.pop("callback_url", None)
 
     draft.runtime_plan = runtime_plan or None
+    flag_modified(draft, "runtime_plan")
     for key, value in updates.items():
         setattr(draft, key, value)
 

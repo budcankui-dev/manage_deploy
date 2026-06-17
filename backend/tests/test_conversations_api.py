@@ -158,6 +158,10 @@ async def test_confirm_intent_preserves_explicit_callback_url(client, db_session
         headers=headers,
     )
     assert confirm_response.status_code == 200
+    routing_payload = confirm_response.json()["latest_routing_request"]["input_payload"]
+    response_sink_node = next(item for item in routing_payload["nodes"] if item["task_node_id"] == "sink")
+    assert response_sink_node["business_port"] == 9000
+    assert response_sink_node["callback_url"] == "http://10.112.20.40:9000/callback"
 
     order = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
@@ -246,6 +250,12 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
     assert draft["source_endpoint"]["business_ip"] == "10.112.126.124"
     assert draft["destination_endpoint"]["business_ip"] == "10.112.20.40"
     assert draft["callback_url"] == "http://10.112.20.40:9000/callback"
+
+    refetch_response = await client.get(f"/api/conversations/{conversation_id}", headers=headers)
+    assert refetch_response.status_code == 200
+    refetched_draft = refetch_response.json()["latest_draft"]
+    assert refetched_draft["runtime_plan"]["destination_port"] == 9000
+    assert refetched_draft["callback_url"] == "http://10.112.20.40:9000/callback"
 
     confirm_response = await client.post(
         f"/api/conversations/{conversation_id}/confirm-intent",
