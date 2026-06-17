@@ -95,6 +95,8 @@ topology_node_id  真实拓扑节点名，对应 nodes.hostname，例如 compute
 
 路由回写只接受当前 placement 字段：`task_node_id`、`topology_node_id`、`gpu_device`。历史测试数据不迁移，清理后按当前格式重新创建。
 
+用户端接入演示里，source/sink 是用户自行控制的业务端点。平台会在 DAG 节点中同时给出 `fixed_topology_node_id`、数据面 `business_ip`，sink 还会给出用户登记的 `business_port` / `callback_url`。这些字段用于路由系统识别 A->B->C 业务流和下发 B->C 规则；路由系统不要替用户分配 sink 端口，也不要把用户端 receiver 是否启动作为路由成功条件。
+
 ## 3. 推荐部署方式
 
 推荐把外部路由服务部署在管理节点：
@@ -660,6 +662,7 @@ routing_resource_events(
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
+- 用户接入演示中，source/sink 可能额外包含 `business_ip`、`business_port`、`callback_url`。其中 `business_port` 是用户在前端登记或手动启动 receiver 时选择的目的端口，不是平台或路由系统动态分配的端口。
 - `priority` 和 `edges[].flow.priority` 用于识别业务流优先级，取值 `1-8`，`1` 最高。该值由平台“系统设置 -> 模态优先级字典”维护。
 - `edges[].flow` 用于识别业务流和目标端口引用；真实目标 IP/端口在 `/result` 响应的 `network_bindings` 中返回。路由系统可结合 `priority` 对不同业务流下发 QoS 或路径策略。
 - 新生成的 DAG 中 `modal` 使用中文业务模态名，例如 `高通量计算模态`、`低时延转发模态`；`routing_strategy` 使用英文策略枚举，例如 `resource_guarantee`、`low_latency_forwarding`。不要把二者合并为一个字段。
@@ -688,6 +691,8 @@ routing_resource_events(
 ```
 
 如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
+
+用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把 `callback_url=http://<sink-business-ip>:9000/callback` 注入 compute；路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
 
 ### 8.2 `source -> sink`
 
