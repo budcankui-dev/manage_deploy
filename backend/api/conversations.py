@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from typing import AsyncGenerator
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -92,6 +93,16 @@ def _callback_url_from_runtime_plan(runtime_plan: dict | None) -> str | None:
     return text or None
 
 
+def _normalize_callback_url(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="回调地址必须是 http:// 或 https:// 开头的完整 URL")
+    return text
+
+
 def _runtime_value(runtime_plan: dict | None, key: str):
     if not isinstance(runtime_plan, dict):
         return None
@@ -152,6 +163,22 @@ async def _resolve_endpoint_from_plan_or_name(
         return await resolve_user_endpoint(db, fallback_name)
     except EndpointResolutionError:
         return None
+
+
+async def _require_endpoint_from_plan_or_name(
+    db: AsyncSession,
+    runtime_plan: dict | None,
+    key: str,
+    fallback_name: str | None,
+    label: str,
+) -> ResolvedEndpoint:
+    value = _runtime_value(runtime_plan, key) or fallback_name
+    if not value:
+        raise HTTPException(status_code=400, detail=f"{label}不能为空，请填写已登记的终端别名、拓扑节点 ID 或业务面 IP")
+    try:
+        return await resolve_user_endpoint(db, str(value))
+    except EndpointResolutionError as exc:
+        raise HTTPException(status_code=400, detail=f"{label}不可用：{exc}") from exc
 
 
 @router.post("", response_model=ConversationResponse)
@@ -488,7 +515,7 @@ async def update_draft(
         if callback_url is None:
             runtime_plan.pop("callback_url", None)
         else:
-            normalized_callback_url = str(callback_url).strip()
+            normalized_callback_url = _normalize_callback_url(callback_url)
             if normalized_callback_url:
                 runtime_plan["callback_url"] = normalized_callback_url
             else:
@@ -569,17 +596,19 @@ async def confirm_intent(
         status=OrderStatus.PENDING,
         routing_status=RoutingStatus.PENDING,
     )
-    source_endpoint = await _resolve_endpoint_from_plan_or_name(
+    source_endpoint = await _require_endpoint_from_plan_or_name(
         db,
         draft.runtime_plan,
         "source_endpoint_input",
         draft.source_name,
+        "源端点",
     )
-    destination_endpoint = await _resolve_endpoint_from_plan_or_name(
+    destination_endpoint = await _require_endpoint_from_plan_or_name(
         db,
         draft.runtime_plan,
         "destination_endpoint_input",
         draft.destination_name,
+        "目的端点",
     )
     destination_port = _destination_port_from_runtime_plan(draft.runtime_plan)
     callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)

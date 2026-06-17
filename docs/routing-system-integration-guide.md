@@ -30,6 +30,14 @@
 
 路由系统只负责 **选择算力节点、GPU、路径和算法侧解释信息**。是否给某个 DAG 节点部署容器，是平台内部决策，路由系统不要关心。
 
+路由系统判断运行模式时只看下面这些字段，不要自行推断平台会部署哪些容器：
+
+| 场景 | 判断字段 | 路由系统处理 |
+|------|----------|--------------|
+| 用户端接入演示 | `runtime_config.platform_deployment.deployable_roles=["compute"]` | 只回写 `compute` placement；source/sink 是用户端点。 |
+| 只生成路由方案 | `runtime_config.platform_deployment.mode="route_only"` 或 `deployable_roles=[]` | 仍回写 `compute` placement 和 `metadata`；平台不物化实例，不分配容器端口。 |
+| 自动化测评 | `task_orders.is_benchmark=true` 或 `deployable_roles=["source","compute","sink"]` | 回写 source/compute/sink 或至少 compute placement；平台部署三类容器。当前不要求 `mode=automated_benchmark` 一定存在。 |
+
 ## 2. v1 冻结约定
 
 这些字段和语义后续不再改，路由同学可以按这个实现：
@@ -148,6 +156,26 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 | 领取工单 | `PATCH /api/routing-orders/{order_id}/claim` | 平台把 `pending -> computing`，并发时只有一个路由进程能成功。 |
 | 回写路由结果 | `POST /api/routing-orders/{order_id}/result` | 平台保存结果、校验 GPU 冲突、物化部署实例，并返回实际端口绑定 `network_bindings`。该接口要求先 claim，pending 工单直接回写会返回 409。 |
 | 确认网络就绪 | `POST /api/routing-orders/{order_id}/network-ready` | 路由系统下发流表/QoS 后调用，平台才启动或注册启动计划。 |
+
+`/result` 最小请求示例：
+
+```json
+{
+  "placements": [
+    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
+  ],
+  "metadata": {
+    "algorithm_version": "router-v1",
+    "selected_reason": "compute-1 当前 GPU 可用，且该业务 baseline 较稳定",
+    "candidate_scores": [
+      {"topology_node_id": "compute-1", "score": 0.91}
+    ]
+  },
+  "require_network_ready": true
+}
+```
+
+典型响应会包含 `routing_status=network_binding_ready` 和 `network_bindings`。如果是 `route_only` 工单，平台会保存 placements/metadata，但不会物化实例；响应中 `route_only=true`，`network_bindings=[]`，通常无需再调用 `/network-ready`。
 
 下面是可选运维接口，不是最小联调必需。只有当路由系统要完整维护资源占用、失败恢复和资源释放时再实现：
 

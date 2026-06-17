@@ -334,6 +334,100 @@ async def test_update_draft_can_clear_destination_port_and_generated_callback(cl
 
 
 @pytest.mark.asyncio
+async def test_confirm_intent_rejects_unroutable_user_endpoint(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="bad-endpoint-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    bad_node_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "bad-terminal",
+            "agent_address": "http://172.16.2.10:8001",
+            "management_ip": "172.16.2.10",
+            "business_ip": "10.112.2.10",
+            "node_kind": "terminal",
+            "topology_node_id": "bad-terminal-id",
+            "is_schedulable": True,
+            "is_routable": False,
+        },
+    )
+    assert bad_node_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "不可路由端点"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"source_name": "bad-terminal"},
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+
+    assert confirm_response.status_code == 400
+    assert "源端点不可用" in confirm_response.json()["detail"]
+    order = (await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))).scalar_one_or_none()
+    assert order is None
+
+
+@pytest.mark.asyncio
+async def test_update_draft_rejects_invalid_callback_url(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="bad-callback-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    create_response = await client.post("/api/conversations", json={"title": "非法回调"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"callback_url": "not-a-url"},
+        headers=headers,
+    )
+
+    assert patch_response.status_code == 400
+    assert "回调地址必须" in patch_response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_confirm_intent_supports_route_only_mode(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session, username="route-only-user")
