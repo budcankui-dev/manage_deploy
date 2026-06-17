@@ -160,8 +160,8 @@ async def test_confirm_intent_preserves_explicit_callback_url(client, db_session
     assert confirm_response.status_code == 200
     routing_payload = confirm_response.json()["latest_routing_request"]["input_payload"]
     response_sink_node = next(item for item in routing_payload["nodes"] if item["task_node_id"] == "sink")
-    assert response_sink_node["business_port"] == 9000
-    assert response_sink_node["callback_url"] == "http://10.112.20.40:9000/callback"
+    assert "business_port" not in response_sink_node
+    assert response_sink_node["callback_url"] == callback_url
 
     order = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))

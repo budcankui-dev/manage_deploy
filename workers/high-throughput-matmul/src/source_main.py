@@ -152,17 +152,22 @@ def _build_job_from_data_profile() -> dict:
     return job
 
 
+def _source_listen_enabled() -> bool:
+    raw = os.environ.get("SOURCE_LISTEN", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def main() -> int:
     job = _build_job_from_inputs()
 
-    # source 启动 HTTP server（用于接收 compute 的就绪信号，但不再依赖它）
-    # 直接推送 job 给 compute，附带重试逻辑
-    port = get_listen_port("source")
-    print(f"SOURCE_STARTING port={port} job={job}", flush=True)
+    listen_enabled = _source_listen_enabled()
+    port = get_listen_port("source") if listen_enabled else None
+    print(f"SOURCE_STARTING port={port or 'disabled'} job={job}", flush=True)
 
-    # 延迟确保容器完全启动，HTTP server 先起来
-    time.sleep(2)
-    start_server(port, PostDataHandler)
+    if listen_enabled:
+        # 自动化测评模式保留 source 监听，用于兼容受控三容器链路。
+        time.sleep(2)
+        start_server(port, PostDataHandler)
 
     # 直接 POST job 给 compute，带重试因为 compute 可能还在启动中
     # 推送成功即认为 job 已送达，后续 compute 会处理

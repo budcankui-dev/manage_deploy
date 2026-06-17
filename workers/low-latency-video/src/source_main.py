@@ -57,13 +57,20 @@ def _should_wait_for_compute_ready() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _source_listen_enabled() -> bool:
+    raw = os.environ.get("SOURCE_LISTEN", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def main() -> int:
     job = _build_job()
-    port = get_listen_port("source")
-    print(f"VIDEO_SOURCE_STARTING port={port} job={job}", flush=True)
+    listen_enabled = _source_listen_enabled()
+    port = get_listen_port("source") if listen_enabled else None
+    print(f"VIDEO_SOURCE_STARTING port={port or 'disabled'} job={job}", flush=True)
 
-    start_server(port, PostDataHandler)
-    if _should_wait_for_compute_ready():
+    if listen_enabled:
+        start_server(port, PostDataHandler)
+    if listen_enabled and _should_wait_for_compute_ready():
         print("VIDEO_SOURCE_READY waiting for compute signal", flush=True)
         ready = wait_for_data_handler(port, timeout_sec=300.0)
         print(f"VIDEO_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)

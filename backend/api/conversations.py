@@ -544,7 +544,10 @@ async def update_draft(
         draft.parse_status = ParseStatus.VALID if not errors else ParseStatus.INCOMPLETE
     conversation.status = ConversationStatus.DRAFTING
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-    await db.flush()
+    # The client may immediately refetch or confirm the draft after this PATCH.
+    # Commit before returning so callback/endpoint updates are not subject to the
+    # FastAPI yield-dependency cleanup timing.
+    await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 

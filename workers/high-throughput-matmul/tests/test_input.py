@@ -203,3 +203,15 @@ def test_input_manifest_fallback_to_top_level_fields():
             assert job["matrix_size"] == 1024
             assert job["batch_count"] == 5
             assert job["seed"] == 10
+
+
+def test_external_user_source_can_disable_local_listener(monkeypatch):
+    monkeypatch.setenv("SOURCE_LISTEN", "false")
+
+    assert sm._source_listen_enabled() is False
+
+
+def test_matmul_source_listens_by_default(monkeypatch):
+    monkeypatch.delenv("SOURCE_LISTEN", raising=False)
+
+    assert sm._source_listen_enabled() is True
