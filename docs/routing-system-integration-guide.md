@@ -84,18 +84,19 @@
 | 分布式存算模态 | 7 |
 | 大规模连接模态 | 8 |
 
-命名规则只保留两套概念：
+命名规则只保留三套概念，分别服务不同边界：
 
 ```text
-task_node_id      任务 DAG 内部子任务节点，例如 source / compute / sink
-topology_node_id  真实拓扑节点名，对应 nodes.hostname，例如 compute-1
+task_node_id              任务 DAG 内部子任务角色，例如 source / compute / sink
+nodes.hostname            平台节点别名，例如 h1 / compute-1；路由回写 placement 必须用它
+nodes.topology_node_id    拓扑/资产节点 ID，例如 h18001001；固定用户端点会写入 DAG
 ```
 
-不要把 `task_node_id` 当成物理机器，也不要把 `topology_node_id` 写进 DAG 的 `edges.from/to`。`edges.from/to` 永远引用 `task_node_id`。
+不要把 `task_node_id` 当成物理机器，也不要把物理节点名写进 DAG 的 `edges.from/to`。`edges.from/to` 永远引用 `task_node_id`。
 
-路由回写只接受当前 placement 字段：`task_node_id`、`topology_node_id`、`gpu_device`。历史测试数据不迁移，清理后按当前格式重新创建。
+路由回写只接受当前 placement 字段：`task_node_id`、`topology_node_id`、`gpu_device`。其中 `placements[].topology_node_id` 当前必须填写 `nodes.hostname`，不要填写数据库内部 `nodes.id`，也不要填写资产字段 `nodes.topology_node_id`。历史测试数据不迁移，清理后按当前格式重新创建。
 
-用户端接入演示里，source/sink 是用户自行控制的业务端点。平台会在 DAG 节点中同时给出 `fixed_topology_node_id`、数据面 `business_ip`，sink 还会给出用户登记的 `business_port` / `callback_url`。这些字段用于路由系统识别 A->B->C 业务流和下发 B->C 规则；路由系统不要替用户分配 sink 端口，也不要把用户端 receiver 是否启动作为路由成功条件。
+用户端接入演示里，source/sink 是用户自行控制的业务端点。平台会在 DAG 节点中给出 `fixed_topology_node_id`，该字段优先使用 `nodes.topology_node_id` 这类资产拓扑 ID，同时附带 `topology_alias=nodes.hostname`、数据面 `business_ip`，sink 还会给出用户登记的 `business_port` / `callback_url`。这些字段用于路由系统识别 A->B->C 业务流和下发 B->C 规则；路由系统不要替用户分配 sink 端口，也不要把用户端 receiver 是否启动作为路由成功条件。
 
 ## 3. 推荐部署方式
 
@@ -295,7 +296,8 @@ LIMIT 100;
 | `nodes[].task_node_id` | 子任务角色名，例如 `source/compute/sink`。 |
 | `nodes[].task_node_type` | 子任务类型，例如 `terminal/worker`。 |
 | `nodes[].resources` | 平台给出的 CPU、内存、磁盘、GPU 需求。 |
-| `nodes[].fixed_topology_node_id` | 用户输入并固定的真实拓扑节点，通常在 source/sink。 |
+| `nodes[].fixed_topology_node_id` | 用户输入并固定的真实拓扑端点，通常在 source/sink；优先为 `nodes.topology_node_id`。 |
+| `nodes[].topology_alias` | 平台节点别名，对应 `nodes.hostname`，便于展示和回查。 |
 | `nodes[].resources.gpu_units` | 判断该子任务是否需要 GPU。 |
 | `edges[].from/to` | 业务流两端，引用 `task_node_id`。 |
 | `edges[].bandwidth_mbps` | 带宽需求估计，供选路参考。 |
@@ -308,9 +310,9 @@ LIMIT 100;
 | 字段 | 用途 |
 |------|------|
 | `id` | 平台内部节点 ID。 |
-| `hostname` | 平台和路由接口使用的统一节点名，回写 `placements[].topology_node_id` 必须使用这个值，如 `h1`、`compute-1`。 |
+| `hostname` | 平台节点别名，回写 `placements[].topology_node_id` 必须使用这个值，如 `h1`、`compute-1`。 |
 | `display_name` | 真实主机名或展示名，如 `s15-Ubuntu-Host-1`。 |
-| `topology_node_id` | 实验拓扑或资产主机 ID，如 `h18001001`，仅用于展示和审计，不用于回写。 |
+| `topology_node_id` | 实验拓扑或资产主机 ID，如 `h18001001`；用户固定端点会在 DAG 的 `fixed_topology_node_id` 中使用它，但路由回写 placement 不使用它。 |
 | `topology_zone` | 拓扑区域，如 `h180`、`h400`、`h410`、`compute`。 |
 | `business_ip` / `business_ipv6` | 数据面地址。 |
 | `node_kind` | `worker`、`terminal`、`both`、`admin` 等。 |
@@ -334,8 +336,8 @@ WHERE deleted_at IS NULL
 - `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
 - 新增终端节点时推荐也部署 Docker 和 Node Agent，并设置 `is_schedulable=1, is_routable=1`，这样同一台终端既能承载 source/sink 容器，也能只作为路由端点。
 - 是否为 source/sink 创建容器由平台工单的 `platform_deployment.deployable_roles` 决定，不由路由系统决定。
-- 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统应按 `nodes.hostname` 匹配。
-- 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id`。
+- 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统可先按 `nodes.topology_node_id` 匹配，匹配不到再按 `nodes.hostname` 兜底；平台生成的新 DAG 会同时给出 `topology_alias` 方便回查。
+- 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id` 或资产字段 `nodes.topology_node_id`。
 
 扩展拓扑节点时按下面规则配置即可：
 
@@ -656,7 +658,7 @@ routing_resource_events(
 关键理解：
 
 - `task_node_id` 是任务内部子任务节点名，不是物理节点名。
-- 用户输入的源节点和目的节点写在 `fixed_topology_node_id`。
+- 用户输入的源节点和目的节点写在 `fixed_topology_node_id`，平台同时给出 `topology_alias`、`business_ip/business_ipv6` 便于路由系统匹配和展示。
 - 源节点和目的节点可以是物理终端节点，也可以是物理计算节点；在 DAG 里它们仍然只是 `source/sink` 子任务角色。
 - source/sink 是否启动端点容器由平台工单的 `platform_deployment.deployable_roles` 决定；例如 `["source","compute","sink"]` 表示三类角色都部署，`["compute"]` 表示 source/sink 只作为路由端点。
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
@@ -763,7 +765,8 @@ Content-Type: application/json
 - 如果没有任何节点需要部署，平台只保存结果并把工单标记完成，不创建容器实例。
 - `route_only` 工单也属于“不创建容器实例”：响应会包含 `deployment_required=false`、`deployment_mode=route_only`、`instance_id=null`。这表示“路由方案已生成”，不是“业务容器已部署完成”。
 - 如果需要部署容器，平台会物化实例、动态分配端口，并返回 `network_bindings`。
-- 默认返回后工单进入 `routing_status=network_binding_ready`，等待路由系统下发流表/QoS。
+- `/result` 返回后若 `network_ready_required=true`，工单进入 `routing_status=network_binding_ready`，表示“端口绑定已生成，等待路由系统下发流表/QoS”，不是业务已完成。
+- 路由系统完成下发后调用 `/network-ready`，平台才把 `routing_status` 推进到 `completed`，并按需启动或注册启动计划。
 - 如果 GPU 冲突，平台返回 `409`，路由系统需要撤销本次资源扣减并重新路由或 requeue。
 - 如果 HTTP 超时，路由系统应先查询该工单状态；若已进入 `network_binding_ready` 或 `completed`，按平台已有结果继续处理，不要重复扣资源。若仍为 `computing` 且没有结果，再按路由系统自己的幂等策略决定是否重新回写同一结果。
 
@@ -801,6 +804,17 @@ Content-Type: application/json
   ]
 }
 ```
+
+字段契约：
+
+| 字段 | 含义 |
+|------|------|
+| `src_topology_node_id` / `dst_topology_node_id` | 真实拓扑资产 ID；若节点没有资产 ID，则退化为 `nodes.hostname`。 |
+| `src_host` / `dst_host` | 平台节点别名，对应 `nodes.hostname`。 |
+| `src_ip` / `dst_ip` | 数据面 IP，受平台 `PREFER_BUSINESS_IPV6` 配置影响。 |
+| `dst_port` / `dst_named_ports` | 目的端实际监听端口。平台部署的容器端口由平台动态分配；用户外部 sink 端口来自用户登记的 `business_port`。 |
+| `dst_access_url` | 平台建议的访问地址；如果用户提供 `callback_url`，这里会等于该回调地址。 |
+| `src_external` / `dst_external` | `true` 表示该端点不是本次平台部署的容器，而是用户或外部端点。 |
 
 路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态、`priority`、`routing_strategy` 和路由系统自身策略处理。策略字典见本文档第 2 节冻结约定，避免把“低时延转发模态”和“低时延转发策略”混为一个字段。
 

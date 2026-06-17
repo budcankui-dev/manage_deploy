@@ -273,6 +273,67 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
 
 
 @pytest.mark.asyncio
+async def test_update_draft_can_clear_destination_port_and_generated_callback(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="clear-port-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h-clear-sink",
+            "display_name": "h-clear-sink",
+            "agent_address": "http://172.16.1.13:8001",
+            "management_ip": "172.16.1.13",
+            "business_ip": "10.112.220.40",
+            "node_kind": "terminal",
+            "topology_node_id": "h-clear-sink-id",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "清空端口"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+
+    set_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"destination_endpoint_input": "h-clear-sink", "destination_port": 9000},
+        headers=headers,
+    )
+    assert set_response.status_code == 200
+    assert set_response.json()["latest_draft"]["callback_url"] == "http://10.112.220.40:9000/callback"
+
+    clear_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={"destination_port": None},
+        headers=headers,
+    )
+    assert clear_response.status_code == 200
+    cleared_draft = clear_response.json()["latest_draft"]
+    assert "destination_port" not in (cleared_draft["runtime_plan"] or {})
+    assert cleared_draft["callback_url"] is None
+
+
+@pytest.mark.asyncio
 async def test_confirm_intent_supports_route_only_mode(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session, username="route-only-user")
@@ -406,6 +467,56 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert by_role["compute"].env["USE_GPU"] == "true"
     assert by_role["compute"].env["GPU_DEVICE"] == "0"
     assert by_role["compute"].gpu_id == "0"
+
+
+@pytest.mark.asyncio
+async def test_routing_result_requiring_network_ready_keeps_conversation_pending(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="network-ready-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "等待网络就绪"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
+    assert claim_response.status_code == 200
+    result_response = await client.post(
+        f"/api/routing-orders/{conversation_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": _standard_placements(),
+            "require_network_ready": True,
+        },
+    )
+    assert result_response.status_code == 200
+    assert result_response.json()["routing_status"] == "network_binding_ready"
+
+    detail_response = await client.get(f"/api/conversations/{conversation_id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "ready_to_submit"
 
 
 @pytest.mark.asyncio

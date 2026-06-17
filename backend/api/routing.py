@@ -9,8 +9,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from api.orders import RoutingResultPayload, receive_routing_result as receive_order_routing_result
 from database import get_db
-from enums import OrderStatus, RoutingStatus, TaskStatus
-from models import RoutingResourceEvent, TaskInstance, TaskOrder
+from enums import ConversationStatus, OrderStatus, RoutingStatus, TaskStatus
+from models import Conversation, RoutingResourceEvent, TaskInstance, TaskOrder
 from services.dag_executor import DAGExecutor
 from services.routing_network import mark_network_ready, network_ready_required
 from services.scheduler import TaskScheduler
@@ -256,6 +256,13 @@ async def confirm_routing_order_network_ready(
     already_ready = not network_ready_required(order)
     mark_network_ready(order, payload.metadata)
     order.routing_status = RoutingStatus.COMPLETED.value
+    if order.conversation_id:
+        conversation = (
+            await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
+        ).scalar_one_or_none()
+        if conversation is not None:
+            conversation.status = ConversationStatus.SUBMITTED
+            conversation.updated_at = datetime.utcnow()
     flag_modified(order, "runtime_config")
 
     instance: TaskInstance | None = None

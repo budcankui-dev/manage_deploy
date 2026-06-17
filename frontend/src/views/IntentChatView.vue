@@ -497,7 +497,7 @@ const canConfirm = computed(() =>
 )
 const conversationStatusLabel = computed(() => {
   const s = conversation.value?.status
-  return { drafting: '草稿', awaiting_routing: '待分配', ready_to_submit: '待部署', submitted: '已部署', failed: '失败', cancelled: '已取消' }[s] || s || ''
+  return { drafting: '草稿', awaiting_routing: '待分配', ready_to_submit: '待网络就绪', submitted: '已提交', failed: '失败', cancelled: '已取消' }[s] || s || ''
 })
 const canCancelOrder = computed(() => {
   const s = conversation.value?.status
@@ -704,7 +704,7 @@ function formatStatus(status) {
   return ({
     drafting: '草稿中',
     awaiting_routing: '待分配',
-    ready_to_submit: '待部署',
+    ready_to_submit: '待网络就绪',
     submitted: '已提交',
     rejected: '已拒绝',
     failed: '失败',

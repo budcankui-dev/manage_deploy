@@ -75,4 +75,8 @@ async def resolve_user_endpoint(db: AsyncSession, value: str) -> ResolvedEndpoin
     node = row.scalar_one_or_none()
     if node is None:
         raise EndpointResolutionError(f"端点未登记为业务面拓扑节点：{text}")
+    if not node.is_routable:
+        raise EndpointResolutionError(f"端点未启用业务面路由：{text}")
+    if not (_clean(node.business_ip) or _clean(node.business_ipv6)):
+        raise EndpointResolutionError(f"端点缺少业务面 IP：{text}")
     return _identity_for(node, text)

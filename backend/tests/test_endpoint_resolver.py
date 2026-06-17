@@ -12,6 +12,7 @@ async def _add_node(
     management_ip: str,
     business_ip: str,
     business_ipv6: str | None = None,
+    is_routable: bool = True,
 ):
     node = Node(
         hostname=hostname,
@@ -23,7 +24,7 @@ async def _add_node(
         topology_node_id=topology_node_id,
         node_kind="terminal",
         is_schedulable=True,
-        is_routable=True,
+        is_routable=is_routable,
     )
     db_session.add(node)
     await db_session.flush()
@@ -110,3 +111,32 @@ async def test_resolve_endpoint_rejects_management_ip_when_not_business_ip(db_se
 
     with pytest.raises(EndpointResolutionError):
         await resolve_user_endpoint(db_session, "172.16.0.15")
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_rejects_non_routable_node(db_session):
+    await _add_node(
+        db_session,
+        hostname="h6",
+        topology_node_id="h18009006",
+        management_ip="172.16.0.16",
+        business_ip="10.112.151.47",
+        is_routable=False,
+    )
+
+    with pytest.raises(EndpointResolutionError):
+        await resolve_user_endpoint(db_session, "h6")
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_rejects_node_without_business_address(db_session):
+    await _add_node(
+        db_session,
+        hostname="h7",
+        topology_node_id="h4001001",
+        management_ip="172.16.0.17",
+        business_ip="",
+    )
+
+    with pytest.raises(EndpointResolutionError):
+        await resolve_user_endpoint(db_session, "h7")

@@ -1280,7 +1280,11 @@ async def _sync_conversation_after_order_routing(
 
     if conversation is not None:
         conversation.materialized_order_id = order.id
-        conversation.status = ConversationStatus.SUBMITTED
+        conversation.status = (
+            ConversationStatus.READY_TO_SUBMIT
+            if require_network_ready
+            else ConversationStatus.SUBMITTED
+        )
         conversation.updated_at = datetime.utcnow()
 
 

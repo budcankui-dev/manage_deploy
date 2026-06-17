@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -152,6 +152,18 @@ def _fixed_topology_name(order: TaskOrder, role: str, dag_nodes: dict[str, dict[
     return None
 
 
+def _dag_node_port(role: str, dag_nodes: dict[str, dict[str, Any]]) -> int | None:
+    dag_node = dag_nodes.get(role) or {}
+    value = dag_node.get("business_port")
+    try:
+        port = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    if port is None or port < 1 or port > 65535:
+        return None
+    return port
+
+
 def _external_callback_url(order: TaskOrder, role: str, dag_nodes: dict[str, dict[str, Any]]) -> str | None:
     dag_node = dag_nodes.get(role) or {}
     value = dag_node.get("callback_url")
@@ -191,14 +203,25 @@ def _binding_for_roles(
     src_machine = machines_by_id.get(src_node.node_id) if src_node else None
     dst_machine = machines_by_id.get(dst_node.node_id) if dst_node else None
 
-    src_topology = src_machine.hostname if src_machine else _fixed_topology_name(order, src_role, dag_nodes)
-    dst_topology = dst_machine.hostname if dst_machine else _fixed_topology_name(order, dst_role, dag_nodes)
+    src_topology = (
+        src_machine.topology_node_id or src_machine.hostname
+        if src_machine
+        else _fixed_topology_name(order, src_role, dag_nodes)
+    )
+    dst_topology = (
+        dst_machine.topology_node_id or dst_machine.hostname
+        if dst_machine
+        else _fixed_topology_name(order, dst_role, dag_nodes)
+    )
     if not src_machine and src_topology:
         src_machine = machines_by_hostname.get(src_topology)
     if not dst_machine and dst_topology:
         dst_machine = machines_by_hostname.get(dst_topology)
 
     port_map = _port_map(dst_node) if dst_node else {}
+    external_dst_port = _dag_node_port(dst_role, dag_nodes) if dst_node is None else None
+    if external_dst_port is not None:
+        port_map = {"external": external_dst_port}
     dst_ports = sorted(set(port_map.values()))
     primary_port = dst_ports[0] if dst_ports else None
     flow = dag_edge.get("flow") if isinstance(dag_edge.get("flow"), dict) else {}
@@ -279,8 +302,19 @@ async def build_network_bindings(
         if name
     }
     if endpoint_names:
-        endpoint_rows = await db.execute(select(NodeModel).where(NodeModel.hostname.in_(endpoint_names)))
-        machines_by_hostname = {machine.hostname: machine for machine in endpoint_rows.scalars().all()}
+        endpoint_rows = await db.execute(
+            select(NodeModel).where(
+                or_(
+                    NodeModel.hostname.in_(endpoint_names),
+                    NodeModel.topology_node_id.in_(endpoint_names),
+                )
+            )
+        )
+        machines_by_hostname = {}
+        for machine in endpoint_rows.scalars().all():
+            machines_by_hostname[machine.hostname] = machine
+            if machine.topology_node_id:
+                machines_by_hostname[machine.topology_node_id] = machine
     else:
         machines_by_hostname = {}
 

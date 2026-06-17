@@ -1697,6 +1697,139 @@ async def test_compute_only_external_sink_binding_uses_callback_url(client, db_s
 
 
 @pytest.mark.asyncio
+async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_session):
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h-binding-source",
+            "agent_address": "http://127.0.0.1:8401",
+            "management_ip": "10.13.0.1",
+            "business_ip": "10.13.1.1",
+            "node_kind": "terminal",
+            "topology_node_id": "h18001001",
+            "is_schedulable": False,
+            "is_routable": True,
+        },
+    )
+    assert source_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h-binding-sink",
+            "agent_address": "http://127.0.0.1:8403",
+            "management_ip": "10.13.0.3",
+            "business_ip": "10.13.1.3",
+            "node_kind": "terminal",
+            "topology_node_id": "h18005003",
+            "is_schedulable": False,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "binding-compute",
+            "agent_address": "http://127.0.0.1:8402",
+            "management_ip": "10.13.0.2",
+            "business_ip": "10.13.1.2",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+    compute_node_id = compute_response.json()["id"]
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "compute-only-topology-id-template",
+            "description": "compute is deployed, endpoints are fixed by asset topology id",
+            "nodes": [
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "port_defs": [{"name": "compute", "label": "compute HTTP", "auto": True, "range": [18800, 18899]}],
+                    "node_id": compute_node_id,
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    start = datetime.now(UTC)
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="compute-only-topology-id-routing",
+        source_name="h-binding-source",
+        destination_name="h-binding-sink",
+        business_start_time=start,
+        business_end_time=start + timedelta(minutes=5),
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul", "data_profile": {}},
+            "platform_deployment": {"deployable_roles": ["compute"]},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "compute-only-topology-id-routing",
+            "order_id": "compute-only-topology-id-routing",
+            "nodes": [
+                {
+                    "task_node_id": "source",
+                    "task_role": "source",
+                    "task_node_type": "terminal",
+                    "fixed_topology_node_id": "h18001001",
+                    "topology_alias": "h-binding-source",
+                },
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
+                {
+                    "task_node_id": "sink",
+                    "task_role": "sink",
+                    "task_node_type": "terminal",
+                    "fixed_topology_node_id": "h18005003",
+                    "topology_alias": "h-binding-sink",
+                    "business_port": 9000,
+                },
+            ],
+            "edges": [
+                {"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10},
+                {"from": "compute", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10},
+            ],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "compute", "topology_node_id": "binding-compute", "gpu_device": "0"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    bindings = response.json()["network_bindings"]
+    source_binding = next(item for item in bindings if item["from"] == "source")
+    sink_binding = next(item for item in bindings if item["to"] == "sink")
+    assert source_binding["src_topology_node_id"] == "h18001001"
+    assert source_binding["src_host"] == "h-binding-source"
+    assert source_binding["src_ip"] == "10.13.1.1"
+    assert sink_binding["dst_topology_node_id"] == "h18005003"
+    assert sink_binding["dst_host"] == "h-binding-sink"
+    assert sink_binding["dst_ip"] == "10.13.1.3"
+    assert sink_binding["dst_port"] == 9000
+    assert sink_binding["dst_access_url"] == "http://10.13.1.3:9000"
+
+
+@pytest.mark.asyncio
 async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="route-compute-only-user")

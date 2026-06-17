@@ -433,12 +433,15 @@ async def update_draft(
     if not draft:
         raise HTTPException(status_code=404, detail="Intent draft not found")
 
+    fields_set = payload.model_fields_set
     updates = payload.model_dump(exclude_unset=True)
     runtime_plan = dict(draft.runtime_plan or {})
     source_endpoint_input = updates.pop("source_endpoint_input", None)
     destination_endpoint_input = updates.pop("destination_endpoint_input", None)
+    destination_port_was_set = "destination_port" in fields_set
     destination_port = updates.pop("destination_port", None)
     route_only = updates.pop("route_only", None)
+    callback_url_was_set = "callback_url" in fields_set
     callback_url = updates.pop("callback_url", None)
 
     if source_endpoint_input is not None:
@@ -465,33 +468,42 @@ async def update_draft(
         else:
             runtime_plan.pop("destination_endpoint_input", None)
 
-    if destination_port is not None:
-        try:
-            port = int(destination_port)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
-        if port < 1 or port > 65535:
-            raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
-        runtime_plan["destination_port"] = port
+    if destination_port_was_set:
+        if destination_port is None:
+            runtime_plan.pop("destination_port", None)
+            runtime_plan.pop("callback_url", None)
+        else:
+            try:
+                port = int(destination_port)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
+            if port < 1 or port > 65535:
+                raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
+            runtime_plan["destination_port"] = port
 
     if route_only is not None:
         runtime_plan["route_only"] = bool(route_only)
 
-    if callback_url is not None:
-        normalized_callback_url = str(callback_url).strip()
-        if normalized_callback_url:
-            runtime_plan["callback_url"] = normalized_callback_url
-        else:
+    if callback_url_was_set:
+        if callback_url is None:
             runtime_plan.pop("callback_url", None)
+        else:
+            normalized_callback_url = str(callback_url).strip()
+            if normalized_callback_url:
+                runtime_plan["callback_url"] = normalized_callback_url
+            else:
+                runtime_plan.pop("callback_url", None)
 
-    if destination_endpoint_input is not None or destination_port is not None:
+    if destination_endpoint_input is not None or destination_port_was_set:
         try:
             destination_endpoint = await _resolve_endpoint_from_plan(db, runtime_plan, "destination_endpoint_input")
         except EndpointResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         port = _destination_port_from_runtime_plan(runtime_plan)
-        if destination_endpoint and port:
+        if destination_endpoint and port and not callback_url_was_set:
             runtime_plan["callback_url"] = _callback_url_for_destination(destination_endpoint, port)
+        elif not port and not callback_url_was_set:
+            runtime_plan.pop("callback_url", None)
 
     draft.runtime_plan = runtime_plan or None
     for key, value in updates.items():
