@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir \
 COPY _common /app/_common
 COPY high-throughput-matmul/src/source_main.py /app/src/source_main.py
 COPY high-throughput-matmul/src/sink_main.py /app/src/sink_main.py
+COPY high-throughput-matmul/src/receiver_main.py /app/src/receiver_main.py
 
 ENV PYTHONPATH=/app/src:/app
 CMD ["python", "/app/src/source_main.py"]

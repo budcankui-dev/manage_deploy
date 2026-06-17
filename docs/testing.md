@@ -257,6 +257,23 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 
 如需演示外部目的端回调，可先通过 `PATCH /api/conversations/{id}/draft` 写入 `{"callback_url":"https://user.example.com/api/result-callback"}`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
 
+目的端 receiver 冒烟可在本机或终端节点上运行：
+
+```bash
+PYTHONPATH=workers python3 workers/high-throughput-matmul/src/receiver_main.py --port 9000
+```
+
+另开终端发送回调：
+
+```bash
+curl -sS -X POST http://127.0.0.1:9000/callback \
+  -H 'Content-Type: application/json' \
+  -d '{"order_id":"demo-order","metric_key":"effective_gflops","result":{"effective_gflops":123.4}}'
+curl -sS http://127.0.0.1:9000/latest | python3 -m json.tool
+```
+
+期望：`POST /callback` 返回 `status=ok`，浏览器打开 `http://127.0.0.1:9000/` 能看到“用户端结果接收器”、工单 ID 和指标值。视频业务使用 `workers/low-latency-video/src/receiver_main.py`，如果回调包含 `annotated_frame_data_url`，首页会展示带框预览图。
+
 若 compute 容器已运行且业务面可达，可用轻量用户端客户端提交任务：
 
 ```bash

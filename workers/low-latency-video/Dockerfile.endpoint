@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
 COPY _common /app/_common
 COPY low-latency-video/src/source_main.py /app/src/source_main.py
 COPY low-latency-video/src/sink_main.py /app/src/sink_main.py
+COPY low-latency-video/src/receiver_main.py /app/src/receiver_main.py
 
 ENV PYTHONPATH=/app/src:/app
 CMD ["python", "/app/src/source_main.py"]
