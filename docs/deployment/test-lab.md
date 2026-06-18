@@ -4,6 +4,8 @@
 
 矩阵乘法业务目标验收的完整迁移、构建、预检和页面操作步骤见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
+后续从当前 10.112 调试网络切换到 172.16 管理网段、并让本机通过管理节点跳板访问拓扑节点和业务 IPv6 容器 UI 的方案见 [manager-jump-network-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/manager-jump-network-runbook.md)。
+
 ## 当前拓扑
 
 | 名称 | 角色 | IP | SSH 端口 | SSH 用户 | GPU | 数据盘 | 备注 |
@@ -212,13 +214,13 @@ sudo systemctl restart docker
 
 ## 业务面 IPv6 配置
 
-当前验收拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。
+当前调试拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。注意：下表是当前校园网 IPv6 调试地址，重启或网络切换后可能变化；正式验收时会替换为验收数据面 IPv6，并按 [manager-jump-network-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/manager-jump-network-runbook.md) 更新 `nodes.business_ipv6`。
 
 | 节点 | 10.112 网卡 | 业务 IPv6 | 调度 |
 |------|-------------|-----------|------|
 | admin-server | `eno1` | `2001:da8:215:6a01:d6ae:52ff:fec9:1188` | 否 |
-| compute-1 | `enp4s0` | `2001:da8:215:6a01:ad10:31fd:fe24:5f61` | 是 |
-| compute-2 | `enp7s0` | `2001:da8:215:6a01:26b4:87d6:14d6:154f` | 是 |
+| compute-1 | `enp6s0` | `2001:da8:215:6a01:e381:3ba8:e0:c6c9` | 是 |
+| compute-2 | `enp5s0` | `2001:da8:215:6a01:7e:a98d:5fc5:6ca7` | 是 |
 | compute-3 | `enp129s0f0` | `2001:da8:215:6a01:ec4:7aff:fe85:7814` | 是 |
 
 切换要求：
@@ -231,10 +233,12 @@ sudo systemctl restart docker
 连通性核验：
 
 ```bash
-ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ad10:31fd:fe24:5f61"
-ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:26b4:87d6:14d6:154f"
-ssh admin-server "ping -6 -c 2 2001:da8:215:6a01:ec4:7aff:fe85:7814"
+ssh manage-admin "ping -6 -c 2 2001:da8:215:6a01:e381:3ba8:e0:c6c9"
+ssh manage-admin "ping -6 -c 2 2001:da8:215:6a01:7e:a98d:5fc5:6ca7"
+ssh manage-admin "ping -6 -c 2 2001:da8:215:6a01:ec4:7aff:fe85:7814"
 ```
+
+如果 ping 不通或地址与表格不一致，先通过跳板登录对应节点执行 `ip -br -6 addr`，再更新 `nodes.business_ipv6`；不要继续使用过期 IPv6 做业务链路验收。
 
 业务核验不只看实例 `running`。需要抽查真实容器环境变量和日志，确认：
 
