@@ -33,7 +33,7 @@
 |------|------|------|
 | compute-1 | `/home` 约 `114G/137G`，剩余约 `16G` | 主要占用为 `/home/bupt`、`/home/zhujie`、`/home/citens`、`/home/yanshuo`、`/home/yanw`、`/home/newip` 等；删除前需人工确认归属。 |
 | compute-2 | `/` 约 `117G/234G`，剩余约 `105G` | `/home/chengyubin`、`/home/zhujie`、`/home/ymy` 占用较大；Docker 镜像可回收较多，但为避免影响演示镜像，未主动删除镜像。 |
-| compute-3 | `/` 约 `48G/787G`，空间充足 | 已清理 Docker build cache，暂无根目录压力。 |
+| compute-3 | `/data` 约 `120G/1.8T`，剩余约 `1.6T` | Docker 与 containerd 已迁移到 `/data`，暂无空间压力。 |
 
 ## Docker / containerd 存储
 
@@ -44,9 +44,9 @@ Docker `data-root` 和 containerd `root/state` 是两套路径；即使 Docker `
 | 节点 | Docker data-root | containerd root | containerd state | 备注 |
 |------|------------------|-----------------|------------------|------|
 | admin-server | `/mnt/data/docker` | `/mnt/data/containerd-root` | `/mnt/data/containerd-state` | 已从系统盘迁移，Registry/MySQL/前端已恢复 |
-| compute-1 | `/disk/sdb/docker` | `/disk/sdc/containerd-root` | `/disk/sdc/containerd-state` | 已显式迁移，Docker 与 containerd 均不写系统盘 |
-| compute-2 | `/data/hdd1/docker` | `/data/hdd1/containerd-root` | `/data/hdd1/containerd-state` | 已从系统盘迁移，解决拉大镜像空间不足 |
-| compute-3 | `/disk/sdb/docker` | `/data/containerd-root` | `/data/containerd-state` | 已从系统盘迁移 |
+| compute-1 | `/data/hdd1/docker` | `/data/hdd1/containerd-root` | `/data/hdd1/containerd-state` | 已显式迁移，Docker 与 containerd 均不写系统盘 |
+| compute-2 | `/disk/sdb/docker` | `/disk/sdc/containerd-root` | `/disk/sdc/containerd-state` | 已从系统盘迁移，解决拉大镜像空间不足 |
+| compute-3 | `/data/docker` | `/data/containerd-root` | `/data/containerd-state` | 已从系统盘迁移，Docker 与 containerd 均不写系统盘 |
 
 迁移后应通过以下命令复核：
 
