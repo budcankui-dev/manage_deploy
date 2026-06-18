@@ -9,11 +9,31 @@
 | 名称 | 角色 | IP | SSH 端口 | SSH 用户 | GPU | 数据盘 | 备注 |
 |------|------|----|----------|----------|-----|--------|------|
 | admin-server | 管理面主控 | `10.112.244.94` | `22` | `bupt` | - | `/mnt/data` | 部署前端、后端、MySQL、MinIO、私有 Registry |
-| compute-1 | 业务节点 | `10.112.249.191` | `2345` | `chengyubin` | TITAN X x 1 | `/disk/sdc` | 可作为 source / compute / sink |
+| compute-1 | 业务节点 | `10.112.38.25` | `2345` | `chengyubin` | TITAN X x 1 | `/disk/sdc` | 可作为 source / compute / sink |
 | compute-2 | 业务节点 | `10.112.17.51` | `2345` | `chengyubin` | TITAN X x 1 | `/data/hdd1` | 可作为 source / compute / sink |
 | compute-3 | 业务节点 | `10.112.59.209` | `22` | `compute` | Tesla P40 x 8 | `/data` | 静态 IP，MAC `0c:c4:7a:85:78:14`，可作为 source / compute / sink |
 
 当前阶段默认 `admin-server` 是管理节点，`compute-*` 是业务节点。矩阵乘法演示仍按随路计算数据流 `source -> compute -> sink` 验证，业务数据不通过共享宿主机文件传递。
+
+## 固定 IP 与空间维护
+
+`compute-1`、`compute-2` 原为 DHCP 动态地址，重启后可能变更。当前已将两台机器按现网地址改为 NetworkManager manual 静态 IPv4；`compute-3` 已使用 netplan 静态 IPv4。
+
+| 节点 | 网卡 | IPv4 配置 | 网关 | DNS |
+|------|------|-----------|------|-----|
+| compute-1 | `enp6s0` | `10.112.38.25/16` | `10.112.0.1` | `10.3.9.4, 10.3.9.5, 10.3.9.6` |
+| compute-2 | `enp5s0` | `10.112.17.51/16` | `10.112.0.1` | `10.3.9.5, 10.3.9.4, 10.3.9.6` |
+| compute-3 | `enp129s0f0` | `10.112.59.209/16` | `10.112.0.1` | 见 `/etc/netplan/99-static-enp129s0f0.yaml` |
+
+2026-06-18 已执行低风险空间清理：Docker build cache、已停止容器、未使用 volume、apt cache、旧日志归档。未删除任何用户家目录或数据盘用户文件。
+
+当前需关注的空间项：
+
+| 节点 | 现状 | 说明 |
+|------|------|------|
+| compute-1 | `/home` 约 `114G/137G`，剩余约 `16G` | 主要占用为 `/home/bupt`、`/home/zhujie`、`/home/citens`、`/home/yanshuo`、`/home/yanw`、`/home/newip` 等；删除前需人工确认归属。 |
+| compute-2 | `/` 约 `117G/234G`，剩余约 `105G` | `/home/chengyubin`、`/home/zhujie`、`/home/ymy` 占用较大；Docker 镜像可回收较多，但为避免影响演示镜像，未主动删除镜像。 |
+| compute-3 | `/` 约 `48G/787G`，空间充足 | 已清理 Docker build cache，暂无根目录压力。 |
 
 ## Docker / containerd 存储
 
@@ -53,7 +73,7 @@ ssh manage-compute-3 hostname
 
 ```bash
 ssh -p 22 bupt@10.112.244.94 hostname
-ssh -p 2345 chengyubin@10.112.249.191 hostname
+ssh -p 2345 chengyubin@10.112.38.25 hostname
 ssh -p 2345 chengyubin@10.112.17.51 hostname
 ssh -p 22 compute@10.112.59.209 hostname
 ```

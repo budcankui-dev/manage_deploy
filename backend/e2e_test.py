@@ -5,7 +5,7 @@ sys.path.insert(0, ".")
 import httpx
 
 BASE = "http://localhost:8000"
-AGENT_C1 = "http://10.112.249.191:8001"
+AGENT_C1 = "http://10.112.38.25:8001"
 AGENT_C2 = "http://10.112.17.51:8001"
 
 async def main():
