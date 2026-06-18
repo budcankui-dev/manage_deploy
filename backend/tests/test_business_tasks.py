@@ -3,6 +3,7 @@ import pytest
 from api.business_tasks import (
     build_instance_create_from_business_task,
     evaluate_business_objective,
+    _result_matches_baseline_profile,
 )
 from enums import DeploymentMode
 from schemas.task import BusinessPlacement, BusinessObjective, BusinessTaskCreate, RoutingResult
@@ -281,3 +282,53 @@ def test_evaluate_video_latency_fails_above_acceptance_multiplier():
     assert evaluation.business_success is False
     assert evaluation.failure_reason is not None
     assert evaluation.target_value == 150.0  # 100 * 1.5
+
+
+def test_matmul_baseline_profile_matches_only_official_profile():
+    assert _result_matches_baseline_profile(
+        "high_throughput_matmul",
+        {
+            "matrix_size": 1024,
+            "batch_count": 65,
+            "observation_duration_sec": 10,
+            "sample_batch_count": 5,
+            "min_samples": 5,
+        },
+    ) is True
+    assert _result_matches_baseline_profile(
+        "high_throughput_matmul",
+        {
+            "matrix_size": 256,
+            "batch_count": 10,
+            "observation_duration_sec": 0,
+            "sample_batch_count": 10,
+            "min_samples": 1,
+        },
+    ) is False
+
+
+def test_video_baseline_profile_matches_only_official_profile():
+    assert _result_matches_baseline_profile(
+        "low_latency_video_pipeline",
+        {
+            "frame_count": 100,
+            "resolution": "720p",
+            "fps": 30,
+            "frame_stride": 30,
+            "measured_frames": 30,
+            "video_asset": "bottle-detection.mp4",
+            "model_name": "yolov5n",
+        },
+    ) is True
+    assert _result_matches_baseline_profile(
+        "low_latency_video_pipeline",
+        {
+            "frame_count": 60,
+            "resolution": "720p",
+            "fps": 30,
+            "frame_stride": 15,
+            "measured_frames": 12,
+            "video_asset": "bottle-detection.mp4",
+            "model_name": "yolov5n",
+        },
+    ) is False

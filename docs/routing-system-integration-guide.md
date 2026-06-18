@@ -250,6 +250,7 @@ curl -sS -X POST "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/network-r
 - 普通部署工单：第 3 步应返回 `routing_status=network_binding_ready` 且 `network_bindings` 非空；第 4 步后应变为 `routing_status=completed`。
 - `route_only` 工单：第 3 步应返回 `routing_status=completed`、`network_bindings=[]`、`network_ready=true`，通常不需要第 4 步。
 - 重复 claim 同一工单应返回 `409`，证明并发领取控制生效。
+- 如果第 3 步 HTTP 超时，路由系统应先查询该工单状态。平台已经物化实例的重复 `/result` 会按同一工单幂等返回，不应再次扣减路由侧资源。
 
 下面是资源闭环接口。HTTP smoke mock 可以暂不实现；正式连续批量路由或维护 GPU 独占资源池时必须实现 release 查询与 ack，否则任务释放后资源不会回补：
 
@@ -329,7 +330,7 @@ while True:
             install_flow_rules(bindings)
             POST(
                 f"/api/routing-orders/{order_id}/network-ready",
-                {"metadata": {"flow_rule_count": len(bindings)}},
+                {"metadata": {"flow_rule_count": len(bindings)}, "auto_start": True},
             )
 ```
 
@@ -948,8 +949,8 @@ Content-Type: application/json
 - 平台把 `routing_status` 从 `network_binding_ready` 置为 `completed`。
 - 如果业务开始时间已到且结束时间未过，平台会自动启动实例。
 - 如果业务开始时间在未来，平台会注册定时启动/停止。
+- `auto_start` 默认 `true`。如果只想联调接口、不启动容器，可以传 `"auto_start": false`。
 - 如果业务结束时间已过，平台不会启动实例，会标记为过期/失败，避免过期工单误运行。
-- 如果只想联调接口、不启动容器，可以传 `"auto_start": false`。
 
 响应示例：
 

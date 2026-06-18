@@ -545,6 +545,48 @@ def _order_to_response(
     return data.model_copy(update=updates)
 
 
+async def _metric_evidence_summary(
+    db: AsyncSession,
+    instance_id: str | None,
+    business_task: dict[str, Any] | None,
+) -> TaskOrderEvaluationSummary | None:
+    """Build read-only result evidence when no formal evaluation is available.
+
+    Lightweight user-access demos may intentionally differ from the official
+    benchmark profile, so they are not judged against node baselines.  The
+    latest reported metric is still useful proof that the business container
+    actually ran, and the order detail page can display it without adding it to
+    benchmark success-rate statistics.
+    """
+    if not instance_id or not isinstance(business_task, dict):
+        return None
+    objective = business_task.get("business_objective")
+    if not isinstance(objective, dict):
+        return None
+    metric_key = objective.get("metric_key")
+    if not metric_key:
+        return None
+    row = await db.execute(
+        select(TaskMetric)
+        .where(TaskMetric.instance_id == instance_id, TaskMetric.metric_key == metric_key)
+        .order_by(TaskMetric.reported_at.desc(), TaskMetric.id.desc())
+    )
+    metric = row.scalar_one_or_none()
+    if not metric:
+        return None
+    from api.business_tasks import _extract_result_metadata
+
+    return TaskOrderEvaluationSummary(
+        metric_key=metric.metric_key,
+        actual_value=metric.metric_value,
+        target_value=None,
+        unit=metric.unit,
+        business_success=None,
+        failure_reason="当前仅展示运行证据，尚未形成正式业务目标判定，不纳入业务目标成功率统计。",
+        result_metadata=_extract_result_metadata(metric.tags),
+    )
+
+
 async def _latest_evaluations_by_instance(
     db: AsyncSession,
     instance_ids: list[str],
@@ -794,6 +836,12 @@ async def get_order(
             estimated_value=evaluation.estimated_value,
             estimation_error_ratio=evaluation.estimation_error_ratio,
             result_metadata=result_metadata,
+        )
+    elif instance:
+        detail.evaluation = await _metric_evidence_summary(
+            db,
+            instance.id,
+            detail.business_task,
         )
     return detail
 

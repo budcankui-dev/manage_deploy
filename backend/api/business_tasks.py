@@ -33,6 +33,7 @@ from schemas import (
     TaskResultObjectResponse,
 )
 from services.time_utils import business_now
+from services.baseline_runner import BENCHMARK_PROFILES
 from services.business_evaluator import evaluate_business_objective
 from services.business_env import build_business_env, json_env
 from services.business_task_query import (
@@ -315,9 +316,12 @@ async def _lookup_baseline(
     routing_result: dict[str, Any],
     task_type: str | None,
     metric_key: str,
+    result_metadata: dict[str, Any] | None = None,
 ) -> float | None:
     """Look up baseline value for the worker node used in this task."""
     if not task_type:
+        return None
+    if not _result_matches_baseline_profile(task_type, result_metadata or {}):
         return None
     placements = routing_result.get("placements") or []
     topology_node_id = None
@@ -349,6 +353,48 @@ async def _lookup_baseline(
         )
     ).scalar_one_or_none()
     return baseline.baseline_value if baseline else None
+
+
+def _result_matches_baseline_profile(task_type: str | None, result_metadata: dict[str, Any]) -> bool:
+    """Only apply node baselines to results measured with the same official profile.
+
+    User access demos often use lightweight parameters (for example 256x256
+    matrices) so they can finish quickly. Those should show execution evidence,
+    but must not be judged against the formal 1024x1024 benchmark baseline.
+    """
+    if not task_type or task_type not in BENCHMARK_PROFILES:
+        return True
+    env = BENCHMARK_PROFILES[task_type].get("env") or {}
+    checks: tuple[tuple[str, str], ...]
+    if task_type == "high_throughput_matmul":
+        checks = (
+            ("matrix_size", "MATRIX_SIZE"),
+            ("observation_duration_sec", "OBSERVATION_DURATION_SEC"),
+            ("sample_batch_count", "SAMPLE_BATCH_COUNT"),
+            ("min_samples", "MIN_SAMPLES"),
+        )
+    elif task_type == "low_latency_video_pipeline":
+        checks = (
+            ("frame_count", "FRAME_COUNT"),
+            ("resolution", "RESOLUTION"),
+            ("fps", "FPS"),
+            ("frame_stride", "FRAME_STRIDE"),
+            ("measured_frames", "MEASURED_FRAMES"),
+            ("video_asset", "VIDEO_ASSET"),
+            ("model_name", "VIDEO_MODEL_NAME"),
+        )
+    else:
+        return True
+    for result_key, env_key in checks:
+        expected = env.get(env_key)
+        if expected in (None, ""):
+            continue
+        actual = result_metadata.get(result_key)
+        if actual in (None, ""):
+            return False
+        if str(actual).lower() != str(expected).lower():
+            return False
+    return True
 
 
 def _placements_by_role(placements: list[Any]) -> dict[str, Any]:
@@ -411,6 +457,7 @@ async def evaluate_and_store_business_metric(
         routing_result=routing_result,
         task_type=business_task.get("task_type"),
         metric_key=metric_key,
+        result_metadata=result_metadata,
     )
 
     evaluation = evaluate_business_objective(

@@ -700,7 +700,16 @@ async def test_recalculate_benchmark_evaluations_from_metrics(client, db_session
         metric_key="effective_gflops",
         metric_value=100,
         unit="GFLOPS",
-        tags={"result": {"effective_gflops": 100, "backend": "gpu"}},
+        tags={
+            "result": {
+                "effective_gflops": 100,
+                "matrix_size": 1024,
+                "observation_duration_sec": 10,
+                "sample_batch_count": 5,
+                "min_samples": 5,
+                "backend": "gpu",
+            }
+        },
     )
     db_session.add_all([instance, order, metric])
     await db_session.commit()
@@ -2906,6 +2915,65 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
     assert metadata["model_name"] == "yolov5n"
     assert metadata["gpu_assigned"] is True
     assert metadata["detections"][0]["label"] == "bottle"
+
+
+@pytest.mark.asyncio
+async def test_order_detail_uses_latest_metric_as_unscored_evidence(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="metric-evidence-user")
+    instance = TaskInstance(
+        id="metric-evidence-instance",
+        template_id=template_id,
+        name="metric-evidence-instance",
+        status="running",
+    )
+    order = TaskOrder(
+        template_id=template_id,
+        name="轻量演示工单",
+        status=OrderStatus.MATERIALIZED,
+        user_id=user.id,
+        runtime_config={
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "data_profile": {"matrix_size": 256, "batch_count": 10},
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            },
+        },
+        materialized_instance_id=instance.id,
+        is_benchmark=False,
+    )
+    metric = TaskMetric(
+        instance_id=instance.id,
+        template_id=template_id,
+        metric_key="effective_gflops",
+        metric_value=4.82,
+        unit="GFLOPS",
+        tags={
+            "result": {
+                "effective_gflops": 4.82,
+                "matrix_size": 256,
+                "batch_count": 10,
+                "backend": "gpu",
+            }
+        },
+    )
+    db_session.add_all([instance, order, metric])
+    await db_session.commit()
+
+    detail_response = await client.get(f"/api/orders/{order.id}", headers=headers)
+    assert detail_response.status_code == 200
+    evaluation = detail_response.json()["evaluation"]
+    assert evaluation["metric_key"] == "effective_gflops"
+    assert evaluation["actual_value"] == 4.82
+    assert evaluation["target_value"] is None
+    assert evaluation["business_success"] is None
+    assert "尚未形成正式业务目标判定" in evaluation["failure_reason"]
+    assert evaluation["result_metadata"]["matrix_size"] == 256
 
 
 @pytest.mark.asyncio
