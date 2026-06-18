@@ -723,6 +723,129 @@ async def test_routing_result_requiring_network_ready_keeps_conversation_pending
 
 
 @pytest.mark.asyncio
+async def test_submit_after_network_ready_reuses_compute_only_order(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="submit-compute-only-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "网络就绪后提交"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
+    assert claim_response.status_code == 200
+    result_response = await client.post(
+        f"/api/routing-orders/{conversation_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": [{"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}],
+            "require_network_ready": True,
+        },
+    )
+    assert result_response.status_code == 200
+    assert result_response.json()["routing_status"] == "network_binding_ready"
+
+    submit_response = await client.post(f"/api/conversations/{conversation_id}/submit", headers=headers)
+    assert submit_response.status_code == 200, submit_response.text
+    submit_body = submit_response.json()
+    assert submit_body["order_id"] == conversation_id
+    assert submit_body["instance_id"]
+    assert submit_body["task_type"] == "high_throughput_matmul"
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["compute"]
+    inst_nodes = (
+        await db_session.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == order.materialized_instance_id)
+        )
+    ).scalars().all()
+    assert [node.env["TASK_ROLE"] for node in inst_nodes] == ["compute"]
+
+
+@pytest.mark.asyncio
+async def test_submit_after_network_ready_ignores_non_deployable_endpoint_placements(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    headers, _user = await _auth_headers(client, db_session, username="submit-extra-placements-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "额外端点 placement"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+
+    claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
+    assert claim_response.status_code == 200
+    result_response = await client.post(
+        f"/api/routing-orders/{conversation_id}/result",
+        json={
+            "strategy": "resource_guarantee",
+            "placements": _standard_placements(),
+            "require_network_ready": True,
+        },
+    )
+    assert result_response.status_code == 200
+
+    submit_response = await client.post(f"/api/conversations/{conversation_id}/submit", headers=headers)
+    assert submit_response.status_code == 200, submit_response.text
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    inst_nodes = (
+        await db_session.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == order.materialized_instance_id)
+        )
+    ).scalars().all()
+    assert [node.env["TASK_ROLE"] for node in inst_nodes] == ["compute"]
+    runtime_placements = order.runtime_config["routing_result"]["placements"]
+    assert {item["task_node_id"] for item in runtime_placements} == {"source", "compute", "sink"}
+
+
+@pytest.mark.asyncio
 async def test_conversation_ignores_user_supplied_video_latency_threshold(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session)

@@ -17,9 +17,6 @@ from database import async_session_maker, get_db
 from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
 from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, Node, RoutingRequest, TaskOrder, User
 from schemas import (
-    BusinessObjective,
-    BusinessTaskCreate,
-    BusinessTaskResponse,
     ConversationCreate,
     ConversationMessageCreate,
     ConversationResponse,
@@ -27,7 +24,6 @@ from schemas import (
     ConversationSummary,
     IntentDraftResponse,
     IntentDraftUpdate,
-    RoutingResult,
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
@@ -38,8 +34,6 @@ from services.system_settings import (
     modality_priority_map_from_settings,
     routing_resource_options_from_settings,
 )
-
-from .business_tasks import create_business_task
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -912,48 +906,31 @@ async def submit_conversation(
     if not routing or routing.status != RoutingRequestStatus.COMPLETED or not routing.placements:
         raise HTTPException(status_code=400, detail="Completed routing result required")
 
-    business_payload = BusinessTaskCreate(
-        external_task_id=conversation.id,
-        task_type=draft.task_type,
-        modality=draft.modality,
-        name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",
-        data_profile=draft.data_profile or {},
-        business_objective=BusinessObjective(**draft.business_objective),
-        runtime_plan=draft.runtime_plan or {},
-        resource_requirement=(
-            {
-                str(node.get("task_node_id")): node.get("resources")
-                for node in (routing.input_payload or {}).get("nodes", [])
-                if isinstance(node, dict)
-                and node.get("task_node_id")
-                and isinstance(node.get("resources"), dict)
-            }
-            or draft.resource_requirement
-            or {}
-        ),
-        routing_result=RoutingResult(
-            strategy=routing.strategy,
-            placements=routing.placements,
-            estimated_metric=routing.estimated_metric,
-        ),
-        result_storage={"backend": "minio", "bucket": "task-results", "prefix": f"{conversation.id}/"},
-        auto_start=auto_start,
-        scheduled_end_time=scheduled_end_time,
-        keep_after_stop=keep_after_stop,
-    )
+    order = None
+    if conversation.materialized_order_id:
+        order = (
+            await db.execute(select(TaskOrder).where(TaskOrder.id == conversation.materialized_order_id))
+        ).scalar_one_or_none()
+    if order is None:
+        order = (
+            await db.execute(select(TaskOrder).where(TaskOrder.conversation_id == conversation.id))
+        ).scalars().first()
+    if order is None:
+        raise HTTPException(status_code=400, detail="未找到已创建的工单，请先确认意图并等待路由结果")
+    if not order.materialized_instance_id:
+        raise HTTPException(status_code=400, detail="当前工单无需平台部署或尚未完成物化，不能提交启动")
 
-    result: BusinessTaskResponse = await create_business_task(business_payload, db)
     conversation.status = ConversationStatus.SUBMITTED
-    conversation.materialized_order_id = result.order_id
+    conversation.materialized_order_id = order.id
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     await db.flush()
 
     return ConversationSubmitResponse(
         conversation_id=conversation.id,
-        order_id=result.order_id,
-        instance_id=result.instance_id,
-        task_type=result.task_type,
-        status=result.status,
+        order_id=order.id,
+        instance_id=order.materialized_instance_id,
+        task_type=draft.task_type,
+        status=str(order.status),
     )
 
 

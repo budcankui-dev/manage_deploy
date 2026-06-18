@@ -24,8 +24,8 @@ TASK_CONFIG = {
         "message": "矩阵乘法任务，从 h1 到 h2，256阶矩阵，10批，现在开始跑30分钟，资源保障策略",
         "endpoint_image": "10.112.244.94:5000/scientific-matmul-endpoint:dev",
         "destination_port": 9000,
-        "receiver_command": "python /app/src/receiver_main.py --port 9000",
         "source_command": "python /app/src/source_main.py",
+        "metric_key": "effective_gflops",
         "source_env": {
             "SOURCE_LISTEN": "false",
             "DATA_PROFILE": json.dumps(
@@ -44,8 +44,8 @@ TASK_CONFIG = {
         "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，30fps，低时延转发策略，现在开始跑30分钟",
         "endpoint_image": "10.112.244.94:5000/low-latency-video-endpoint:dev",
         "destination_port": 9100,
-        "receiver_command": "python /app/src/receiver_main.py --port 9100",
         "source_command": "python /app/src/source_main.py",
+        "metric_key": "frame_latency_p90_ms",
         "source_env": {
             "SOURCE_LISTEN": "false",
             "WAIT_FOR_COMPUTE_READY": "false",
@@ -230,15 +230,40 @@ def _delete_old_receivers(node: dict[str, Any]) -> None:
             print(f"WARN delete old receiver {name}: {deleted.status_code} {deleted.text}")
 
 
-def _wait_receiver_result(receiver_url: str, order_id: str, timeout_sec: float) -> dict[str, Any]:
+def _extract_metric(record: dict[str, Any], expected_metric_key: str | None = None) -> tuple[str | None, Any]:
+    payload = record.get("final_payload") or record.get("payload") or {}
+    if not isinstance(payload, dict):
+        return None, None
+    metric_key = payload.get("metric_key") or expected_metric_key
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    metric_value = result.get(metric_key) if metric_key else None
+    return metric_key, metric_value
+
+
+def _wait_receiver_result(
+    receiver_url: str,
+    order_id: str,
+    timeout_sec: float,
+    *,
+    expected_metric_key: str | None = None,
+) -> dict[str, Any]:
     deadline = time.time() + timeout_sec
     last_error = ""
     while time.time() < deadline:
         try:
             response = requests.get(f"{receiver_url}/orders/{order_id}", timeout=10)
             if response.status_code == 200:
-                return response.json()
-            last_error = f"HTTP {response.status_code} {response.text[:200]}"
+                record = response.json()
+                record_status = str(record.get("record_status") or record.get("status") or "").lower()
+                metric_key, metric_value = _extract_metric(record, expected_metric_key)
+                if record_status == "completed" and metric_key and metric_value is not None:
+                    return record
+                last_error = (
+                    f"receiver has non-final/incomplete record: "
+                    f"status={record_status or 'unknown'} metric_key={metric_key} metric_value={metric_value}"
+                )
+            else:
+                last_error = f"HTTP {response.status_code} {response.text[:200]}"
         except requests.RequestException as exc:
             last_error = str(exc)
         time.sleep(2)
@@ -317,7 +342,7 @@ def main() -> int:
         task_id=demo_task_id,
         node_id="receiver",
         image=config["endpoint_image"],
-        command=config["receiver_command"],
+        command=f"python /app/src/receiver_main.py --port {args.destination_port}",
         env=_receiver_env(destination_node, args.destination_port),
     )
     print(f"  receiver={receiver_url}/")
@@ -391,10 +416,14 @@ def main() -> int:
     )
 
     print("[8/8] 等待 receiver 收到结果")
-    result = _wait_receiver_result(receiver_url, order_id, args.wait_seconds)
-    payload = result.get("payload") or {}
-    metric_key = payload.get("metric_key")
-    metric_value = (payload.get("result") or {}).get(metric_key)
+    result = _wait_receiver_result(
+        receiver_url,
+        order_id,
+        args.wait_seconds,
+        expected_metric_key=str(config.get("metric_key") or ""),
+    )
+    payload = result.get("final_payload") or result.get("payload") or {}
+    metric_key, metric_value = _extract_metric(result, str(config.get("metric_key") or ""))
     print(json.dumps({
         "order_id": order_id,
         "instance_id": instance_id,
