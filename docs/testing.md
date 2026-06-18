@@ -6,7 +6,7 @@
 
 ## 基础服务
 
-远程测试部署机器见 [测试部署机器清单](deployment/test-lab.md)。该清单不记录密码；凭据只应保存在本地 ignored 文件或密码管理器中。
+远程测试部署机器见 [测试部署机器清单](deployment/测试部署机器清单.md)。该清单不记录密码；凭据只应保存在本地 ignored 文件或密码管理器中。
 
 启动 Task Manager：
 
@@ -127,7 +127,7 @@ git diff --check
 
 准备演示数据：脚本通过 `DATABASE_URL`（或 `MYSQL_HOST` / `MYSQL_USER` /
 `MYSQL_PASSWORD` / `MYSQL_PORT` / `MYSQL_DATABASE`）读取 MySQL 凭据，并要求
-`nodes` 表里已有 compute-1/2/3 三行。
+`nodes` 表里至少已有 `compute-1/2/3` 三个计算节点；当前完整拓扑还应包含 `h1-h13` 终端节点。用户端源/目的槽位优先使用 `h1-h13`，业务测评中的 compute 候选来自计算节点。
 
 ```bash
 DEMO_BASE_URL=http://127.0.0.1:8000 \
@@ -150,7 +150,7 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 `WORKER_SKIP_BUILD=1` 只允许在已经确认目标节点可拉取正确 tag、正确 registry、正确 CPU 架构的镜像后使用。远程 AMD64 节点测试前必须验证镜像是 `linux/amd64`，不能复用 macOS Docker Desktop 上默认构建出的本地镜像。
 
-真实 4 节点测试时，优先使用 admin-server 私有仓库镜像，例如 `10.112.244.94:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。
+真实拓扑测试时，优先使用 admin-server 私有仓库镜像，例如 `10.112.244.94:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。
 
 期望：
 

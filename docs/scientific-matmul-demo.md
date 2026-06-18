@@ -19,7 +19,7 @@ DEMO_BASE_URL=http://127.0.0.1:8000 PYTHONPATH=backend backend/venv/bin/python b
 ./scripts/e2e_matmul_live.sh
 ```
 
-真实 4 节点测试时，先构建并推送 `linux/amd64` 镜像到 admin-server 私有仓库，再让业务节点拉取运行。`WORKER_SKIP_BUILD=1` 只适合已经验证镜像 tag、registry、架构均正确的复测场景。
+真实拓扑测试时，先构建并推送 `linux/amd64` 镜像到 admin-server 私有仓库，再让业务节点拉取运行。`WORKER_SKIP_BUILD=1` 只适合已经验证镜像 tag、registry、架构均正确的复测场景。
 
 前端入口：Admin -> 业务任务中心 -> 一键演示矩阵乘法。
 

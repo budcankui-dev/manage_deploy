@@ -51,14 +51,15 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 - 后端 API：`http://10.112.244.94:8181`
 - 管理节点：`admin-server`，`10.112.244.94`
 - 业务节点：`compute-1`、`compute-2`、`compute-3`
+- 用户终端节点：`h1-h13`，当前作为用户接入源/目的端点和 route-only/轻量 source/sink 演示终端
 
-机器详情见 [docs/deployment/test-lab.md](/Users/yanjia/codes/manage_deploy/docs/deployment/test-lab.md)。
-真实四节点迁移、构建、预检和页面验收命令见 [docs/deployment/matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
+机器详情见 [docs/deployment/测试部署机器清单.md](/Users/yanjia/codes/manage_deploy/docs/deployment/测试部署机器清单.md)。
+真实拓扑迁移、构建、预检和页面验收命令见 [docs/deployment/matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
 ## 前置条件
 
 1. `admin-server` 已部署前端、后端、数据库、对象存储和私有镜像仓库。
-2. `compute-1/2/3` 已注册为可调度节点。业务目标成功率测评中，平台可从这些可管控测试设备中部署 source / compute / sink 容器，用于模拟业务源端、计算节点和目的端；真实用户接入演示不要求平台控制用户终端。
+2. `compute-1/2/3` 已注册为可调度计算节点，`h1-h13` 已注册为终端节点。业务目标成功率测评中，平台可在可管控测试设备上部署 source / compute / sink 容器，用于自动化统计成功率；真实用户接入演示中，source/sink 默认是用户自行控制的终端端点，平台通常只部署 compute。
 3. 业务节点已运行 Node Agent，管理面能访问各节点 Agent API。
 4. 矩阵乘法 worker 镜像已在 AMD64 环境构建并推送到 `10.112.244.94:5000/scientific-matmul:dev`。
 5. 每个参与测试的节点已完成相同 profile 的 baseline 测试，且 `stable=true`。
@@ -192,7 +193,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 外部路由系统联调的具体接口、字段格式和最短接入路径见 [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)。
 
-## 真实四节点执行要求
+## 真实拓扑执行要求
 
 从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再在 `admin-server` 更新部署目录并重启服务。若 `admin-server` 的 `/home/bupt/manage_deploy` 是 Git 仓库，使用 `git pull`/`git switch`；若它是手工部署目录，则使用 `git archive <commit>` 或只同步本次提交涉及的文件，避免把本地未提交改动、数据库、`.env` 或报告产物带到远端。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
 
@@ -292,5 +293,5 @@ MATMUL_BATCH_COUNT=50 \
 - 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；它使用固定测试视频 + YOLOv5n ONNX 产出带框结果，CPU 路径仅作为开发调试开关。如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
 - 当前正式判定不依赖实时 CPU/GPU 监控。资源监控可作为演示增强项，但验收主证据是工单详情中的实例状态、实际节点/GPU 分配、业务指标评估和指标采集 JSON，避免为了演示引入额外监控系统导致链路变复杂。
 - 当前测试工单列表依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部测评工单并打开详情。
-- 真正面向专家验收前，需要在四节点真实环境执行一次全量 baseline 和 30 任务测评，并保存浏览器截图和 JSON 报告。
+- 真正面向专家验收前，需要在当前真实拓扑环境执行一次全量 baseline 和 30 任务测评，并保存浏览器截图和 JSON 报告。
 - 截图建议包含 Step 1 基线表、Step 3 状态分布、测试工单列表中的任务工单详情抽屉和 Step 4 成功率进度条。

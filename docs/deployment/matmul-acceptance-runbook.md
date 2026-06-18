@@ -52,7 +52,7 @@ backend/tests/test_business_tasks_api.py
 frontend/src/api/index.js
 frontend/src/views/BenchmarkView.vue
 docs/benchmark-test-plan.md
-docs/deployment/test-lab.md
+docs/deployment/测试部署机器清单.md
 docs/deployment/matmul-acceptance-runbook.md
 docs/roadmap.md
 ```

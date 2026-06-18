@@ -15,7 +15,7 @@
 
 - `docs/routing-system-integration-guide.md`
 - `docs/worker-data-io-design.md`
-- `docs/deployment/test-lab.md`
+- `docs/deployment/测试部署机器清单.md`
 
 ## 项目现状
 

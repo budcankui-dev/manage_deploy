@@ -440,6 +440,7 @@ WHERE deleted_at IS NULL
 - `node_kind in ('worker', 'both')` 且 `is_schedulable=1` 的节点可作为 `compute` 候选。
 - `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
 - 新增终端节点时推荐也部署 Docker 和 Node Agent，并设置 `is_schedulable=1, is_routable=1`，这样同一台终端既能承载 source/sink 容器，也能只作为路由端点。
+- 当前最终拓扑包含 `admin-server`、`compute-1~compute-3` 和 `h1~h13`。用户源/目的端点优先来自 `h1~h13` 终端节点；`compute-1~compute-3` 是算力候选节点，通常由路由系统回写到 `compute` placement。
 - 是否为 source/sink 创建容器由平台工单的 `platform_deployment.deployable_roles` 决定，不由路由系统决定。
 - 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统可先按 `nodes.topology_node_id` 匹配，匹配不到再按 `nodes.hostname` 兜底；平台生成的新 DAG 会同时给出 `topology_alias` 方便回查。
 - 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id` 或资产字段 `nodes.topology_node_id`。
@@ -451,7 +452,7 @@ WHERE deleted_at IS NULL
 | 终端节点需要承载 source/sink 容器 | `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
 | 终端节点参与某些任务但该任务不部署 source/sink 容器 | 通常仍为 `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 视任务而定 | 机器具备部署能力，但当前任务可用 `deployable_roles=["compute"]` 或 `[]` 只建立路由路径。 |
 | 少数纯网络节点确实没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 仅用于 route-only 路径检查，不用于需要业务容器的测评。 |
-| 计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。 |
+| 特殊情况下计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以，但不是默认演示口径 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。默认用户端演示仍建议使用 `h1~h13`。 |
 | 专用计算节点 | `node_kind=worker`，`is_schedulable=1`，`is_routable=1` | 可以 | 路由系统可把它作为 `compute` placement，并按 GPU 独占规则扣减资源。 |
 
 ### 6.3 `node_baselines`
