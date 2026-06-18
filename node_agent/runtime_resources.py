@@ -253,6 +253,23 @@ def _run_command(args: list[str], timeout: int = 5) -> tuple[int, str, str]:
         return 127, "", str(exc)
 
 
+def _nvidia_smi_command() -> str:
+    candidates = [
+        os.environ.get("NVIDIA_SMI_BIN", ""),
+        "nvidia-smi",
+        "/usr/bin/nvidia-smi",
+        "/usr/local/bin/nvidia-smi",
+        "/usr/local/nvidia/bin/nvidia-smi",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        code, _stdout, _stderr = _run_command([candidate, "-L"], timeout=5)
+        if code == 0:
+            return candidate
+    return "nvidia-smi"
+
+
 def _collect_nvidia_smi() -> dict[str, Any]:
     result: dict[str, Any] = {
         "gpu_count": 0,
@@ -263,14 +280,14 @@ def _collect_nvidia_smi() -> dict[str, Any]:
         "diagnostics": {},
     }
 
+    nvidia_smi = _nvidia_smi_command()
     code, stdout, stderr = _run_command([
-        "nvidia-smi",
+        nvidia_smi,
         "--query-gpu=name,memory.total,driver_version",
         "--format=csv,noheader,nounits",
     ])
     if code != 0:
-        if stderr:
-            result["diagnostics"]["nvidia_smi_error"] = stderr
+        result["diagnostics"]["nvidia_smi_error"] = stderr or f"{nvidia_smi} failed with code {code}"
         return result
 
     models: list[str] = []
@@ -300,12 +317,12 @@ def _collect_nvidia_smi() -> dict[str, Any]:
     if driver_versions:
         result["driver_version"] = driver_versions[0]
 
-    result["cuda_version"] = _read_cuda_version_from_nvidia_smi()
+    result["cuda_version"] = _read_cuda_version_from_nvidia_smi(nvidia_smi)
     return result
 
 
-def _read_cuda_version_from_nvidia_smi() -> str | None:
-    code, stdout, _stderr = _run_command(["nvidia-smi"], timeout=5)
+def _read_cuda_version_from_nvidia_smi(nvidia_smi: str = "nvidia-smi") -> str | None:
+    code, stdout, _stderr = _run_command([nvidia_smi], timeout=5)
     if code != 0:
         return None
     match = re.search(r"CUDA Version:\s*([0-9.]+)", stdout)

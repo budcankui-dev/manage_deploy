@@ -15,6 +15,7 @@
 - [业务目标成功率测评方案](docs/benchmark-test-plan.md)
 - [新业务接入交接说明](docs/新业务接入交接说明.md)
 - [测试部署机器清单](docs/deployment/测试部署机器清单.md)
+- [标准化部署与运维流程](docs/deployment/标准化部署与运维流程.md)
 - [管理节点跳板与网络迁移方案](docs/deployment/管理节点跳板与网络迁移方案.md)
 - [终端拓扑节点扩展接入说明](docs/deployment/终端拓扑节点扩展接入说明.md)
 - [Roadmap](docs/roadmap.md)

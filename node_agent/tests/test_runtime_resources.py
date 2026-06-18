@@ -106,3 +106,44 @@ def test_collect_host_resources_parses_nvidia_smi(monkeypatch, tmp_path):
     assert facts["gpu_memory_mb"] == 12288
     assert facts["driver_version"] == "535.171.04"
     assert facts["cuda_version"] == "12.2"
+
+
+def test_collect_host_resources_falls_back_to_absolute_nvidia_smi(monkeypatch, tmp_path):
+    cpuinfo = tmp_path / "cpuinfo"
+    meminfo = tmp_path / "meminfo"
+    cpuinfo.write_text("model name\t: Test Xeon\n")
+    meminfo.write_text("MemTotal:       65536000 kB\n")
+
+    class FakePath:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def exists(self):
+            return True
+
+        def read_text(self, errors=None):
+            return cpuinfo.read_text() if self.raw == "/proc/cpuinfo" else meminfo.read_text()
+
+    def fake_path(raw):
+        return FakePath(str(raw))
+
+    def fake_run(args, timeout=5):
+        binary = args[0]
+        if binary == "nvidia-smi":
+            return 127, "", "[Errno 2] No such file or directory: 'nvidia-smi'"
+        if binary == "/usr/bin/nvidia-smi" and args == ["/usr/bin/nvidia-smi", "-L"]:
+            return 0, "GPU 0: NVIDIA TITAN Xp", ""
+        if binary == "/usr/bin/nvidia-smi" and "--query-gpu=name,memory.total,driver_version" in args:
+            return 0, "NVIDIA TITAN Xp, 12288, 535.171.04", ""
+        if binary == "/usr/bin/nvidia-smi":
+            return 0, "| NVIDIA-SMI 535.171.04    Driver Version: 535.171.04    CUDA Version: 12.2 |", ""
+        return 127, "", "missing"
+
+    monkeypatch.setattr("runtime_resources.Path", fake_path)
+    monkeypatch.setattr("runtime_resources._run_command", fake_run)
+
+    facts = collect_host_resources()
+
+    assert facts["gpu_count"] == 1
+    assert facts["gpu_model"] == "NVIDIA TITAN Xp"
+    assert facts["cuda_version"] == "12.2"
