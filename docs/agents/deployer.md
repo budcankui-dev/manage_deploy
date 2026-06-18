@@ -8,35 +8,23 @@
 
 ## 标准部署流程
 
-代码变更后必须先在本地验证、提交并推送，再更新管理节点。当前管理节点 `/home/bupt/manage_deploy` 可能是 Git 仓库，也可能是手工同步目录；部署前先判断：
+代码变更后必须先在本地验证、提交并推送，再更新管理节点。部署、同步、重启和路径约束以 `docs/deployment/标准化部署与运维流程.md` 为准。
+
+当前管理节点 `/home/bupt/manage_deploy` 按拷贝式部署目录使用，不作为 Git 工作树维护。不要在远端执行 `git pull`，统一从本地已验证工作区 rsync 到管理节点，并排除 `.env`、虚拟环境、数据库和运行产物。
 
 ```bash
-ssh manage-admin "cd /home/bupt/manage_deploy && git status --short"
-```
-
-如果返回 `not a git repository`，说明远端是手工同步目录，不要继续执行 `git pull`。
-
-### 方式 A：远端是 Git 仓库
-
-```bash
-git push origin main
-ssh manage-admin "cd /home/bupt/manage_deploy && git pull"
-```
-
-### 方式 B：远端是手工同步目录
-
-优先用 `git archive` 或受控 `rsync` 同步已提交版本，避免把本地数据库、`.env`、虚拟环境、缓存和运行产物带到远端。
-
-```bash
-# 示例：用当前 HEAD 生成干净源码包并解包到管理节点
-git archive --format=tar --output=/tmp/manage_deploy-main.tar HEAD
-scp /tmp/manage_deploy-main.tar manage-admin:/tmp/manage_deploy-main.tar
-ssh manage-admin "cd /home/bupt/manage_deploy && tar -xf /tmp/manage_deploy-main.tar && rm -f /tmp/manage_deploy-main.tar"
-
-# 前端静态产物单独同步
-cd frontend && npm run build
-cd ..
-rsync -az --delete frontend/dist/ manage-admin:/home/bupt/manage_deploy/frontend/dist/
+cd /Users/yanjia/codes/manage_deploy
+npm --prefix frontend run build
+rsync -az --delete \
+  --exclude='.git/' \
+  --exclude='backend/.env' \
+  --exclude='backend/venv/' \
+  --exclude='frontend/node_modules/' \
+  --exclude='backend/*.db' \
+  --exclude='.pytest_cache/' \
+  --exclude='reports/' \
+  --exclude='output/' \
+  ./ manage-admin:/home/bupt/manage_deploy/
 ```
 
 ## 后端重启与验证
@@ -46,7 +34,7 @@ rsync -az --delete frontend/dist/ manage-admin:/home/bupt/manage_deploy/frontend
 ### 管理节点运行约束
 
 - 管理节点代码目录 `/home/bupt/manage_deploy` 当前按手工同步目录使用，不能默认执行 `git pull`。
-- 同步代码优先用本地 `git archive HEAD` 解包到管理节点，避免覆盖远端 `.env`、数据库、venv、报告目录和运行产物。
+- 同步代码优先用标准 rsync 命令，避免覆盖远端 `.env`、数据库、venv、报告目录和运行产物。
 - 后端脚本在管理节点执行时，必须先进入 `/home/bupt/manage_deploy/backend`，并使用 `PYTHONPATH=.` 与 `/home/bupt/miniconda3/bin/python3.13`。
 - 不要在仓库根目录用系统 `python3` 直接导入后端模块；这会缺少 `httpx` 等依赖或读错相对路径。
 - 重启后端时只处理真正监听 `8181` 的 uvicorn 进程，避免用过宽的 `pgrep` 模式误杀当前 SSH shell。

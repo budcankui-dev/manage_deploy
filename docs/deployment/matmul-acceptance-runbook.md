@@ -63,16 +63,7 @@ docs/roadmap.md
 
 ## 2. 管理节点更新
 
-```bash
-ssh manage-admin "cd /home/bupt/manage_deploy && git pull"
-
-ssh manage-admin "cd /home/bupt/manage_deploy/frontend && npm ci && npm run build"
-
-ssh manage-admin "pkill -f 'uvicorn main:app' 2>/dev/null || true; sleep 1; \
-  cd /home/bupt/manage_deploy/backend && \
-  nohup /home/bupt/miniconda3/envs/manage_deploy/bin/uvicorn main:app \
-    --host 0.0.0.0 --port 8181 > /tmp/manage_deploy_backend.log 2>&1 &"
-```
+管理节点更新、前端构建、后端重启统一执行 [标准化部署与运维流程](标准化部署与运维流程.md) 中的“本地到管理节点部署”。当前 `admin-server` 的 `/home/bupt/manage_deploy` 按拷贝式部署目录使用，不在远端 `git pull`，后端固定使用 `/home/bupt/miniconda3/bin/python3.13`。
 
 验证管理面：
 
@@ -170,8 +161,8 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
   WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
   WORKER_TAG=dev \
   DEMO_BASE_URL=http://127.0.0.1:8181 \
-  PYTHONPATH=/home/bupt/manage_deploy/backend \
-  /home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_matmul_template.py"
+  PYTHONPATH=. \
+  /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_matmul_template.py"
 ```
 
 模板节点必须开启 `port_defs.auto=true`。正式 `/benchmark` 批量验收会并发物化 30 个实例，如果端口仍固定为 `18801/18802/18803`，同一物理节点上的多个容器会互相抢端口或串到其它实例，表现为只有少数任务上报指标。
@@ -195,8 +186,8 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
   WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
   WORKER_TAG=dev \
   DEMO_BASE_URL=http://127.0.0.1:8181 \
-  PYTHONPATH=/home/bupt/manage_deploy/backend \
-  /home/bupt/miniconda3/envs/manage_deploy/bin/python scripts/rebuild_video_template.py"
+  PYTHONPATH=. \
+  /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_video_template.py"
 ```
 
 视频模板同样要求 `port_defs.auto=true`。compute 子任务默认需要 GPU，路由结果应写回 `gpu_device`；如果启用了仅开发调试的 CPU 路径，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。

@@ -195,7 +195,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 ## 真实拓扑执行要求
 
-从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再在 `admin-server` 更新部署目录并重启服务。若 `admin-server` 的 `/home/bupt/manage_deploy` 是 Git 仓库，使用 `git pull`/`git switch`；若它是手工部署目录，则使用 `git archive <commit>` 或只同步本次提交涉及的文件，避免把本地未提交改动、数据库、`.env` 或报告产物带到远端。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
+从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再按 [标准化部署与运维流程](/Users/yanjia/codes/manage_deploy/docs/deployment/标准化部署与运维流程.md) 更新 `admin-server` 的 `/home/bupt/manage_deploy` 并重启服务。当前管理节点按拷贝式部署目录使用，不在远端 `git pull`；同步时必须排除数据库、`.env`、虚拟环境和报告产物。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
 
 完整操作清单见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
@@ -211,11 +211,11 @@ WORKER_PUSH=1 \
 ./scripts/build_workers.sh
 
 # admin-server 重建模板，确保模板 image 指向私有 registry
+cd /home/bupt/manage_deploy/backend
 WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
 WORKER_TAG=dev \
 DEMO_BASE_URL=http://127.0.0.1:8181 \
-PYTHONPATH=backend \
-/home/bupt/miniconda3/envs/manage_deploy/bin/python backend/scripts/rebuild_matmul_template.py
+PYTHONPATH=. /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_matmul_template.py
 ```
 
 视频推理 worker 构建命令：
