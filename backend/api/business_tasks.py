@@ -385,6 +385,16 @@ def _result_matches_baseline_profile(task_type: str | None, result_metadata: dic
         )
     else:
         return True
+    numeric_keys = {
+        "matrix_size",
+        "observation_duration_sec",
+        "sample_batch_count",
+        "min_samples",
+        "frame_count",
+        "fps",
+        "frame_stride",
+        "measured_frames",
+    }
     for result_key, env_key in checks:
         expected = env.get(env_key)
         if expected in (None, ""):
@@ -392,6 +402,13 @@ def _result_matches_baseline_profile(task_type: str | None, result_metadata: dic
         actual = result_metadata.get(result_key)
         if actual in (None, ""):
             return False
+        if result_key in numeric_keys:
+            try:
+                if float(actual) != float(expected):
+                    return False
+                continue
+            except (TypeError, ValueError):
+                return False
         if str(actual).lower() != str(expected).lower():
             return False
     return True

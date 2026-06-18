@@ -298,6 +298,15 @@ def test_matmul_baseline_profile_matches_only_official_profile():
     assert _result_matches_baseline_profile(
         "high_throughput_matmul",
         {
+            "matrix_size": "1024",
+            "observation_duration_sec": 10.0,
+            "sample_batch_count": "5",
+            "min_samples": 5.0,
+        },
+    ) is True
+    assert _result_matches_baseline_profile(
+        "high_throughput_matmul",
+        {
             "matrix_size": 256,
             "batch_count": 10,
             "observation_duration_sec": 0,
