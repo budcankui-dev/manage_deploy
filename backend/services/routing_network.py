@@ -136,11 +136,22 @@ def _placement_map(order: TaskOrder) -> dict[str, dict[str, Any]]:
     return mapped
 
 
-def _fixed_topology_name(order: TaskOrder, role: str, dag_nodes: dict[str, dict[str, Any]]) -> str | None:
-    placement = _placement_map(order).get(role) or {}
-    value = placement.get("topology_node_id")
-    if value:
-        return str(value)
+def _role_is_deployed(role: str, role_nodes: dict[str, TaskInstanceNode]) -> bool:
+    return role.lower() in role_nodes
+
+
+def _fixed_topology_name(
+    order: TaskOrder,
+    role: str,
+    dag_nodes: dict[str, dict[str, Any]],
+    *,
+    allow_router_placement: bool = True,
+) -> str | None:
+    if allow_router_placement:
+        placement = _placement_map(order).get(role) or {}
+        value = placement.get("topology_node_id")
+        if value:
+            return str(value)
     dag_node = dag_nodes.get(role) or {}
     value = dag_node.get("fixed_topology_node_id")
     if value:
@@ -206,12 +217,22 @@ def _binding_for_roles(
     src_topology = (
         src_machine.topology_node_id or src_machine.hostname
         if src_machine
-        else _fixed_topology_name(order, src_role, dag_nodes)
+        else _fixed_topology_name(
+            order,
+            src_role,
+            dag_nodes,
+            allow_router_placement=_role_is_deployed(src_role, role_nodes),
+        )
     )
     dst_topology = (
         dst_machine.topology_node_id or dst_machine.hostname
         if dst_machine
-        else _fixed_topology_name(order, dst_role, dag_nodes)
+        else _fixed_topology_name(
+            order,
+            dst_role,
+            dag_nodes,
+            allow_router_placement=_role_is_deployed(dst_role, role_nodes),
+        )
     )
     if not src_machine and src_topology:
         src_machine = machines_by_hostname.get(src_topology)
@@ -298,7 +319,14 @@ async def build_network_bindings(
     endpoint_names = {
         name
         for role in dag_nodes
-        for name in [_fixed_topology_name(order, role, dag_nodes)]
+        for name in [
+            _fixed_topology_name(
+                order,
+                role,
+                dag_nodes,
+                allow_router_placement=_role_is_deployed(role, role_nodes),
+            )
+        ]
         if name
     }
     if endpoint_names:

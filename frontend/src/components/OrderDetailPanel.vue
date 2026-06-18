@@ -483,7 +483,7 @@ const userAccessHints = computed(() => {
   if (!isUserAccessDemo.value || !networkBindingRows.value.length) return []
   const hints = []
   networkBindingRows.value.forEach((row) => {
-    if (row.src_external && row.dst_access_url) {
+    if (row.from === 'source' && row.to === 'compute' && row.src_external && row.dst_access_url) {
       const base = String(row.dst_access_url).replace(/\/$/, '')
       hints.push(`向 compute 提交业务输入：POST ${base}/data（JSON 任务参数，矩阵乘法含 matrix_size / batch_count / seed）`)
       hints.push(`查询 compute 本地结果：GET ${base}/result（任务完成后返回 JSON）`)

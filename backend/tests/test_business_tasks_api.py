@@ -1042,6 +1042,23 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     assert duplicate.status_code == 200
     assert duplicate.json()["idempotent"] is True
 
+    changed_payload = {
+        **payload,
+        "selected_strategy": "SHOULD_NOT_REPLACE_PERSISTED_RESULT",
+        "external_routing_id": "route-meta-retry",
+        "metadata": {"decision_trace_id": "retry-should-not-overwrite"},
+    }
+    duplicate_changed = await client.post(f"/api/routing-orders/{order_id}/result", json=changed_payload)
+    assert duplicate_changed.status_code == 200
+    assert duplicate_changed.json()["idempotent"] is True
+    routing_row = await db_session.execute(
+        select(TaskOrder).where(TaskOrder.id == order_id)
+    )
+    retried_order = routing_row.scalar_one()
+    assert retried_order.runtime_config["routing_result"]["selected_strategy"] == "GPU_EXCLUSIVE_LOW_RENT"
+    assert retried_order.runtime_config["routing_result"]["external_routing_id"] == "route-meta-001"
+    assert retried_order.runtime_config["routing_result"]["metadata"]["decision_trace_id"] == "trace-meta-001"
+
     ready_response = await client.post(
         f"/api/routing-orders/{order_id}/network-ready",
         json={"metadata": {"flow_rules": "installed"}, "auto_start": False},
@@ -1836,6 +1853,127 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     assert sink_binding["dst_ip"] == "10.13.1.3"
     assert sink_binding["dst_port"] == 9000
     assert sink_binding["dst_access_url"] == "http://10.13.1.3:9000"
+
+
+@pytest.mark.asyncio
+async def test_compute_only_bindings_ignore_router_source_sink_placements(client, db_session):
+    await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "user-source-fixed",
+            "agent_address": "http://127.0.0.1:8451",
+            "management_ip": "10.14.0.1",
+            "business_ip": "10.14.1.1",
+            "node_kind": "terminal",
+            "topology_node_id": "h18001001",
+            "is_schedulable": False,
+            "is_routable": True,
+        },
+    )
+    await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "user-sink-fixed",
+            "agent_address": "http://127.0.0.1:8453",
+            "management_ip": "10.14.0.3",
+            "business_ip": "10.14.1.3",
+            "node_kind": "terminal",
+            "topology_node_id": "h18005003",
+            "is_schedulable": False,
+            "is_routable": True,
+        },
+    )
+    compute_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "compute-fixed-only",
+            "agent_address": "http://127.0.0.1:8452",
+            "management_ip": "10.14.0.2",
+            "business_ip": "10.14.1.2",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert compute_response.status_code == 200
+
+    template_response = await client.post(
+        "/api/templates",
+        json={
+            "name": "compute-only-ignore-router-endpoints",
+            "nodes": [
+                {
+                    "client_id": "compute",
+                    "name": "compute",
+                    "image": "busybox:latest",
+                    "command": "sleep 3600",
+                    "port_defs": [{"name": "compute", "label": "compute HTTP", "auto": True, "range": [18800, 18899]}],
+                    "node_id": compute_response.json()["id"],
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert template_response.status_code == 200
+
+    start = datetime.now(UTC)
+    order = TaskOrder(
+        template_id=template_response.json()["id"],
+        name="compute-only-ignore-router-endpoints",
+        source_name="user-source-fixed",
+        destination_name="user-sink-fixed",
+        business_start_time=start,
+        business_end_time=start + timedelta(minutes=5),
+        runtime_config={
+            "business_task": {"task_type": "high_throughput_matmul", "data_profile": {}},
+            "platform_deployment": {"deployable_roles": ["compute"]},
+        },
+        routing_status=RoutingStatus.PENDING.value,
+        status=OrderStatus.PENDING,
+        routing_input_dag={
+            "job_id": "compute-only-ignore-router-endpoints",
+            "order_id": "compute-only-ignore-router-endpoints",
+            "nodes": [
+                {"task_node_id": "source", "task_role": "source", "fixed_topology_node_id": "h18001001"},
+                {"task_node_id": "compute", "task_role": "compute"},
+                {
+                    "task_node_id": "sink",
+                    "task_role": "sink",
+                    "fixed_topology_node_id": "h18005003",
+                    "business_port": 9000,
+                },
+            ],
+            "edges": [
+                {"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10},
+                {"from": "compute", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10},
+            ],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    response = await _submit_routing_result(
+        client,
+        order.id,
+        {
+            "strategy": "resource_guarantee",
+            "placements": [
+                {"task_node_id": "source", "topology_node_id": "wrong-router-source"},
+                {"task_node_id": "compute", "topology_node_id": "compute-fixed-only", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "wrong-router-sink"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    bindings = response.json()["network_bindings"]
+    source_binding = next(item for item in bindings if item["from"] == "source")
+    sink_binding = next(item for item in bindings if item["to"] == "sink")
+    assert source_binding["src_topology_node_id"] == "h18001001"
+    assert source_binding["src_host"] == "user-source-fixed"
+    assert source_binding["src_ip"] == "10.14.1.1"
+    assert sink_binding["dst_topology_node_id"] == "h18005003"
+    assert sink_binding["dst_host"] == "user-sink-fixed"
+    assert sink_binding["dst_ip"] == "10.14.1.3"
 
 
 @pytest.mark.asyncio

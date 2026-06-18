@@ -163,6 +163,12 @@ def _benchmark_task_type(order: TaskOrder) -> str | None:
     return None
 
 
+def _apply_order_visibility(query, current_user: User):
+    if current_user.role != UserRole.ADMIN:
+        query = query.where(TaskOrder.user_id == current_user.id)
+    return query
+
+
 async def _resolve_batch_orders(
     db: AsyncSession,
     request: BatchOperationRequest,
@@ -1274,6 +1280,31 @@ def _routing_placements_from_runtime(value: Any) -> list[RoutingPlacement]:
     return placements
 
 
+def _routing_payload_from_runtime_result(
+    runtime_result: dict[str, Any],
+    fallback: RoutingResultPayload,
+) -> RoutingResultPayload:
+    """Build a sync payload from persisted routing data for idempotent retries."""
+    return RoutingResultPayload(
+        placements=[],
+        strategy=runtime_result.get("strategy") or fallback.strategy,
+        selected_strategy=runtime_result.get("selected_strategy") or fallback.selected_strategy,
+        external_routing_id=runtime_result.get("external_routing_id") or fallback.external_routing_id,
+        metadata=runtime_result.get("metadata") if isinstance(runtime_result.get("metadata"), dict) else {},
+        estimated_metric=(
+            runtime_result.get("estimated_metric")
+            if isinstance(runtime_result.get("estimated_metric"), dict)
+            else {}
+        ),
+        result_payload=(
+            runtime_result.get("result_payload")
+            if isinstance(runtime_result.get("result_payload"), dict)
+            else {}
+        ),
+        require_network_ready=bool(runtime_result.get("network_ready_required", False)),
+    )
+
+
 async def _sync_conversation_after_order_routing(
     db: AsyncSession,
     order: TaskOrder,
@@ -1433,10 +1464,11 @@ async def receive_routing_result(
         rc = order.runtime_config or {}
         routing_result = rc.get("routing_result") if isinstance(rc.get("routing_result"), dict) else {}
         existing_placements = _routing_placements_from_runtime(routing_result.get("placements"))
+        persisted_payload = _routing_payload_from_runtime_result(routing_result, payload)
         await _sync_conversation_after_order_routing(
             db,
             order,
-            payload,
+            persisted_payload,
             existing_placements or payload.placements,
             routing_result.get("network_bindings") or [],
             bool(routing_result.get("network_ready_required", False)),
@@ -1780,14 +1812,12 @@ async def batch_auto_route(
 ):
     """Auto-route all pending benchmark orders."""
     await _ensure_internal_benchmark_routing_enabled(db)
-    rows = await db.execute(
-        select(TaskOrder).where(
-            TaskOrder.status == OrderStatus.PENDING.value,
-            TaskOrder.routing_status == RoutingStatus.PENDING.value,
-            TaskOrder.is_benchmark == True,
-            TaskOrder.user_id == current_user.id,
-        )
+    query = select(TaskOrder).where(
+        TaskOrder.status == OrderStatus.PENDING.value,
+        TaskOrder.routing_status == RoutingStatus.PENDING.value,
+        TaskOrder.is_benchmark == True,
     )
+    rows = await db.execute(_apply_order_visibility(query, current_user))
     orders = rows.scalars().all()
     run_id = payload.benchmark_run_id if payload else None
     if run_id:
@@ -1838,15 +1868,18 @@ async def start_all_routed_benchmark_orders(
     current_user: User = Depends(get_current_user),
 ):
     """Start all materialized benchmark orders for the current user."""
-    rows = await db.execute(
-        select(TaskOrder).where(
-            TaskOrder.status == OrderStatus.MATERIALIZED.value,
-            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
-            TaskOrder.is_benchmark == True,
-            TaskOrder.user_id == current_user.id,
-            TaskOrder.materialized_instance_id.is_not(None),
-        )
+    query = select(TaskOrder).where(
+        TaskOrder.status == OrderStatus.MATERIALIZED.value,
+        TaskOrder.routing_status.in_(
+            [
+                RoutingStatus.COMPLETED.value,
+                RoutingStatus.NETWORK_BINDING_READY.value,
+            ]
+        ),
+        TaskOrder.is_benchmark == True,
+        TaskOrder.materialized_instance_id.is_not(None),
     )
+    rows = await db.execute(_apply_order_visibility(query, current_user))
     orders = rows.scalars().all()
     run_id = payload.benchmark_run_id if payload else None
     if run_id:
@@ -1912,14 +1945,17 @@ async def _controlled_benchmark_orders(
     payload: BenchmarkRunScopedRequest | None,
     current_user: User,
 ) -> list[TaskOrder]:
-    rows = await db.execute(
-        select(TaskOrder).where(
-            TaskOrder.routing_status == RoutingStatus.COMPLETED.value,
-            TaskOrder.is_benchmark == True,
-            TaskOrder.user_id == current_user.id,
-            TaskOrder.materialized_instance_id.is_not(None),
-        )
+    query = select(TaskOrder).where(
+        TaskOrder.routing_status.in_(
+            [
+                RoutingStatus.COMPLETED.value,
+                RoutingStatus.NETWORK_BINDING_READY.value,
+            ]
+        ),
+        TaskOrder.is_benchmark == True,
+        TaskOrder.materialized_instance_id.is_not(None),
     )
+    rows = await db.execute(_apply_order_visibility(query, current_user))
     orders = rows.scalars().all()
     run_id = payload.benchmark_run_id if payload else None
     if run_id:
