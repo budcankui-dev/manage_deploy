@@ -24,6 +24,8 @@
 
 ## 快速启动
 
+下面命令只用于本地开发。管理节点部署、重启、同步和远程脚本执行不要直接复制本节命令，统一按 [标准化部署与运维流程](docs/deployment/标准化部署与运维流程.md) 执行。当前管理节点固定目录为 `/home/bupt/manage_deploy`，后端固定 Python 为 `/home/bupt/miniconda3/bin/python3.13`。
+
 后端：
 
 ```bash

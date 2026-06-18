@@ -256,7 +256,7 @@ def _wait_receiver_result(
                 record = response.json()
                 record_status = str(record.get("record_status") or record.get("status") or "").lower()
                 metric_key, metric_value = _extract_metric(record, expected_metric_key)
-                if record_status == "completed" and metric_key and metric_value is not None:
+                if metric_key and metric_value is not None and record_status in {"", "completed", "ok"}:
                     return record
                 last_error = (
                     f"receiver has non-final/incomplete record: "
