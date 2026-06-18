@@ -4,7 +4,7 @@
 
 矩阵乘法业务目标验收的完整迁移、构建、预检和页面操作步骤见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
-后续从当前 10.112 调试网络切换到 172.16 管理网段、并让本机通过管理节点跳板访问拓扑节点和业务 IPv6 容器 UI 的方案见 [manager-jump-network-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/manager-jump-network-runbook.md)。
+后续从当前 10.112 调试网络切换到 172.16 管理网段、并让本机通过管理节点跳板访问拓扑节点和业务 IPv6 容器 UI 的方案见 [管理节点跳板与网络迁移方案](/Users/yanjia/codes/manage_deploy/docs/deployment/管理节点跳板与网络迁移方案.md)。
 
 ## 当前拓扑
 
@@ -214,7 +214,7 @@ sudo systemctl restart docker
 
 ## 业务面 IPv6 配置
 
-当前调试拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。注意：下表是当前校园网 IPv6 调试地址，重启或网络切换后可能变化；正式验收时会替换为验收数据面 IPv6，并按 [manager-jump-network-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/manager-jump-network-runbook.md) 更新 `nodes.business_ipv6`。
+当前调试拓扑采用“控制面 IPv4、业务面 IPv6”。`management_ip` / `agent_address` 仍使用 10.112 IPv4，业务容器之间的 `PEER_*_URL` 优先使用同一物理网卡上的全局 IPv6。注意：下表是当前校园网 IPv6 调试地址，重启或网络切换后可能变化；正式验收时会替换为验收数据面 IPv6，并按 [管理节点跳板与网络迁移方案](/Users/yanjia/codes/manage_deploy/docs/deployment/管理节点跳板与网络迁移方案.md) 更新 `nodes.business_ipv6`。
 
 | 节点 | 10.112 网卡 | 业务 IPv6 | 调度 |
 |------|-------------|-----------|------|

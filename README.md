@@ -15,7 +15,7 @@
 - [业务目标成功率测评方案](docs/benchmark-test-plan.md)
 - [新业务接入交接说明](docs/新业务接入交接说明.md)
 - [测试部署机器清单](docs/deployment/test-lab.md)
-- [管理节点跳板与网络迁移 Runbook](docs/deployment/manager-jump-network-runbook.md)
+- [管理节点跳板与网络迁移方案](docs/deployment/管理节点跳板与网络迁移方案.md)
 - [Roadmap](docs/roadmap.md)
 - [Agent 协作手册](docs/agents/README.md)
 - [当前 Work Items](docs/work-items/active/matmul-e2e-stabilization.md)
