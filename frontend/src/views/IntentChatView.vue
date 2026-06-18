@@ -300,12 +300,19 @@
       </section>
 
       <footer class="composer">
+        <div v-if="conversationInputLocked" class="composer-lock-tip">
+          <div>
+            <strong>{{ conversationInputLockTitle }}</strong>
+            <span>{{ conversationInputLockMessage }}</span>
+          </div>
+          <el-button size="small" type="primary" plain @click="startNewConversation">新建对话</el-button>
+        </div>
         <el-input
           v-model="utterance"
           type="textarea"
           :autosize="{ minRows: 2, maxRows: 4 }"
-          :disabled="isStreaming || conversation?.status === 'submitted' || conversation?.status === 'awaiting_routing' || !!conversation?.materialized_order_id"
-          :placeholder="conversation?.materialized_order_id ? '任务已提交，如需新任务请新建对话' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 compute-1 做视频推理...'"
+          :disabled="isStreaming || conversationInputLocked"
+          :placeholder="conversationInputLocked ? '当前对话已生成工单，请新建对话继续提交新任务' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 compute-1 做视频推理...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -499,6 +506,18 @@ const conversationStatusLabel = computed(() => {
   const s = conversation.value?.status
   return { drafting: '草稿', awaiting_routing: '待分配', ready_to_submit: '待网络就绪', submitted: '已提交', failed: '失败', cancelled: '已取消' }[s] || s || ''
 })
+const conversationInputLocked = computed(() =>
+  Boolean(conversation.value?.materialized_order_id)
+  || ['submitted', 'awaiting_routing', 'ready_to_submit'].includes(conversation.value?.status)
+)
+const conversationInputLockTitle = computed(() =>
+  conversation.value?.materialized_order_id ? '当前对话已生成工单' : '当前对话正在处理中'
+)
+const conversationInputLockMessage = computed(() =>
+  conversation.value?.materialized_order_id
+    ? '为了避免一个对话重复提交多个任务，请点击“新建对话”继续输入新的业务需求。'
+    : '系统正在处理该任务，请稍后在“我的工单”查看进度，或新建对话提交其他任务。'
+)
 const canCancelOrder = computed(() => {
   const s = conversation.value?.status
   return s === 'awaiting_routing' || s === 'ready_to_submit'
@@ -1080,8 +1099,14 @@ onMounted(async () => {
   await refreshList()
   const lastId = getLastConversationId()
   const target = lastId && conversations.value.find(c => c.id === lastId)
-  if (target) {
+  const editableTarget = conversations.value.find(item =>
+    item.status === 'drafting' && !item.materialized_order_id
+  )
+  if (target && target.status === 'drafting' && !target.materialized_order_id) {
     await loadConversation(lastId)
+  } else if (editableTarget) {
+    setLastConversationId(editableTarget.id)
+    await loadConversation(editableTarget.id)
   } else {
     await startNewConversation()
   }
@@ -1740,6 +1765,33 @@ onBeforeUnmount(stopRoutingPolling)
   padding: 12px 24px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
+}
+
+.composer-lock-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  border-radius: 10px;
+  background: #eef4ff;
+  color: #1e293b;
+}
+
+.composer-lock-tip strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+  color: #111827;
+}
+
+.composer-lock-tip span {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
 }
 
 .composer-actions {

@@ -118,6 +118,7 @@ class ConversationSummary(BaseModel):
     task_id: str
     status: ConversationStatus
     title: Optional[str] = None
+    materialized_order_id: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
