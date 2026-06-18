@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ADMIN_ROUTE_NAMES, USER_ROUTE_NAMES } from '@/utils/routeAccess'
+import { markAuthExpiredNotice } from '@/utils/authExpired'
 
 const routes = [
   {
@@ -107,8 +108,16 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
+  if (auth.needsTokenValidation) {
+    const valid = await auth.validateSession()
+    if (!valid && !to.meta.public) {
+      markAuthExpiredNotice()
+      return { name: 'Login', query: { redirect: to.fullPath } }
+    }
+  }
 
   if (to.meta.public) {
     if (auth.isAuthenticated && (to.name === 'Login' || to.name === 'Register')) {

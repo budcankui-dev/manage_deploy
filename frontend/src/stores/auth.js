@@ -25,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => Boolean(token.value) || isBypass.value)
   const isAdmin = computed(() => role.value === 'admin')
   const homePath = computed(() => (isAdmin.value ? '/business-tasks' : '/intent-chat'))
+  const needsTokenValidation = ref(Boolean(token.value) && !BYPASS)
 
   function persist(auth) {
     token.value = auth.access_token || ''
@@ -50,10 +51,33 @@ export const useAuthStore = defineStore('auth', () => {
     return authApi.bootstrap({ ...payload, role: 'admin' })
   }
 
+  async function validateSession() {
+    if (isBypass.value || !token.value) {
+      needsTokenValidation.value = false
+      return Boolean(token.value) || isBypass.value
+    }
+
+    try {
+      const { data } = await authApi.me({ skipAuthExpired: true, silentError: true })
+      role.value = data.role || role.value
+      username.value = data.username || username.value
+      const currentStorage = safeLocalStorage()
+      if (role.value) currentStorage?.setItem('role', role.value)
+      if (username.value) currentStorage?.setItem('username', username.value)
+      needsTokenValidation.value = false
+      return true
+    } catch {
+      logout()
+      needsTokenValidation.value = false
+      return false
+    }
+  }
+
   function logout() {
     token.value = ''
     role.value = BYPASS ? BYPASS_ROLE : ''
     username.value = BYPASS ? BYPASS_USERNAME : ''
+    needsTokenValidation.value = false
     clearSessionState()
   }
 
@@ -65,9 +89,11 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isAdmin,
     homePath,
+    needsTokenValidation,
     login,
     register,
     bootstrap,
+    validateSession,
     logout,
   }
 })

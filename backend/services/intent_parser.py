@@ -59,7 +59,14 @@ def _extract_source_destination(text: str) -> tuple[str | None, str | None]:
     destination = None
     patterns = [
         rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*到\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*(?:发到|发送到|推到|送到|安全送到)\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*接入到\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*接入\s*[，,、]?\s*到\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf"从\s*[\"']?({NODE_TOKEN})[\"']?.*?结果\s*(?:送到|送|回到|返回到)\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*发起到\s*[\"']?({NODE_TOKEN})[\"']?\s*汇总",
+        rf"[\"']?({NODE_TOKEN})[\"']?\s*发送.*?[\"']?({NODE_TOKEN})[\"']?\s*接收",
+        rf"(?:用户端|源端|源节点|起点(?:选)?)\s*[\"']?({NODE_TOKEN})[\"']?.*?(?:结果送到|目的端|目的节点|接收端|终点(?:选)?)\s*[\"']?({NODE_TOKEN})[\"']?",
+        rf".*?由\s*[\"']?({NODE_TOKEN})[\"']?\s*提交.*?结果回到\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"({NODE_TOKEN})\s*(?:->|→)\s*({NODE_TOKEN})",
         rf"(?:业务)?源(?:节点|终端)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?.*?(?:业务)?目的(?:节点|终端|地)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:src|source)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?.*?(?:dst|dest|destination)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?",
@@ -73,10 +80,12 @@ def _extract_source_destination(text: str) -> tuple[str | None, str | None]:
 
     src_patterns = [
         rf"从\s*[\"']?({NODE_TOKEN})[\"']?\s*出发",
+        rf"(?:用户端|源端|起点(?:选)?|源节点)\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:业务)?源(?:节点|终端)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:src|source)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?",
     ]
     dst_patterns = [
+        rf"(?:结果送到|结果送|结果回到|返回到|目的端|接收端|终点(?:选)?|目的节点)\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:业务)?目的(?:节点|终端|地)?\s*(?:是|为|=|:|：)?\s*[\"']?({NODE_TOKEN})[\"']?",
         rf"(?:dst|dest|destination)\s*[:=]\s*[\"']?({NODE_TOKEN})[\"']?",
     ]
@@ -132,6 +141,7 @@ def _extract_matrix_size(text: str) -> int | None:
     patterns = [
         r"(\d{3,5})\s*(?:阶|维)\s*矩阵",
         r"矩阵\s*(?:规模|大小)?\s*[:：]?\s*(\d{3,5})",
+        r"矩阵阶数\s*[:：]?\s*(\d{3,5})",
         r"(\d{3,5})\s*[x×]\s*\1",
         r"(?:规模|大小|size)\s*[:=：]?\s*(\d{3,5})",
         r"matrix\s*[:=]?\s*(\d{3,5})",
@@ -144,6 +154,7 @@ def _extract_matrix_size(text: str) -> int | None:
 def _extract_batch_count(text: str) -> int | None:
     patterns = [
         r"(\d{1,4})\s*(?:批|批次|个批次)",
+        r"(\d{1,4})\s*个小批次",
         r"批次数\s*[:：]?\s*(\d{1,4})",
         r"batch\s+(\d{1,4})",
         r"batch(?:_count)?\s*[:=]\s*(\d{1,4})",
@@ -181,6 +192,7 @@ def _extract_resolution(text: str) -> str | None:
 def _extract_prompt_tokens(text: str) -> int | None:
     patterns = [
         r"prompt[_\s-]*tokens\s*[:=]\s*(\d{1,6})",
+        r"prompt\s*长度\s*[:：]?\s*(\d{1,6})(?:\s*tokens?)?",
         r"prompt\s*(\d{1,6})\s*tokens?",
         r"输入\s*(\d{1,6})\s*tokens?",
     ]
@@ -191,7 +203,10 @@ def _extract_prompt_tokens(text: str) -> int | None:
 def _extract_max_new_tokens(text: str) -> int | None:
     patterns = [
         r"max[_\s-]*new[_\s-]*tokens\s*[:=]\s*(\d{1,6})",
+        r"生成长度\s*[:：]?\s*(\d{1,6})(?:\s*tokens?)?",
         r"生成\s*(\d{1,6})\s*tokens?",
+        r"生成\s*(\d{1,6})(?:，|,|$)",
+        r"输出上限\s*(\d{1,6})(?:\s*tokens?)?",
         r"输出\s*(\d{1,6})\s*tokens?",
     ]
     value = _extract_number(text, patterns)
@@ -357,7 +372,7 @@ def parse_intent(
         }
         if throughput is not None:
             result.business_objective["target_value"] = throughput
-    elif any(k in lower for k in ("智算中心", "智算", "模型训练", "训练任务", "训练类", "样本数", "训练样本", "神经网络训练", "训练吞吐")):
+    elif any(k in lower for k in ("智算中心", "智算", "模型训练", "训练任务", "训练类", "样本数", "样本量", "训练样本", "训练数据", "神经网络训练", "训练吞吐")):
         result.task_type = result.task_type or "ai_model_training"
         result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "ai_training_default")
@@ -365,7 +380,10 @@ def parse_intent(
         result.data_profile.setdefault("sample_count", int(_extract_number(text, [
             r"(\d{2,7})\s*(?:条)?样本",
             r"样本数\s*[:：]?\s*(\d{2,7})",
+            r"样本量\s*[:：]?\s*(\d{2,7})",
             r"训练样本\s*[:：]?\s*(\d{2,7})",
+            r"训练数据\s*[:：]?\s*(\d{2,7})\s*(?:条)?",
+            r"数据集\s*[:：]?\s*(\d{2,7})\s*(?:条)?",
             r"samples?\s*[:=]?\s*(\d{2,7})",
         ]) or 10000))
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
@@ -378,15 +396,17 @@ def parse_intent(
         result.data_profile.setdefault("data_size_gb", int(_extract_number(text, [r"(\d{1,5})\s*(?:gb|GB|g|G|吉)"]) or 100))
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
         result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
-    elif any(k in lower for k in ("大规模连接", "大规模接入", "海量连接", "海量接入", "虚拟电厂", "终端接入", "连接数", "并发连接", "终端上报", "设备连接")):
+    elif any(k in lower for k in ("大规模连接", "大规模接入", "海量连接", "海量接入", "海量终端采集", "连接采集", "虚拟电厂", "终端接入", "连接数", "并发连接", "终端上报", "设备连接", "设备数量")):
         result.task_type = result.task_type or "massive_connection_collect"
         result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "massive_connection_default")
         result.data_profile.setdefault("source", "synthetic")
         result.data_profile.setdefault("connection_count", int(_extract_number(text, [
             r"(\d{2,7})\s*(?:个)?(?:终端|连接|用户|设备)",
+            r"(\d{2,7})\s*路连接",
             r"连接数\s*[:：]?\s*(\d{2,7})",
             r"并发连接\s*[:：]?\s*(\d{2,7})",
+            r"设备数量\s*[:：]?\s*(\d{2,7})",
         ]) or 10000))
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
         result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
@@ -410,7 +430,7 @@ def parse_intent(
         result.data_profile.setdefault("power_budget_w", int(_extract_number(text, [r"(\d{1,4})\s*w", r"功耗.*?(\d{1,4})", r"能耗.*?(\d{1,4})"]) or 50))
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
         result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
-    elif any(k in lower for k in ("高安全", "安全传输", "加密", "低空远程", "敏感数据", "安全回传")):
+    elif any(k in lower for k in ("高安全", "安全传输", "加密", "低空远程", "敏感数据", "敏感业务", "安全回传")):
         result.task_type = result.task_type or "secure_transmission"
         result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "secure_transmission_default")

@@ -22,8 +22,8 @@ import httpx
 from config import settings
 from services.intent_parser import ParseResult, parse_intent
 from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _validate_and_clean
-from services.modality_catalog import normalize_modality
-from services.topology_catalog import INTENT_VALID_NODES
+from services.modality_catalog import TASK_TYPE_NAMES, normalize_modality
+from services.topology_catalog import TERMINAL_NODE_ALIASES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +32,27 @@ REPORTS_DIR = REPO_ROOT / "reports"
 RULE_REPORT_PATH = REPORTS_DIR / "intent_eval.json"
 LLM_REPORT_PATH = REPORTS_DIR / "intent_eval_llm.json"
 BATCH_DIR = REPORTS_DIR / "intent_eval_batches"
-VALID_NODES = INTENT_VALID_NODES
+VALID_NODES = TERMINAL_NODE_ALIASES
+TASK_TYPE_LABEL_TO_CODE = {label: code for code, label in TASK_TYPE_NAMES.items()}
+ROUTING_STRATEGY_LABEL_TO_CODE = {
+    "成本开销保障": "cost_priority",
+    "低时延转发": "low_latency_forwarding",
+    "资源预留保障": "resource_guarantee",
+    "完成时间优先": "fastest_completion",
+    "资源负载均衡": "load_balance",
+}
+
+
+def _normalize_task_type(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return TASK_TYPE_LABEL_TO_CODE.get(value, value)
+
+
+def _normalize_routing_strategy(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return ROUTING_STRATEGY_LABEL_TO_CODE.get(value, value)
 
 
 def available_eval_models() -> list[str]:
@@ -115,11 +135,47 @@ def load_dataset() -> list[dict[str, Any]]:
     return rows
 
 
+def sample_expected(sample: dict[str, Any]) -> dict[str, Any]:
+    """Return the scoring target from the current labels/evaluation dataset shape."""
+    labels = sample.get("labels") or {}
+    evaluation = sample.get("evaluation") or {}
+    if not isinstance(labels, dict) or not labels:
+        sample_id = sample.get("sample_id") or "<unknown>"
+        raise ValueError(f"Intent dataset sample {sample_id} must contain non-empty labels")
+    if not isinstance(evaluation, dict) or not evaluation:
+        sample_id = sample.get("sample_id") or "<unknown>"
+        raise ValueError(f"Intent dataset sample {sample_id} must contain non-empty evaluation")
+    runtime_plan = dict(labels.get("runtime_plan") or {})
+    if "routing_strategy" in runtime_plan:
+        runtime_plan["routing_strategy"] = _normalize_routing_strategy(runtime_plan.get("routing_strategy"))
+    expected: dict[str, Any] = {
+        "task_type": _normalize_task_type(labels.get("task_type")),
+        "modality": labels.get("modality"),
+        "source_name": labels.get("source_name"),
+        "destination_name": labels.get("destination_name"),
+        "data_profile": dict(labels.get("data_profile") or {}),
+        "runtime_plan": runtime_plan,
+        "parse_status": evaluation.get("parse_status", "valid"),
+        "missing_params": list(evaluation.get("missing_params") or []),
+    }
+    business_objective = labels.get("business_objective")
+    if isinstance(business_objective, dict):
+        expected["business_objective"] = business_objective
+    time_label = labels.get("time") or {}
+    duration_minutes = time_label.get("duration_minutes")
+    if duration_minutes is not None:
+        expected["expected_time"] = {
+            "mode": "relative_duration",
+            "duration_minutes": duration_minutes,
+        }
+    return {key: value for key, value in expected.items() if value is not None}
+
+
 def dataset_summary() -> dict[str, Any]:
     rows = load_dataset()
     case_counts = Counter(row.get("case_type", "valid") for row in rows)
-    task_counts = Counter((row.get("expected") or {}).get("task_type", "unknown") for row in rows)
-    modality_counts = Counter((row.get("expected") or {}).get("modality", "unknown") for row in rows)
+    task_counts = Counter(sample_expected(row).get("task_type", "unknown") for row in rows)
+    modality_counts = Counter(sample_expected(row).get("modality", "unknown") for row in rows)
     dataset_bytes = DATASET_PATH.read_bytes() if DATASET_PATH.exists() else b""
     return {
         "path": _display_path(DATASET_PATH),
@@ -138,7 +194,7 @@ def _dataset_modality_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any
     """Return stable, compact examples for the acceptance UI."""
     examples: dict[str, dict[str, Any]] = {}
     for row in rows:
-        expected = row.get("expected") or {}
+        expected = sample_expected(row)
         modality = expected.get("modality")
         if not modality:
             continue
@@ -251,8 +307,12 @@ def score_parsed_result(parsed: ParseResult, expected: dict[str, Any]) -> dict[s
 def _detail_matches(field: str, expected: Any, got: Any) -> bool:
     if expected == "present":
         return got is not None
+    if field == "task_type":
+        return _normalize_task_type(expected) == _normalize_task_type(got)
     if field == "modality":
         return normalize_modality(expected) == normalize_modality(got)
+    if field == "routing_strategy":
+        return _normalize_routing_strategy(expected) == _normalize_routing_strategy(got)
     return expected == got
 
 
@@ -296,13 +356,13 @@ def run_rule_evaluation(repeats: int = 3) -> dict[str, Any]:
         run_results = []
         for _ in range(repeats):
             parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
-            scored = score_parsed_result(parsed, sample.get("expected", {}))
+            scored = score_parsed_result(parsed, sample_expected(sample))
             run_results.append({
                 **scored,
                 "parser_name": parsed.parser_name,
                 "parser_version": parsed.parser_version,
                 "parsed_result": _parse_result_payload(parsed),
-                "expected_result": sample.get("expected", {}),
+                "expected_result": sample_expected(sample),
                 "sample_payload": sample,
             })
         match = Counter(result["match"] for result in run_results)[True] >= (repeats + 1) // 2
@@ -312,7 +372,7 @@ def run_rule_evaluation(repeats: int = 3) -> dict[str, Any]:
             "sample_id": f"sample-{index:04d}",
             "case_type": sample.get("case_type", "valid"),
             "utterance": sample["utterance"],
-            "expected": sample.get("expected", {}),
+            "expected": sample_expected(sample),
             "sample_payload": sample,
             "match": match,
             "runs": run_results,
@@ -348,9 +408,10 @@ def read_report(path: Path) -> dict[str, Any] | None:
 
 def latest_status() -> dict[str, Any]:
     try:
-        from services.intent_online_eval import read_online_report
+        from services.intent_online_eval import list_online_report_history, read_online_report
     except Exception:
         read_online_report = None
+        list_online_report_history = None
     batch_job = read_latest_batch_job()
     llm_report = read_report(LLM_REPORT_PATH)
     batch_job = _sync_batch_summary_from_report(batch_job, llm_report)
@@ -359,6 +420,7 @@ def latest_status() -> dict[str, Any]:
         "rule_report": read_report(RULE_REPORT_PATH),
         "llm_report": llm_report,
         "online_report": read_online_report() if read_online_report else None,
+        "online_report_history": list_online_report_history() if list_online_report_history else [],
         "batch_job": batch_job,
         "batch_diagnostic": batch_diagnostic(batch_job),
         "config": {
@@ -612,7 +674,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
             raw_run: dict[str, Any] | None = None
             if raw is None:
                 final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
-                final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
+                final_scored = score_parsed_result(final_parsed, sample_expected(sample))
                 run = {
                     **final_scored,
                     "llm_raw_match": False,
@@ -625,7 +687,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                     "raw_llm_response": None,
                     "llm_raw_result": None,
                     "parsed_result": _parse_result_payload(final_parsed),
-                    "expected_result": sample.get("expected", {}),
+                    "expected_result": sample_expected(sample),
                     "sample_payload": sample,
                 }
             else:
@@ -635,7 +697,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                     raw_parsed.runtime_plan["routing_strategy"] = None
                 elif "routing_strategy" in cleaned:
                     raw_parsed.runtime_plan["routing_strategy"] = cleaned.get("routing_strategy")
-                raw_scored = score_parsed_result(raw_parsed, sample.get("expected", {}))
+                raw_scored = score_parsed_result(raw_parsed, sample_expected(sample))
                 raw_returned += 1
                 if raw_scored["match"]:
                     raw_correct += 1
@@ -646,7 +708,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                     final_source = "llm_qwen"
                 else:
                     final_parsed = parse_intent(sample["utterance"], valid_nodes=VALID_NODES)
-                    final_scored = score_parsed_result(final_parsed, sample.get("expected", {}))
+                    final_scored = score_parsed_result(final_parsed, sample_expected(sample))
                     final_source = "rule_fallback"
                 raw_run = {
                     **raw_scored,
@@ -667,7 +729,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                     "raw_llm_response": raw,
                     "llm_raw_result": _parse_result_payload(raw_parsed),
                     "parsed_result": _parse_result_payload(final_parsed),
-                    "expected_result": sample.get("expected", {}),
+                    "expected_result": sample_expected(sample),
                     "sample_payload": sample,
                 }
             match = run["match"]
@@ -677,7 +739,7 @@ def score_batch_output(job: dict[str, Any], output_path: Path) -> dict[str, Any]
                 "sample_id": custom_id,
                 "case_type": sample.get("case_type", "valid"),
                 "utterance": sample["utterance"],
-                "expected": sample.get("expected", {}),
+                "expected": sample_expected(sample),
                 "sample_payload": sample,
                 "match": match,
                 "runs": [run],

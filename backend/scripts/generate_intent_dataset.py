@@ -16,11 +16,11 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
-from services.topology_catalog import INTENT_VALID_NODES
+from services.modality_catalog import modality_for_task_type, task_name_for_task_type
+from services.topology_catalog import TERMINAL_NODE_ALIASES
 
 
-NODES = INTENT_VALID_NODES
+NODES = TERMINAL_NODE_ALIASES
 STRATEGIES = [
     (
         "resource_guarantee",
@@ -88,6 +88,13 @@ STRATEGIES = [
         ],
     ),
 ]
+STRATEGY_LABELS = {
+    "resource_guarantee": "资源预留保障",
+    "fastest_completion": "完成时间优先",
+    "low_latency_forwarding": "低时延转发",
+    "load_balance": "资源负载均衡",
+    "cost_priority": "成本开销保障",
+}
 TIME_PHRASES = [
     ("现在开始跑2小时", 120),
     ("立即运行60分钟", 60),
@@ -106,6 +113,9 @@ TASKS = {
             "创建矩阵计算业务，业务源节点是 {src}，业务目的节点是 {dst}，规模 {matrix_size} 阶，连续执行 {batch_count} 批，{time}，{strategy_text}",
             "我要验证通用计算能力，任务源节点 {src}、任务目的节点 {dst}，矩阵 {matrix_size}x{matrix_size}，批次数 {batch_count}，{time}，{strategy_text}",
             "提交一条随路计算工单：从业务源节点 {src} 到业务目的节点 {dst}，执行 {matrix_size} 阶矩阵乘法 {batch_count} 批，{time}，{strategy_text}",
+            "帮我开一个矩阵计算预约，起点选 {src}，终点选 {dst}，矩阵阶数 {matrix_size}，执行 {batch_count} 个小批次，{time}，{strategy_text}",
+            "用户端 {src} 发起矩阵计算，结果送到 {dst}，矩阵规模 {matrix_size}，批次数 {batch_count}，{time}，{strategy_text}",
+            "做一次高通量计算演示，源端 {src}，目的端 {dst}，{matrix_size} 阶矩阵乘法跑 {batch_count} 批，{time}，{strategy_text}",
         ],
         "slots": [
             {"matrix_size": 512, "batch_count": 20},
@@ -122,6 +132,9 @@ TASKS = {
             "发起低时延视频业务，业务源节点 {src}，业务目的节点 {dst}，输入 {frame_count} 帧 {resolution} 视频，目标帧率 {fps}fps，{time}，{strategy_text}",
             "创建视频 AI 推理工单：从任务源节点 {src} 到任务目的节点 {dst}，处理 {resolution}/{fps}fps 的 {frame_count} 帧，{time}，{strategy_text}",
             "视频链路验收测试，source={src} destination={dst}，frames={frame_count}，分辨率 {resolution}，帧率 {fps}，{time}，{strategy_text}",
+            "我要从 {src} 推一段视频到 {dst} 做 AI 检测，{resolution}，{frame_count} 帧，{fps}fps，{time}，{strategy_text}",
+            "低时延视频识别演示：源端 {src}，接收端 {dst}，视频 {resolution}/{fps}fps，共 {frame_count} 帧，{time}，{strategy_text}",
+            "安排视频推理链路，用户侧 {src} 发送，用户侧 {dst} 接收，处理 {frame_count} 帧 {resolution}，帧率 {fps}，{time}，{strategy_text}",
         ],
         "slots": [
             {"frame_count": 90, "resolution": "720p", "fps": 30},
@@ -138,6 +151,8 @@ TASKS = {
             "提交文本生成业务，业务源节点为 {src}，业务目的节点为 {dst}，输入 {prompt_tokens} tokens，最多生成 {max_new_tokens} tokens，batch_size {batch_size}，{time}，{strategy_text}",
             "我要跑一个 LLM 推理任务，任务源节点 {src}、任务目的节点 {dst}，prompt 长度 {prompt_tokens} tokens，生成长度 {max_new_tokens} tokens，批大小 {batch_size}，{time}，{strategy_text}",
             "大模型文本业务验收：source={src} destination={dst}，prompt_tokens={prompt_tokens}，max_new_tokens={max_new_tokens}，batch={batch_size}，{time}，{strategy_text}",
+            "文本生成服务从 {src} 接入，到 {dst} 返回结果，输入 {prompt_tokens} tokens，输出上限 {max_new_tokens} tokens，批大小 {batch_size}，{time}，{strategy_text}",
+            "帮我预约一条 LLM 推理业务，源端 {src}，目的端 {dst}，prompt 长度 {prompt_tokens}，生成 {max_new_tokens}，batch {batch_size}，{time}，{strategy_text}",
         ],
         "slots": [
             {"prompt_tokens": 256, "max_new_tokens": 128, "batch_size": 1},
@@ -153,6 +168,8 @@ TASKS = {
             "提交模型训练业务，业务源节点 {src}，业务目的节点 {dst}，样本数 {sample_count}，{time}，{strategy_text}",
             "帮我安排一条训练类智算任务，源终端 {src}，目的终端 {dst}，数据集 {sample_count} 条样本，{time}，{strategy_text}",
             "需要做神经网络训练验证，从 {src} 发起到 {dst} 汇总，训练样本 {sample_count}，{time}，{strategy_text}",
+            "训练任务由 {src} 提交，结果回到 {dst}，样本量 {sample_count}，{time}，{strategy_text}",
+            "帮我跑一轮模型训练验收，源节点 {src}，目的节点 {dst}，训练数据 {sample_count} 条，{time}，{strategy_text}",
         ],
         "slots": [
             {"sample_count": 5000},
@@ -168,6 +185,8 @@ TASKS = {
             "创建分布式存算工单，业务源节点 {src}，业务目的节点 {dst}，数据规模 {data_size_gb}GB，{time}，{strategy_text}",
             "我要把 {data_size_gb}GB 数据做存算协同处理，源终端 {src}，目的终端 {dst}，{time}，{strategy_text}",
             "多节点数据拉取后就近计算，从 {src} 到 {dst}，数据量 {data_size_gb}GB，{time}，{strategy_text}",
+            "从 {src} 取数并在路径上做存算协同，结果送 {dst}，数据规模 {data_size_gb}GB，{time}，{strategy_text}",
+            "存算一体业务预约：源端 {src}，目的端 {dst}，处理 {data_size_gb}GB 数据，{time}，{strategy_text}",
         ],
         "slots": [
             {"data_size_gb": 50},
@@ -183,6 +202,8 @@ TASKS = {
             "创建海量连接业务，业务源节点 {src}，业务目的节点 {dst}，连接数 {connection_count}，{time}，{strategy_text}",
             "需要承载一批终端上报，源终端 {src}，目的终端 {dst}，大约 {connection_count} 个设备，{time}，{strategy_text}",
             "多用户大规模接入测试，从 {src} 到 {dst}，并发连接 {connection_count}，{time}，{strategy_text}",
+            "海量终端采集从 {src} 接入到 {dst} 汇聚，设备数量 {connection_count}，{time}，{strategy_text}",
+            "帮我安排连接采集业务，起点 {src}，终点 {dst}，大约 {connection_count} 路连接，{time}，{strategy_text}",
         ],
         "slots": [
             {"connection_count": 5000},
@@ -198,6 +219,8 @@ TASKS = {
             "创建确定性转发业务，业务源节点 {src}，业务目的节点 {dst}，最大抖动 {max_jitter_ms}ms，{time}，{strategy_text}",
             "需要稳定时延链路，从源终端 {src} 到目的终端 {dst}，抖动上限 {max_jitter_ms}ms，{time}，{strategy_text}",
             "给巡检数据开一条确定性通道，{src} -> {dst}，jitter 控制在 {max_jitter_ms}ms，{time}，{strategy_text}",
+            "确定性网络演示，源端 {src}，目的端 {dst}，最大抖动 {max_jitter_ms}ms，{time}，{strategy_text}",
+            "巡检数据从 {src} 发到 {dst}，要求稳定转发，抖动上限 {max_jitter_ms}ms，{time}，{strategy_text}",
         ],
         "slots": [
             {"max_jitter_ms": 3},
@@ -213,6 +236,8 @@ TASKS = {
             "创建低功耗边缘推理业务，业务源节点 {src}，业务目的节点 {dst}，{frame_count}帧，{power_budget_w}W，{time}，{strategy_text}",
             "边缘侧做轻量识别，从 {src} 到 {dst}，抽取 {frame_count} 帧，功耗限制 {power_budget_w}W，{time}，{strategy_text}",
             "巡检图片就近推理，源终端 {src}，目的终端 {dst}，共 {frame_count} 帧，能耗预算 {power_budget_w}W，{time}，{strategy_text}",
+            "边缘推理任务从 {src} 接入到 {dst} 展示结果，处理 {frame_count} 帧，功耗不超过 {power_budget_w}W，{time}，{strategy_text}",
+            "高能效识别演示，源端 {src}，目的端 {dst}，{frame_count} 帧图片，功耗预算 {power_budget_w}W，{time}，{strategy_text}",
         ],
         "slots": [
             {"frame_count": 90, "power_budget_w": 30},
@@ -228,6 +253,8 @@ TASKS = {
             "创建高安全传输业务，业务源节点 {src}，业务目的节点 {dst}，安全级别 high，{time}，{strategy_text}",
             "需要安全回传低空作业数据，源终端 {src}，目的终端 {dst}，要求高安全传输，{time}，{strategy_text}",
             "敏感视频信息加密传输，从 {src} 到 {dst}，安全等级 high，{time}，{strategy_text}",
+            "安全传输演示，源端 {src}，目的端 {dst}，走高安全加密链路，{time}，{strategy_text}",
+            "帮我把敏感业务从 {src} 安全送到 {dst}，安全级别 high，{time}，{strategy_text}",
         ],
         "slots": [
             {"security_level": "high"},
@@ -263,7 +290,7 @@ def _profile_text(task_type: str, profile: dict) -> str:
     return template.format(**profile) if template else "固定业务参数"
 
 
-def _expected(
+def _labels_and_evaluation(
     *,
     task_type: str,
     src: str | None,
@@ -273,25 +300,36 @@ def _expected(
     parse_status: str,
     duration_minutes: int | None = None,
     missing_params: list[str] | None = None,
-) -> dict:
-    runtime_plan = {"routing_strategy": strategy}
-    expected = {
-        "task_type": task_type,
+) -> tuple[dict, dict]:
+    runtime_plan = {"routing_strategy": STRATEGY_LABELS.get(strategy, strategy)}
+    labels = {
+        "task_type": task_name_for_task_type(task_type),
         "modality": modality_for_task_type(task_type),
         "source_name": src,
         "destination_name": dst,
         "data_profile": dict(profile),
         "runtime_plan": runtime_plan,
-        "business_objective": default_objective_for_task_type(task_type),
+    }
+    if duration_minutes is not None:
+        labels["time"] = {
+            "type": "relative_duration",
+            "duration_minutes": duration_minutes,
+        }
+    evaluation = {
         "parse_status": parse_status,
         "missing_params": missing_params or [],
     }
-    if duration_minutes is not None:
-        expected["expected_time"] = {
-            "mode": "relative_duration",
-            "duration_minutes": duration_minutes,
-        }
-    return expected
+    return labels, evaluation
+
+
+def _row_payload(case_type: str, utterance: str, **expected_kwargs) -> dict:
+    labels, evaluation = _labels_and_evaluation(**expected_kwargs)
+    return {
+        "case_type": case_type,
+        "utterance": utterance,
+        "labels": labels,
+        "evaluation": evaluation,
+    }
 
 
 def _valid_row(task_type: str, index: int) -> dict:
@@ -309,19 +347,17 @@ def _valid_row(task_type: str, index: int) -> dict:
         strategy_text=strategy_text,
         **profile,
     )
-    return {
-        "case_type": "valid",
-        "utterance": utterance,
-        "expected": _expected(
-            task_type=task_type,
-            src=src,
-            dst=dst,
-            profile=profile,
-            strategy=strategy,
-            parse_status="valid",
-            duration_minutes=duration_minutes,
-        ),
-    }
+    return _row_payload(
+        "valid",
+        utterance,
+        task_type=task_type,
+        src=src,
+        dst=dst,
+        profile=profile,
+        strategy=strategy,
+        parse_status="valid",
+        duration_minutes=duration_minutes,
+    )
 
 
 def _valid_minimal_row(task_type: str, index: int) -> dict:
@@ -340,19 +376,17 @@ def _valid_minimal_row(task_type: str, index: int) -> dict:
         f"请创建{TASK_NAMES[task_type]}，从 {src} 到 {dst}，"
         f"{profile_text}，{time}。"
     )
-    return {
-        "case_type": "valid_default_strategy",
-        "utterance": utterance,
-        "expected": _expected(
-            task_type=task_type,
-            src=src,
-            dst=dst,
-            profile=profile,
-            strategy="resource_guarantee",
-            parse_status="valid",
-            duration_minutes=duration_minutes,
-        ),
-    }
+    return _row_payload(
+        "valid_default_strategy",
+        utterance,
+        task_type=task_type,
+        src=src,
+        dst=dst,
+        profile=profile,
+        strategy="resource_guarantee",
+        parse_status="valid",
+        duration_minutes=duration_minutes,
+    )
 
 
 def _valid_colloquial_row(task_type: str, index: int) -> dict:
@@ -368,19 +402,17 @@ def _valid_colloquial_row(task_type: str, index: int) -> dict:
         f"帮我在业务链路 {src} -> {dst} 上跑一个{TASK_NAMES[task_type]}，"
         f"参数按{profile_text}，{time}，{strategy_text}。"
     )
-    return {
-        "case_type": "valid_colloquial",
-        "utterance": utterance,
-        "expected": _expected(
-            task_type=task_type,
-            src=src,
-            dst=dst,
-            profile=profile,
-            strategy=strategy,
-            parse_status="valid",
-            duration_minutes=duration_minutes,
-        ),
-    }
+    return _row_payload(
+        "valid_colloquial",
+        utterance,
+        task_type=task_type,
+        src=src,
+        dst=dst,
+        profile=profile,
+        strategy=strategy,
+        parse_status="valid",
+        duration_minutes=duration_minutes,
+    )
 
 
 def _incomplete_row(task_type: str, index: int) -> dict:
@@ -398,20 +430,18 @@ def _incomplete_row(task_type: str, index: int) -> dict:
         time=time,
         strategy_text=strategy_text,
     )
-    return {
-        "case_type": kind,
-        "utterance": utterance,
-        "expected": _expected(
-            task_type=task_type,
-            src=None if "source_name" in missing else src,
-            dst=None if "destination_name" in missing else dst,
-            profile=profile,
-            strategy=strategy,
-            parse_status="incomplete",
-            duration_minutes=None if "business_start_time" in missing else duration_minutes,
-            missing_params=missing,
-        ),
-    }
+    return _row_payload(
+        kind,
+        utterance,
+        task_type=task_type,
+        src=None if "source_name" in missing else src,
+        dst=None if "destination_name" in missing else dst,
+        profile=profile,
+        strategy=strategy,
+        parse_status="incomplete",
+        duration_minutes=None if "business_start_time" in missing else duration_minutes,
+        missing_params=missing,
+    )
 
 
 def generate_dataset(count: int) -> list[dict]:

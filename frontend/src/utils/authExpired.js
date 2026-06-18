@@ -19,13 +19,17 @@ export function consumeAuthExpiredNotice() {
   return true
 }
 
+export function markAuthExpiredNotice() {
+  safeSessionStorage()?.setItem(NOTICE_KEY, '1')
+}
+
 export function handleAuthExpired() {
   clearSessionState()
 
   if (redirecting) return
   redirecting = true
 
-  safeSessionStorage()?.setItem(NOTICE_KEY, '1')
+  markAuthExpiredNotice()
 
   const currentPath = `${window.location.pathname}${window.location.search}`
   if (window.location.pathname === '/login' || window.location.pathname === '/register') {

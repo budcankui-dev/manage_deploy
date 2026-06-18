@@ -3,6 +3,7 @@ import json
 
 import services.intent_batch_eval as intent_batch_eval
 from services.intent_batch_eval import batch_diagnostic, latest_status, score_batch_output, score_parsed_result
+from services.intent_batch_eval import dataset_summary, sample_expected
 from services.intent_parser import ParseResult
 
 
@@ -11,8 +12,8 @@ def _parsed(**overrides):
     data = {
         "task_type": "high_throughput_matmul",
         "modality": "high_throughput_compute",
-        "source_name": "compute-1",
-        "destination_name": "compute-2",
+        "source_name": "h1",
+        "destination_name": "h2",
         "business_start_time": now,
         "business_end_time": now + timedelta(minutes=120),
         "data_profile": {"matrix_size": 512, "batch_count": 20},
@@ -29,8 +30,8 @@ def test_score_normalizes_legacy_modality_code():
         {
             "task_type": "high_throughput_matmul",
             "modality": "高通量计算模态",
-            "source_name": "compute-1",
-            "destination_name": "compute-2",
+            "source_name": "h1",
+            "destination_name": "h2",
             "parse_status": "valid",
             "data_profile": {"matrix_size": 512, "batch_count": 20},
             "runtime_plan": {"routing_strategy": "resource_guarantee"},
@@ -50,8 +51,8 @@ def test_score_ignores_top_level_fields_missing_from_expected():
         _parsed(),
         {
             "task_type": "high_throughput_matmul",
-            "source_name": "compute-1",
-            "destination_name": "compute-2",
+            "source_name": "h1",
+            "destination_name": "h2",
             "parse_status": "valid",
             "data_profile": {"matrix_size": 512, "batch_count": 20},
             "runtime_plan": {"routing_strategy": "resource_guarantee"},
@@ -61,6 +62,79 @@ def test_score_ignores_top_level_fields_missing_from_expected():
 
     assert result["match"] is True
     assert "modality" not in result["details"]
+
+
+def test_sample_expected_rejects_legacy_expected_dataset_shape():
+    sample = {
+        "sample_id": "legacy-0001",
+        "utterance": "矩阵乘法任务，从 h1 到 h2，512阶矩阵，20批，现在开始跑2小时",
+        "expected": {
+            "task_type": "high_throughput_matmul",
+            "source_name": "h1",
+            "destination_name": "h2",
+        },
+    }
+
+    try:
+        sample_expected(sample)
+    except ValueError as exc:
+        assert "must contain non-empty labels" in str(exc)
+    else:
+        raise AssertionError("legacy expected-only samples must be rejected")
+
+
+def test_sample_expected_supports_labels_evaluation_dataset_shape():
+    sample = {
+        "sample_id": "sample-new-0001",
+        "case_type": "valid",
+        "utterance": "从 h1 到 h2 跑矩阵乘法，512阶，20批，立即运行60分钟",
+        "labels": {
+            "task_type": "矩阵乘法计算任务",
+            "modality": "高通量计算模态",
+            "source_name": "h1",
+            "destination_name": "h2",
+            "data_profile": {"matrix_size": 512, "batch_count": 20},
+            "runtime_plan": {"routing_strategy": "资源预留保障"},
+            "time": {"type": "relative_duration", "duration_minutes": 60},
+        },
+        "evaluation": {"parse_status": "valid", "missing_params": []},
+    }
+
+    expected = sample_expected(sample)
+    result = score_parsed_result(
+        _parsed(business_end_time=datetime(2026, 6, 8, 11, 0, 0)),
+        expected,
+    )
+
+    assert expected["expected_time"] == {"mode": "relative_duration", "duration_minutes": 60}
+    assert result["match"] is True
+
+
+def test_dataset_summary_counts_new_labels_shape(tmp_path, monkeypatch):
+    dataset_path = tmp_path / "multi_business.jsonl"
+    sample = {
+        "sample_id": "sample-new-0001",
+        "case_type": "valid",
+        "utterance": "从 h1 到 h2 跑矩阵乘法，512阶，20批，立即运行60分钟",
+        "labels": {
+            "task_type": "high_throughput_matmul",
+            "modality": "高通量计算模态",
+            "source_name": "h1",
+            "destination_name": "h2",
+            "data_profile": {"matrix_size": 512, "batch_count": 20},
+            "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            "time": {"type": "relative_duration", "duration_minutes": 60},
+        },
+        "evaluation": {"parse_status": "valid", "missing_params": []},
+    }
+    dataset_path.write_text(json.dumps(sample, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(intent_batch_eval, "DATASET_PATH", dataset_path)
+
+    summary = dataset_summary()
+
+    assert summary["task_counts"] == {"high_throughput_matmul": 1}
+    assert summary["modality_counts"] == {"高通量计算模态": 1}
+    assert summary["modality_examples"][0]["runtime_plan"] == {"routing_strategy": "resource_guarantee"}
 
 
 def test_batch_diagnostic_flags_long_running_zero_progress_job():
@@ -143,17 +217,17 @@ def test_score_batch_output_reports_final_accuracy_with_raw_llm_diagnostics(tmp_
 
     sample = {
         "case_type": "valid",
-        "utterance": "矩阵乘法任务，从 compute-1 到 compute-2，512阶矩阵，20批，现在开始跑2小时，希望成本更低",
-        "expected": {
-            "task_type": "high_throughput_matmul",
+        "utterance": "矩阵乘法任务，从 h1 到 h2，512阶矩阵，20批，现在开始跑2小时，希望成本更低",
+        "labels": {
+            "task_type": "矩阵乘法计算任务",
             "modality": "高通量计算模态",
-            "source_name": "compute-1",
-            "destination_name": "compute-2",
-            "parse_status": "valid",
+            "source_name": "h1",
+            "destination_name": "h2",
             "data_profile": {"matrix_size": 512, "batch_count": 20},
-            "runtime_plan": {"routing_strategy": "cost_priority"},
-            "expected_time": {"duration_minutes": 120},
+            "runtime_plan": {"routing_strategy": "成本开销保障"},
+            "time": {"type": "relative_duration", "duration_minutes": 120},
         },
+        "evaluation": {"parse_status": "valid", "missing_params": []},
     }
     dataset_path.write_text(json.dumps(sample, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -161,8 +235,8 @@ def test_score_batch_output_reports_final_accuracy_with_raw_llm_diagnostics(tmp_
     # parser can still deterministically recover it from the original utterance.
     raw_llm = {
         "task_type": "high_throughput_matmul",
-        "source_name": "compute-1",
-        "destination_name": "compute-2",
+        "source_name": "h1",
+        "destination_name": "h2",
         "start_time": "now",
         "duration_hours": 2,
         "matrix_size": 512,

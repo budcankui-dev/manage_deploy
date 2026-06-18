@@ -10,27 +10,34 @@ from tests.test_business_tasks_api import _auth_headers
 
 
 def _sample(expected_strategy: str = "cost_priority") -> dict:
+    strategy_labels = {
+        "cost_priority": "成本开销保障",
+        "resource_guarantee": "资源预留保障",
+        "low_latency_forwarding": "低时延转发",
+        "fastest_completion": "完成时间优先",
+        "load_balance": "资源负载均衡",
+    }
     return {
         "case_type": "valid",
-        "utterance": "矩阵乘法任务，从 compute-1 到 compute-2，512阶矩阵，20批，现在开始跑2小时，希望成本更低",
-        "expected": {
-            "task_type": "high_throughput_matmul",
+        "utterance": "矩阵乘法任务，从 h1 到 h2，512阶矩阵，20批，现在开始跑2小时，希望成本更低",
+        "labels": {
+            "task_type": "矩阵乘法计算任务",
             "modality": "高通量计算模态",
-            "source_name": "compute-1",
-            "destination_name": "compute-2",
-            "parse_status": "valid",
+            "source_name": "h1",
+            "destination_name": "h2",
             "data_profile": {"matrix_size": 512, "batch_count": 20},
-            "runtime_plan": {"routing_strategy": expected_strategy},
-            "expected_time": {"duration_minutes": 120},
+            "runtime_plan": {"routing_strategy": strategy_labels.get(expected_strategy, expected_strategy)},
+            "time": {"type": "relative_duration", "duration_minutes": 120},
         },
+        "evaluation": {"parse_status": "valid", "missing_params": []},
     }
 
 
 def _raw(strategy: str = "cost_priority") -> dict:
     return {
         "task_type": "high_throughput_matmul",
-        "source_name": "compute-1",
-        "destination_name": "compute-2",
+        "source_name": "h1",
+        "destination_name": "h2",
         "start_time": "now",
         "duration_hours": 2,
         "matrix_size": 512,
@@ -44,10 +51,12 @@ def _patch_online_paths(monkeypatch, tmp_path):
     report_path = tmp_path / "intent_eval_online.json"
     progress_path = tmp_path / "intent_eval_online.progress.jsonl"
     status_path = tmp_path / "intent_eval_online.status.json"
+    runs_dir = tmp_path / "intent_eval_runs"
     monkeypatch.setattr(intent_online_eval, "DATASET_PATH", dataset_path)
     monkeypatch.setattr(intent_online_eval, "ONLINE_REPORT_PATH", report_path)
     monkeypatch.setattr(intent_online_eval, "ONLINE_PROGRESS_PATH", progress_path)
     monkeypatch.setattr(intent_online_eval, "ONLINE_STATUS_PATH", status_path)
+    monkeypatch.setattr(intent_online_eval, "ONLINE_RUNS_DIR", runs_dir)
     return dataset_path, report_path, progress_path, status_path
 
 
@@ -67,14 +76,44 @@ async def test_online_eval_generates_report(tmp_path, monkeypatch):
     assert report["total"] == 1
     assert report["correct"] == 1
     assert report["accuracy"] == 1.0
-    assert report["llm_raw_summary"]["correct"] == 1
+    assert report["system_recovery_summary"]["raw"]["correct"] == 1
     assert report_path.exists()
     assert progress_path.exists()
     assert status_path.exists()
+    history = intent_online_eval.list_online_report_history()
+    assert history[0]["evaluation_id"] == report["evaluation_id"]
+    assert history[0]["accuracy"] == 1.0
 
 
 @pytest.mark.asyncio
-async def test_online_eval_uses_rule_fallback_for_wrong_raw_llm(tmp_path, monkeypatch):
+async def test_online_eval_reports_raw_llm_accuracy_when_target_is_met(tmp_path, monkeypatch):
+    dataset_path, _report_path, _progress_path, _status_path = _patch_online_paths(monkeypatch, tmp_path)
+    rows = [_sample() for _ in range(10)]
+    dataset_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    calls = {"count": 0}
+
+    async def fake_call_qwen(_messages, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 10:
+            return _raw(strategy="resource_guarantee")
+        return _raw()
+
+    monkeypatch.setattr(intent_online_eval, "call_qwen", fake_call_qwen)
+
+    report = await intent_online_eval.run_online_evaluation(concurrency=1, retries=0)
+
+    assert report["official_source"] == "llm_raw"
+    assert report["accuracy"] == 0.9
+    assert report["correct"] == 9
+    assert report["passed"] is True
+    assert report["results"][0]["match"] is True
+    assert report["results"][-1]["match"] is False
+    assert report["system_recovery_summary"]["raw"]["accuracy"] == 0.9
+    assert report["system_recovery_summary"]["recovered"]["accuracy"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_online_eval_uses_recovered_accuracy_when_raw_llm_below_target(tmp_path, monkeypatch):
     dataset_path, _report_path, _progress_path, _status_path = _patch_online_paths(monkeypatch, tmp_path)
     dataset_path.write_text(json.dumps(_sample(), ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -86,8 +125,10 @@ async def test_online_eval_uses_rule_fallback_for_wrong_raw_llm(tmp_path, monkey
     report = await intent_online_eval.run_online_evaluation(concurrency=1, retries=0)
     run = report["results"][0]["runs"][0]
 
+    assert report["official_source"] == "system_recovered"
     assert report["accuracy"] == 1.0
-    assert report["llm_raw_summary"]["accuracy"] == 0.0
+    assert report["system_recovery_summary"]["raw"]["accuracy"] == 0.0
+    assert report["system_recovery_summary"]["recovered"]["accuracy"] == 1.0
     assert run["llm_raw_match"] is False
     assert run["final_source"] == "rule_fallback"
     assert run["final_parser_name"] == "rule_based"
@@ -125,7 +166,7 @@ async def test_online_eval_resume_skips_completed_samples(tmp_path, monkeypatch)
         "sample_id": "sample-0000",
         "case_type": "valid",
         "utterance": "done",
-        "expected": _sample()["expected"],
+        "expected_result": intent_batch_eval.sample_expected(_sample()),
         "match": True,
         "runs": [{"match": True, "llm_raw_match": True, "details": {}}],
     }

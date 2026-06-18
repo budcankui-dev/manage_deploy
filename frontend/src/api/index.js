@@ -45,7 +45,7 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url) && !error.config?.skipAuthExpired) {
       handleAuthExpired()
       error.__authExpired = true
       if (!error.response.data || typeof error.response.data !== 'object') {
@@ -163,7 +163,7 @@ export const authApi = {
   bootstrap: (data) => api.post('/auth/bootstrap', data),
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
-  me: () => api.get('/auth/me'),
+  me: (config = {}) => api.get('/auth/me', config),
   createUser: (data) => api.post('/auth/users', data)
 }
 

@@ -17,10 +17,10 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.intent_parser import parse_intent
-from services.intent_batch_eval import score_parsed_result
-from services.topology_catalog import INTENT_VALID_NODES
+from services.intent_batch_eval import sample_expected, score_parsed_result
+from services.topology_catalog import TERMINAL_NODE_ALIASES
 
-VALID_NODES = INTENT_VALID_NODES
+VALID_NODES = TERMINAL_NODE_ALIASES
 
 
 def _parsed_payload(parsed) -> dict:
@@ -66,7 +66,7 @@ def evaluate(dataset_path: str, output_path: str | None = None, repeats: int = 3
                 continue
             sample = json.loads(line)
             utterance = sample["utterance"]
-            expected = sample.get("expected", {})
+            expected = sample_expected(sample)
 
             run_results = [_evaluate_once(utterance, expected) for _ in range(repeats)]
             match = _majority_vote(run_results)
