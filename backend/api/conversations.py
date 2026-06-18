@@ -42,6 +42,11 @@ from .business_tasks import create_business_task
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
+DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
+    "high_throughput_matmul": 9000,
+    "low_latency_video_pipeline": 9100,
+}
+
 
 def _node_kind(node: Node) -> str:
     return str(node.node_kind or "worker").lower()
@@ -119,6 +124,32 @@ def _destination_port_from_runtime_plan(runtime_plan: dict | None) -> int | None
     except (TypeError, ValueError):
         return None
     return port if 1 <= port <= 65535 else None
+
+
+def _default_destination_port_for_task(task_type: str | None) -> int | None:
+    return DEFAULT_DESTINATION_PORT_BY_TASK_TYPE.get(str(task_type or ""))
+
+
+def _effective_destination_port(task_type: str | None, runtime_plan: dict | None) -> int | None:
+    if isinstance(runtime_plan, dict) and runtime_plan.get("destination_port_disabled"):
+        return None
+    if _callback_url_from_runtime_plan(runtime_plan) and _destination_port_from_runtime_plan(runtime_plan) is None:
+        return None
+    return _destination_port_from_runtime_plan(runtime_plan) or _default_destination_port_for_task(task_type)
+
+
+def _effective_callback_url(
+    task_type: str | None,
+    runtime_plan: dict | None,
+    destination_endpoint: ResolvedEndpoint | None,
+) -> str | None:
+    explicit = _callback_url_from_runtime_plan(runtime_plan)
+    if explicit:
+        return explicit
+    port = _effective_destination_port(task_type, runtime_plan)
+    if destination_endpoint and port:
+        return _callback_url_for_destination(destination_endpoint, port)
+    return None
 
 
 def _route_only_from_runtime_plan(runtime_plan: dict | None) -> bool:
@@ -500,6 +531,7 @@ async def update_draft(
         if destination_port is None:
             runtime_plan.pop("destination_port", None)
             runtime_plan.pop("callback_url", None)
+            runtime_plan["destination_port_disabled"] = True
         else:
             try:
                 port = int(destination_port)
@@ -508,6 +540,7 @@ async def update_draft(
             if port < 1 or port > 65535:
                 raise HTTPException(status_code=400, detail="目的端口必须是 1-65535 之间的整数")
             runtime_plan["destination_port"] = port
+            runtime_plan.pop("destination_port_disabled", None)
 
     if route_only is not None:
         runtime_plan["route_only"] = bool(route_only)
@@ -527,7 +560,7 @@ async def update_draft(
             destination_endpoint = await _resolve_endpoint_from_plan(db, runtime_plan, "destination_endpoint_input")
         except EndpointResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        port = _destination_port_from_runtime_plan(runtime_plan)
+        port = _effective_destination_port(draft.task_type, runtime_plan)
         if destination_endpoint and port and not callback_url_was_set:
             runtime_plan["callback_url"] = _callback_url_for_destination(destination_endpoint, port)
         elif not port and not callback_url_was_set:
@@ -615,8 +648,8 @@ async def confirm_intent(
         draft.destination_name,
         "目的端点",
     )
-    destination_port = _destination_port_from_runtime_plan(draft.runtime_plan)
-    callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
+    destination_port = _effective_destination_port(draft.task_type, draft.runtime_plan)
+    callback_url = _effective_callback_url(draft.task_type, draft.runtime_plan, destination_endpoint)
     route_only = _route_only_from_runtime_plan(draft.runtime_plan)
     deployable_roles = [] if route_only else ["compute"]
     business_task_config = {
@@ -967,7 +1000,6 @@ async def _get_conversation_detail(
     draft_response = None
     if draft:
         draft_response = IntentDraftResponse.model_validate(draft)
-        draft_response.callback_url = _callback_url_from_runtime_plan(draft.runtime_plan)
         endpoints = await _endpoint_map_for_names(db, [draft.source_name, draft.destination_name])
         source_endpoint = None
         destination_endpoint = None
@@ -987,6 +1019,11 @@ async def _get_conversation_detail(
         except EndpointResolutionError:
             source_endpoint = None
             destination_endpoint = None
+        draft_response.callback_url = _effective_callback_url(
+            draft.task_type,
+            draft.runtime_plan,
+            destination_endpoint,
+        )
         draft_response.source_endpoint = _endpoint_dict(source_endpoint) or endpoints.get(draft.source_name or "")
         draft_response.destination_endpoint = _endpoint_dict(destination_endpoint) or endpoints.get(draft.destination_name or "")
         if draft.parse_status == ParseStatus.VALID:
@@ -1006,10 +1043,10 @@ async def _get_conversation_detail(
                 resource_requirement=draft.resource_requirement,
                 modality_priority_map=modality_priority_map_from_settings(runtime_settings),
                 routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
-                callback_url=_callback_url_from_runtime_plan(draft.runtime_plan),
+                callback_url=draft_response.callback_url,
                 source_endpoint=_endpoint_dict(source_endpoint),
                 destination_endpoint=_endpoint_dict(destination_endpoint),
-                destination_port=_destination_port_from_runtime_plan(draft.runtime_plan),
+                destination_port=_effective_destination_port(draft.task_type, draft.runtime_plan),
                 deployable_roles=deployable_roles,
                 **resource_options,
             )

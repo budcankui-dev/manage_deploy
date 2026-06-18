@@ -245,7 +245,13 @@
                 <p v-if="draft?.source_name || draft?.destination_name"><span class="param-label">节点：</span>{{ formatDraftEndpoint('source') }} → {{ formatDraftEndpoint('destination') }}</p>
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-for="row in draftDataProfileRows" :key="row.label"><span class="param-label">{{ row.label }}：</span>{{ row.value }}</p>
+                <p v-if="destinationReceiverText"><span class="param-label">结果接收：</span>{{ destinationReceiverText }}</p>
               </div>
+              <el-collapse class="submit-options-collapse">
+                <el-collapse-item title="高级提交选项" name="submit-options">
+                  <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，不启动任务</el-checkbox>
+                </el-collapse-item>
+              </el-collapse>
             </div>
             <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
           </div>
@@ -258,44 +264,6 @@
             <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
-        </div>
-
-        <div v-if="draft && draft.parse_status !== 'rejected' && !conversation?.materialized_order_id && !isStreaming" class="endpoint-config-card">
-          <div class="endpoint-config-header">
-            <div>
-              <strong>用户端接入配置</strong>
-              <p>源端和目的端使用已登记的终端别名、拓扑节点 ID 或业务面 IP；用户端接入演示默认只由平台部署计算节点。</p>
-            </div>
-            <el-tag :type="endpointForm.route_only ? 'warning' : 'success'" effect="plain">
-              {{ endpointForm.route_only ? '仅生成路由方案' : '用户端接入演示' }}
-            </el-tag>
-          </div>
-          <el-form class="endpoint-form" label-position="top" size="small">
-            <el-row :gutter="12">
-              <el-col :span="8">
-                <el-form-item label="源端">
-                  <el-input v-model="endpointForm.source_endpoint_input" placeholder="如 h1 或 10.112.x.x" clearable />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="目的端">
-                  <el-input v-model="endpointForm.destination_endpoint_input" placeholder="如 h2 或 10.112.x.x" clearable />
-                </el-form-item>
-              </el-col>
-              <el-col :span="5">
-                <el-form-item label="目的端口">
-                  <el-input-number v-model="endpointForm.destination_port" :min="1" :max="65535" controls-position="right" placeholder="9000" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="3" class="endpoint-action-col">
-                <el-button type="primary" plain :loading="isSavingEndpointConfig" @click="saveEndpointConfig">保存</el-button>
-              </el-col>
-            </el-row>
-            <div class="endpoint-extra-row">
-              <el-checkbox v-model="endpointForm.route_only">仅生成路由方案，不执行平台部署</el-checkbox>
-              <span v-if="draft?.callback_url" class="callback-preview">目的端回调地址：<code>{{ draft.callback_url }}</code></span>
-            </div>
-          </el-form>
         </div>
       </section>
 
@@ -387,18 +355,34 @@
           <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ formatParseStatus(draft.parse_status) }}</el-tag>
           <el-tag v-if="conversation?.materialized_order_id" type="success" size="small" style="margin-left:8px">已提交</el-tag>
         </template>
-        <el-descriptions v-if="draft" :column="1" border size="small">
-          <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
-          <el-descriptions-item label="源节点">{{ formatDraftEndpoint('source') }}</el-descriptions-item>
-          <el-descriptions-item label="目的节点">{{ formatDraftEndpoint('destination') }}</el-descriptions-item>
-          <el-descriptions-item label="目的端回调">{{ draft.callback_url || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
-          <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
-          <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
-          <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
-          <el-descriptions-item label="运行模式">{{ draft.runtime_plan?.route_only ? '仅生成路由方案' : '用户端接入演示' }}</el-descriptions-item>
-        </el-descriptions>
+        <template v-if="draft">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
+            <el-descriptions-item label="源节点">{{ formatDraftEndpoint('source') }}</el-descriptions-item>
+            <el-descriptions-item label="目的节点">{{ formatDraftEndpoint('destination') }}</el-descriptions-item>
+            <el-descriptions-item v-if="destinationReceiverText" label="结果接收">{{ destinationReceiverText }}</el-descriptions-item>
+            <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
+            <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
+            <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
+            <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
+          </el-descriptions>
+          <div v-if="showClientCommands" class="client-command-panel">
+            <div class="client-command-header">
+              <strong>用户端启动命令</strong>
+              <span>先在目的端启动接收程序，再在源端提交输入。</span>
+            </div>
+            <div v-if="receiverCommand" class="command-block">
+              <div class="command-title">{{ destinationExecutionHint }} 先启动接收程序</div>
+              <pre>{{ receiverCommand }}</pre>
+            </div>
+            <div v-if="sourceCommand" class="command-block">
+              <div class="command-title">{{ sourceExecutionHint }} 在节点分配完成后提交输入</div>
+              <pre>{{ sourceCommand }}</pre>
+            </div>
+            <p class="command-note">同一台目的端的同类任务只需保留一个接收程序；接收器会按工单 ID 区分结果。</p>
+          </div>
+        </template>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draftValidationErrors.length" class="errors">
           <el-alert v-for="(item, index) in draftValidationErrors" :key="index" :title="item" type="warning" show-icon :closable="false" />
@@ -450,7 +434,6 @@ const loading = ref(false)
 const isStreaming = ref(false)
 const isConfirming = ref(false)
 const isDemoRouting = ref(false)
-const isSavingEndpointConfig = ref(false)
 const messagesRef = ref(null)
 const myOrders = ref([])
 const ordersLoading = ref(false)
@@ -469,6 +452,16 @@ const endpointForm = ref({
   destination_port: null,
   route_only: false,
 })
+
+const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
+  high_throughput_matmul: 9000,
+  low_latency_video_pipeline: 9100,
+}
+
+const ENDPOINT_IMAGE_BY_TASK_TYPE = {
+  high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
+  low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
+}
 
 let routingTimer = null
 let abortController = null
@@ -496,6 +489,51 @@ const exampleChips = [
 const draft = computed(() => conversation.value?.latest_draft || null)
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
 const draftValidationErrors = computed(() => getDraftValidationErrors(draft.value))
+const destinationPort = computed(() => {
+  const explicitPort = draft.value?.runtime_plan?.destination_port
+  if (explicitPort) return Number(explicitPort)
+  return DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[draft.value?.task_type] || null
+})
+const destinationHost = computed(() =>
+  draft.value?.destination_endpoint?.business_ip
+  || draft.value?.destination_endpoint?.business_ipv6
+  || draft.value?.destination_name
+  || ''
+)
+const destinationReceiverText = computed(() => {
+  if (!destinationHost.value || !destinationPort.value) return ''
+  const name = draft.value?.destination_name || '目的端'
+  return `${name}（${destinationHost.value}:${destinationPort.value}）`
+})
+const sourceExecutionHint = computed(() => formatExecutionHint('源端', draft.value?.source_name, draft.value?.source_endpoint))
+const destinationExecutionHint = computed(() => formatExecutionHint('目的端', draft.value?.destination_name, draft.value?.destination_endpoint))
+const endpointImage = computed(() => ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type] || '')
+const isRouteOnlyDraft = computed(() =>
+  Boolean(endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
+)
+const showClientCommands = computed(() =>
+  isDraftSubmittable.value && !isRouteOnlyDraft.value
+)
+const receiverCommand = computed(() => {
+  if (!showClientCommands.value || !endpointImage.value || !destinationPort.value) return ''
+  return [
+    'docker run --rm --network host \\',
+    `  ${endpointImage.value} \\`,
+    `  python /app/src/receiver_main.py --port ${destinationPort.value}`,
+  ].join('\n')
+})
+const sourceCommand = computed(() => {
+  if (!showClientCommands.value || !endpointImage.value) return ''
+  const profile = JSON.stringify(draft.value.data_profile || {})
+  return [
+    'docker run --rm --network host \\',
+    '  -e PEER_COMPUTE_URL=<工单详情中的计算服务地址> \\',
+    '  -e SOURCE_LISTEN=false \\',
+    `  -e DATA_PROFILE='${profile}' \\`,
+    `  ${endpointImage.value} \\`,
+    '  python /app/src/source_main.py',
+  ].join('\n')
+})
 const isDraftSubmittable = computed(() =>
   draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
 )
@@ -642,6 +680,12 @@ function formatEndpoint(endpoint, fallback) {
 function formatDraftEndpoint(role) {
   if (role === 'source') return formatEndpoint(draft.value?.source_endpoint, draft.value?.source_name)
   return formatEndpoint(draft.value?.destination_endpoint, draft.value?.destination_name)
+}
+
+function formatExecutionHint(label, fallbackName, endpoint) {
+  const address = endpoint?.business_ip || endpoint?.business_ipv6
+  const name = fallbackName || label
+  return address ? `${label} ${name} / ${address}` : `${label} ${name}`
 }
 
 function orderStatusType(status) {
@@ -997,6 +1041,11 @@ async function confirmIntent() {
   }
   isConfirming.value = true
   try {
+    if (endpointForm.value.route_only !== Boolean(draft.value?.runtime_plan?.route_only)) {
+      await conversationApi.updateDraft(conversation.value.id, {
+        route_only: Boolean(endpointForm.value.route_only),
+      })
+    }
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
     await refreshList()
@@ -1019,27 +1068,6 @@ async function confirmIntent() {
     }
   } finally {
     isConfirming.value = false
-  }
-}
-
-async function saveEndpointConfig() {
-  if (!conversation.value?.id || !draft.value || isSavingEndpointConfig.value) return
-  const payload = {
-    source_endpoint_input: endpointForm.value.source_endpoint_input || null,
-    destination_endpoint_input: endpointForm.value.destination_endpoint_input || null,
-    destination_port: endpointForm.value.destination_port || null,
-    route_only: Boolean(endpointForm.value.route_only),
-  }
-  isSavingEndpointConfig.value = true
-  try {
-    const { data } = await conversationApi.updateDraft(conversation.value.id, payload)
-    conversation.value = data
-    await refreshList()
-    ElMessage.success('用户端接入配置已更新')
-  } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '接入配置保存失败'))
-  } finally {
-    isSavingEndpointConfig.value = false
   }
 }
 
@@ -1701,62 +1729,70 @@ onBeforeUnmount(stopRoutingPolling)
   font-weight: 600;
 }
 
-.endpoint-config-card {
-  margin: 10px 24px;
-  padding: 14px 18px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: 12px;
-  background: linear-gradient(135deg, #ffffff 0%, #f7fbff 100%);
+.submit-options-collapse {
+  margin-top: 8px;
 }
 
-.endpoint-config-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 10px;
-}
-
-.endpoint-config-header strong {
-  display: block;
-  margin-bottom: 4px;
-  color: #111827;
-  font-size: 14px;
-}
-
-.endpoint-config-header p {
-  margin: 0;
+.submit-options-collapse :deep(.el-collapse-item__header) {
+  height: 30px;
   color: #334155;
+  background: transparent;
+  border-bottom: 0;
   font-size: 12px;
-  line-height: 1.6;
 }
 
-.endpoint-form :deep(.el-form-item) {
+.submit-options-collapse :deep(.el-collapse-item__wrap) {
+  background: transparent;
+  border-bottom: 0;
+}
+
+.client-command-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.client-command-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   margin-bottom: 8px;
 }
 
-.endpoint-form :deep(.el-input-number) {
-  width: 100%;
+.client-command-header strong {
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
-.endpoint-action-col {
-  display: flex;
-  align-items: flex-end;
-  padding-bottom: 8px;
-}
-
-.endpoint-extra-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.client-command-header span,
+.command-note {
   color: #334155;
   font-size: 12px;
+  line-height: 1.5;
 }
 
-.callback-preview code {
-  color: #0f172a;
+.command-block {
+  margin-top: 8px;
+}
+
+.command-title {
+  margin-bottom: 4px;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.command-block pre {
+  margin: 0;
+  padding: 8px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ── Composer ── */

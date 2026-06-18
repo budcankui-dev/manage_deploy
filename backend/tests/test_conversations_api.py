@@ -60,6 +60,10 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert source_node["business_ip"] == "10.0.1.1"
     assert sink_node["topology_node_id"] == "worker-c"
     assert sink_node["business_ip"] == "10.0.1.3"
+    assert sink_node["business_port"] == 9000
+    assert sink_node["callback_url"] == "http://10.0.1.3:9000/callback"
+    assert order.runtime_config["platform_deployment"]["external_endpoints"]["sink"]["business_port"] == 9000
+    assert order.runtime_config["business_task"]["callback_url"] == "http://10.0.1.3:9000/callback"
 
     claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
     assert claim_response.status_code == 200
@@ -571,6 +575,12 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert by_role["compute"].env["USE_GPU"] == "true"
     assert by_role["compute"].env["GPU_DEVICE"] == "0"
     assert by_role["compute"].gpu_id == "0"
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
+    assert sink_node["business_port"] == 9100
+    assert sink_node["callback_url"] == "http://10.0.1.3:9100/callback"
 
 
 @pytest.mark.asyncio
