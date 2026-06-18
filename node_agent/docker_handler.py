@@ -277,7 +277,7 @@ class DockerHandler:
         items: list[dict] = []
         try:
             for container in self.client.containers.list(all=True):
-                if not MANAGED_CONTAINER_PATTERN.match(container.name):
+                if not self._is_managed_container(container):
                     continue
                 try:
                     container.reload()

@@ -255,12 +255,12 @@
                       <el-row :gutter="10">
                         <el-col :span="12">
                           <el-form-item label="源端点">
-                            <el-input v-model="endpointForm.source_endpoint_input" placeholder="例如 h1 或 10.112.x.x" />
+                            <el-input v-model="endpointForm.source_endpoint_input" placeholder="例如 h1 或 2001:da8:..." />
                           </el-form-item>
                         </el-col>
                         <el-col :span="12">
                           <el-form-item label="目的端点">
-                            <el-input v-model="endpointForm.destination_endpoint_input" placeholder="例如 h2 或 10.112.x.x" />
+                            <el-input v-model="endpointForm.destination_endpoint_input" placeholder="例如 h2 或 2001:da8:..." />
                           </el-form-item>
                         </el-col>
                       </el-row>
@@ -538,8 +538,8 @@ const destinationPort = computed(() => {
   return DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[draft.value?.task_type] || null
 })
 const destinationHost = computed(() =>
-  draft.value?.destination_endpoint?.business_ip
-  || draft.value?.destination_endpoint?.business_ipv6
+  draft.value?.destination_endpoint?.business_ipv6
+  || draft.value?.destination_endpoint?.business_ip
   || draft.value?.destination_name
   || ''
 )
@@ -755,7 +755,7 @@ function formatCallbackHost(host) {
 
 function buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan = {}) {
   const endpoint = currentDraft?.destination_endpoint || {}
-  const host = endpoint.business_ip || endpoint.business_ipv6 || currentDraft?.destination_name
+  const host = endpoint.business_ipv6 || endpoint.business_ip || currentDraft?.destination_name
   const port = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type]
   return host && port ? `http://${formatCallbackHost(host)}:${port}/callback` : ''
 }
@@ -775,7 +775,7 @@ function formatDraftEndpoint(role) {
 }
 
 function formatExecutionHint(label, fallbackName, endpoint) {
-  const address = endpoint?.business_ip || endpoint?.business_ipv6
+  const address = endpoint?.business_ipv6 || endpoint?.business_ip
   const name = fallbackName || label
   return address ? `${label} ${name} / ${address}` : `${label} ${name}`
 }

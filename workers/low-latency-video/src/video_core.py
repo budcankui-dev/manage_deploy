@@ -15,6 +15,7 @@ import subprocess
 import statistics
 import time
 from pathlib import Path
+from typing import Callable
 
 try:  # Optional locally; installed in the worker image.
     import cv2  # type: ignore
@@ -107,23 +108,26 @@ def simulate_inference(frame_index: int, work_units: int, seed: int) -> dict:
     }
 
 
-def run_video_profile(job: dict) -> dict:
+ProgressCallback = Callable[[dict], None]
+
+
+def run_video_profile(job: dict, progress_callback: ProgressCallback | None = None) -> dict:
     """Execute warmup and measured frame inference, returning aggregate metrics."""
     mode = str(job.get("inference_mode") or os.environ.get("VIDEO_INFERENCE_MODE", "yolo_onnx")).lower()
     if mode not in {"surrogate", "synthetic"}:
         try:
-            return run_yolo_video_profile(job)
+            return run_yolo_video_profile(job, progress_callback=progress_callback)
         except Exception as exc:
             if str(job.get("strict_yolo", "")).lower() in {"1", "true", "yes"}:
                 raise
-            result = run_surrogate_video_profile(job)
+            result = run_surrogate_video_profile(job, progress_callback=progress_callback)
             result["detector_backend"] = "deterministic_surrogate"
             result["detector_fallback_reason"] = str(exc)
             return result
-    return run_surrogate_video_profile(job)
+    return run_surrogate_video_profile(job, progress_callback=progress_callback)
 
 
-def run_surrogate_video_profile(job: dict) -> dict:
+def run_surrogate_video_profile(job: dict, progress_callback: ProgressCallback | None = None) -> dict:
     """Run the local-development fallback and attach a simple preview."""
     frame_count = int(job.get("frame_count", 120))
     frame_stride = max(1, int(job.get("frame_stride", 30)))
@@ -146,10 +150,21 @@ def run_surrogate_video_profile(job: dict) -> dict:
         simulate_inference(frame_index, work_units, seed)
 
     start = time.perf_counter()
-    samples = [
-        simulate_inference(frame_index, work_units, seed + sample_index)
-        for sample_index, frame_index in enumerate(measured)
-    ]
+    samples = []
+    for sample_index, frame_index in enumerate(measured):
+        sample = simulate_inference(frame_index, work_units, seed + sample_index)
+        samples.append(sample)
+        if progress_callback is not None:
+            _safe_progress_callback(
+                progress_callback,
+                {
+                    "frame_index": sample["frame_index"],
+                    "latency_ms": round(float(sample["latency_ms"]), 4),
+                    "label": sample["label"],
+                    "label_zh": _label_zh(sample["label"]),
+                    "confidence": sample["confidence"],
+                },
+            )
     observed_duration_sec = time.perf_counter() - start
     latencies = [float(item["latency_ms"]) for item in samples]
 
@@ -202,6 +217,15 @@ def run_surrogate_video_profile(job: dict) -> dict:
                 "fallback": True,
             }
         ],
+        "preview_frames": [
+            {
+                "frame_index": measured[0] if measured else 0,
+                "latency_ms": round(float(preview_latency), 4),
+                "top_label": "inspection_target",
+                "top_label_zh": _label_zh("inspection_target"),
+                "data_url": _synthetic_preview_data_url(profile_id, preview_latency, latency_p90),
+            }
+        ],
         "samples": [
             {
                 "frame_index": item["frame_index"],
@@ -215,7 +239,7 @@ def run_surrogate_video_profile(job: dict) -> dict:
     return result
 
 
-def run_yolo_video_profile(job: dict) -> dict:
+def run_yolo_video_profile(job: dict, progress_callback: ProgressCallback | None = None) -> dict:
     """Run YOLOv5 ONNX over sampled video frames and return metrics + preview."""
     if cv2 is None or np is None:
         raise RuntimeError("OpenCV/Numpy is not installed")
@@ -277,6 +301,7 @@ def run_yolo_video_profile(job: dict) -> dict:
     preview_index = measured[0] if measured else 0
     preview_latency_ms = 0.0
     preview_detections: list[dict] = []
+    preview_candidates: list[dict] = []
     start = time.perf_counter()
     for sample_index, frame_index in enumerate(measured):
         frame = _read_frame(cap, frame_index, total_frames)
@@ -296,6 +321,18 @@ def run_yolo_video_profile(job: dict) -> dict:
             preview_index = frame_index
             preview_latency_ms = latency_ms
             preview_detections = detections
+        if detections and len(preview_candidates) < 4:
+            top_for_gallery = detections[0]
+            preview_candidates.append(
+                {
+                    "frame_index": frame_index,
+                    "latency_ms": round(float(latency_ms), 4),
+                    "top_label": top_for_gallery.get("label") or "none",
+                    "top_label_zh": top_for_gallery.get("label_zh") or _label_zh(top_for_gallery.get("label") or "none"),
+                    "confidence": round(float(top_for_gallery.get("confidence") or 0.0), 4),
+                    "frame": annotated.copy(),
+                }
+            )
         top = detections[0] if detections else None
         samples.append(
             {
@@ -305,6 +342,24 @@ def run_yolo_video_profile(job: dict) -> dict:
                 "confidence": top["confidence"] if top else 0.0,
             }
         )
+        if progress_callback is not None:
+            progress_event = {
+                "frame_index": frame_index,
+                "latency_ms": round(float(latency_ms), 4),
+                "label": top["label"] if top else "none",
+                "label_zh": top.get("label_zh") if top else _label_zh("none"),
+                "confidence": round(float(top["confidence"]), 4) if top else 0.0,
+            }
+            if detections and len(preview_candidates) <= 4:
+                progress_event["preview_frame"] = {
+                    "frame_index": frame_index,
+                    "latency_ms": round(float(latency_ms), 4),
+                    "top_label": progress_event["label"],
+                    "top_label_zh": progress_event["label_zh"],
+                    "confidence": progress_event["confidence"],
+                    "data_url": _encode_jpeg_data_url(annotated),
+                }
+            _safe_progress_callback(progress_callback, progress_event)
     observed_duration_sec = time.perf_counter() - start
     cap.release()
 
@@ -312,6 +367,19 @@ def run_yolo_video_profile(job: dict) -> dict:
         preview_data_url = ""
     latencies = [float(item["latency_ms"]) for item in samples]
     latency_p90 = percentile(latencies, 0.90)
+    preview_frames: list[dict] = []
+    for candidate in preview_candidates:
+        frame_for_gallery = candidate.pop("frame")
+        if _can_draw_chinese_labels():
+            _add_preview_evidence_overlay(
+                frame_for_gallery,
+                frame_index=int(candidate["frame_index"]),
+                frame_latency_ms=float(candidate["latency_ms"]),
+                p90_latency_ms=latency_p90,
+                measured_frames=len(samples),
+                gpu_assigned=_gpu_assigned(),
+            )
+        preview_frames.append({**candidate, "data_url": _encode_jpeg_data_url(frame_for_gallery)})
     if preview_frame is not None:
         preview_frame_height, preview_frame_width = preview_frame.shape[:2]
         if _can_draw_chinese_labels():
@@ -336,6 +404,17 @@ def run_yolo_video_profile(job: dict) -> dict:
                 "confidence": 0.5,
                 "bbox_xyxy": [120, 70, 500, 300],
                 "fallback": True,
+            }
+        ]
+    if not preview_frames:
+        preview_frames = [
+            {
+                "frame_index": preview_index,
+                "latency_ms": round(float(preview_latency_ms), 4),
+                "top_label": (preview_detections[0].get("label") if preview_detections else "inspection_target"),
+                "top_label_zh": (preview_detections[0].get("label_zh") if preview_detections else _label_zh("inspection_target")),
+                "confidence": round(float(preview_detections[0].get("confidence") or 0.0), 4) if preview_detections else 0.0,
+                "data_url": preview_data_url,
             }
         ]
     top_detection = preview_detections[0] if preview_detections else None
@@ -380,6 +459,7 @@ def run_yolo_video_profile(job: dict) -> dict:
         "top_label_zh": top_detection.get("label_zh") if top_detection else _label_zh("none"),
         "top_confidence": top_detection["confidence"] if top_detection else 0.0,
         "detections": preview_detections,
+        "preview_frames": preview_frames,
         "samples": [
             {
                 "frame_index": item["frame_index"],
@@ -403,10 +483,21 @@ def _asset_root() -> Path:
 
 
 def _resolve_asset_path(asset_root: Path, value: str) -> Path:
+    root = asset_root.resolve()
     path = Path(value)
     if path.is_absolute():
-        return path
-    return asset_root / path
+        raise RuntimeError(f"Absolute asset paths are not allowed: {value}")
+    candidate = (root / path).resolve()
+    if not candidate.is_relative_to(root):
+        raise RuntimeError(f"Asset path escapes asset directory: {value}")
+    return candidate
+
+
+def _safe_progress_callback(progress_callback: ProgressCallback, event: dict) -> None:
+    try:
+        progress_callback(event)
+    except Exception as exc:
+        print(f"VIDEO_PROGRESS_CALLBACK_FAILED {exc}", flush=True)
 
 
 def _load_class_names(path: Path) -> list[str]:

@@ -260,12 +260,18 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 目的端 receiver 冒烟可在本机或终端节点上运行：
 
 ```bash
+ENDPOINT_NODE_ALIAS=h2 \
+ENDPOINT_TOPOLOGY_NODE_ID=h18015002 \
+ENDPOINT_BUSINESS_IPV6=2001:da8:215:6a01:xxxx:xxxx:xxxx:xxxx \
 PYTHONPATH=workers python3 workers/high-throughput-matmul/src/receiver_main.py --port 9000
 ```
 
 视频推理 receiver 冒烟使用：
 
 ```bash
+ENDPOINT_NODE_ALIAS=h2 \
+ENDPOINT_TOPOLOGY_NODE_ID=h18015002 \
+ENDPOINT_BUSINESS_IPV6=2001:da8:215:6a01:xxxx:xxxx:xxxx:xxxx \
 PYTHONPATH=workers python3 workers/low-latency-video/src/receiver_main.py --port 9100
 ```
 
@@ -287,14 +293,18 @@ curl -sS -X POST http://127.0.0.1:9100/callback \
 curl -sS http://127.0.0.1:9100/latest | python3 -m json.tool
 ```
 
-期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID 和指标值；视频回调如果包含 `annotated_frame_data_url`，首页会展示带框预览图。
+期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID、节点别名、拓扑节点 ID、数据面 IPv6/IPv4、监听端口和指标值；视频回调如果包含 `annotated_frame_data_url` / `preview_frames` / `samples` / `detections`，首页会展示带框预览图、原始测试视频、抽帧检测证据、推理时延趋势和检测目标列表。同一固定端口接收多个工单时，页面右侧“已接收工单”列表可切换历史结果，也可用 `/?order_id=<order_id>` 直达指定工单。
+
+视频 compute-only 用户演示模式支持 `event_type=progress` 实时进度回调和 `event_type=final` 最终回调。receiver 页面可以用 progress 展示运行中增长的样本，但平台业务目标成功率、工单最终指标和验收结论只以 final 结果为准。
+
+验收环境必须额外确认业务数据面使用 IPv6：`nodes.business_ipv6` 已登记、后端 `PREFER_BUSINESS_IPV6=true`，并抽查 `network_bindings` / `PEER_*_URL` 中的业务地址为 IPv6。`10.112` IPv4 可用于管理面和阶段性页面访问，但不应作为正式业务数据流口径。
 
 若 compute 容器已运行且业务面可达，可用轻量用户端客户端提交任务：
 
 ```bash
 # 直接指定 compute 接入基址
 python scripts/user_source_client.py \
-  --compute-url http://<compute-business-ip>:<port> \
+  --compute-url 'http://[<compute-business-ipv6>]:<port>' \
   --matrix-size 256 --batch-count 10 --wait-result
 
 # 或从工单 API 解析 network_bindings

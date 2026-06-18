@@ -147,6 +147,20 @@ def _agent_request(method: str, node: dict[str, Any], path: str, **kwargs: Any) 
     return response
 
 
+def _preferred_business_address(node: dict[str, Any]) -> str | None:
+    return node.get("business_ipv6") or node.get("business_ip")
+
+
+def _format_url_host(host: str) -> str:
+    text = str(host or "").strip()
+    return f"[{text}]" if ":" in text and not text.startswith("[") else text
+
+
+def _format_service_url(host: str, port: int, path: str = "") -> str:
+    suffix = path if path.startswith("/") or not path else f"/{path}"
+    return f"http://{_format_url_host(host)}:{port}{suffix}"
+
+
 def _start_endpoint_container(
     *,
     node: dict[str, Any],
@@ -180,10 +194,40 @@ def _start_endpoint_container(
         )
 
 
+def _receiver_env(node: dict[str, Any], port: int) -> dict[str, str]:
+    env: dict[str, str] = {
+        "ENDPOINT_PORT": str(port),
+    }
+    mapping = {
+        "ENDPOINT_NODE_ALIAS": node.get("hostname"),
+        "ENDPOINT_TOPOLOGY_NODE_ID": node.get("topology_node_id"),
+        "ENDPOINT_BUSINESS_IP": node.get("business_ip"),
+        "ENDPOINT_BUSINESS_IPV6": node.get("business_ipv6"),
+    }
+    for key, value in mapping.items():
+        if value:
+            env[key] = str(value)
+    return env
+
+
 def _delete_endpoint_container(*, node: dict[str, Any], task_id: str, node_id: str, quiet: bool = False) -> None:
     response = _agent_request("DELETE", node, f"/containers/{task_id}/{node_id}", timeout=30)
     if not quiet and response.status_code >= 400:
         print(f"WARN delete {node.get('hostname')} {task_id}/{node_id}: {response.status_code} {response.text}")
+
+
+def _delete_old_receivers(node: dict[str, Any]) -> None:
+    response = _agent_request("GET", node, "/containers/managed", timeout=30)
+    if response.status_code >= 400:
+        print(f"WARN list old receivers on {node.get('hostname')}: {response.status_code} {response.text}")
+        return
+    for item in response.json():
+        name = str(item.get("container_name") or "")
+        if not (name.startswith("user-demo-") and name.endswith("_receiver")):
+            continue
+        deleted = _agent_request("DELETE", node, f"/managed-containers/{name}", timeout=30)
+        if deleted.status_code >= 400:
+            print(f"WARN delete old receiver {name}: {deleted.status_code} {deleted.text}")
 
 
 def _wait_receiver_result(receiver_url: str, order_id: str, timeout_sec: float) -> dict[str, Any]:
@@ -233,11 +277,11 @@ def main() -> int:
     print("[2/8] 查询源端/目的端节点")
     source_node = _node_by_alias(base, session, args.source_node)
     destination_node = _node_by_alias(base, session, args.destination_node)
-    source_ip = source_node.get("business_ip")
-    destination_ip = destination_node.get("business_ip")
-    _assert(bool(source_ip and destination_ip), "source/destination must have business_ip")
+    source_ip = _preferred_business_address(source_node)
+    destination_ip = _preferred_business_address(destination_node)
+    _assert(bool(source_ip and destination_ip), "source/destination must have business_ipv6 or business_ip")
     print(f"  source={args.source_node} {source_ip}")
-    print(f"  destination={args.destination_node} {destination_ip}:{args.destination_port}")
+    print(f"  destination={args.destination_node} {_format_url_host(destination_ip)}:{args.destination_port}")
 
     print("[3/8] 创建对话工单，登记目的端回调端口")
     conv = _post(session, f"{base}/api/conversations", json={"title": f"user-endpoint-{args.task_type}"})
@@ -254,7 +298,7 @@ def main() -> int:
     )
     draft = patched.get("latest_draft") or {}
     _assert(draft.get("parse_status") == "valid", f"draft invalid: {draft.get('validation_errors')}")
-    expected_callback_url = f"http://{destination_ip}:{args.destination_port}/callback"
+    expected_callback_url = _format_service_url(destination_ip, args.destination_port, "/callback")
     _assert(
         draft.get("callback_url") == expected_callback_url,
         f"draft callback_url mismatch: expected {expected_callback_url}, got {draft.get('callback_url')}",
@@ -266,14 +310,15 @@ def main() -> int:
 
     print("[4/8] 启动目的端 receiver 容器")
     demo_task_id = f"user-demo-{order_id[:8]}"
-    receiver_url = f"http://{destination_ip}:{args.destination_port}"
+    receiver_url = _format_service_url(destination_ip, args.destination_port)
+    _delete_old_receivers(destination_node)
     _start_endpoint_container(
         node=destination_node,
         task_id=demo_task_id,
         node_id="receiver",
         image=config["endpoint_image"],
         command=config["receiver_command"],
-        env={},
+        env=_receiver_env(destination_node, args.destination_port),
     )
     print(f"  receiver={receiver_url}/")
 

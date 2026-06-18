@@ -76,6 +76,7 @@ def _metric_tags(result: dict) -> dict:
         "top_label_zh",
         "top_confidence",
         "detections",
+        "preview_frames",
         "samples",
     )
     result_meta = {key: result[key] for key in metadata_keys if key in result}
@@ -112,6 +113,7 @@ def _report_result_from_compute(result: dict) -> None:
 
 def _callback_payload(result: dict) -> dict:
     return {
+        "event_type": "final",
         "order_id": os.environ.get("ORDER_ID") or os.environ.get("BUSINESS_TASK_ID"),
         "task_instance_id": os.environ.get("TASK_INSTANCE_ID"),
         "task_type": os.environ.get("TASK_TYPE", "low_latency_video_pipeline"),
@@ -119,6 +121,42 @@ def _callback_payload(result: dict) -> dict:
         "metric_key": "frame_latency_p90_ms",
         "result": result,
     }
+
+
+def _progress_callback_payload(event: dict) -> dict:
+    result: dict = {
+        "samples": [
+            {
+                "frame_index": event.get("frame_index"),
+                "latency_ms": event.get("latency_ms"),
+                "label": event.get("label"),
+                "confidence": event.get("confidence", 0.0),
+            }
+        ],
+        "video_asset": os.environ.get("VIDEO_ASSET", "bottle-detection.mp4"),
+    }
+    preview_frame = event.get("preview_frame")
+    if isinstance(preview_frame, dict):
+        result["preview_frames"] = [preview_frame]
+    return {
+        "event_type": "progress",
+        "order_id": os.environ.get("ORDER_ID") or os.environ.get("BUSINESS_TASK_ID"),
+        "task_instance_id": os.environ.get("TASK_INSTANCE_ID"),
+        "task_type": os.environ.get("TASK_TYPE", "low_latency_video_pipeline"),
+        "task_role": "compute",
+        "metric_key": "frame_latency_p90_ms",
+        "result": result,
+    }
+
+
+def _post_progress_callback(event: dict) -> None:
+    callback_url = os.environ.get("CALLBACK_URL") or os.environ.get("SINK_CALLBACK_URL")
+    if not callback_url:
+        return
+    try:
+        post_json_to_url(callback_url, _progress_callback_payload(event), timeout_sec=3.0, interval_sec=0.2)
+    except Exception as exc:
+        print(f"VIDEO_COMPUTE_PROGRESS_CALLBACK_FAILED {exc}", flush=True)
 
 
 def _post_result_callback(result: dict) -> None:
@@ -201,7 +239,8 @@ def main() -> int:
         flush=True,
     )
 
-    result = run_video_profile(job)
+    progress_callback = _post_progress_callback if not get_peer_url_by_name("sink") else None
+    result = run_video_profile(job, progress_callback=progress_callback)
     print(
         f"VIDEO_COMPUTE_DONE p90_ms={result['frame_latency_p90_ms']:.2f} "
         f"frames={result['measured_frames']}",

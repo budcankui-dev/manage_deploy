@@ -287,6 +287,95 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
 
 
 @pytest.mark.asyncio
+async def test_confirm_intent_prefers_business_ipv6_for_callback_when_enabled(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    monkeypatch.setattr(settings, "prefer_business_ipv6", True)
+    headers, _user = await _auth_headers(client, db_session, username="endpoint-ipv6-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    source_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h-ipv6-source",
+            "display_name": "h-ipv6-source",
+            "agent_address": "http://172.16.2.11:8001",
+            "management_ip": "172.16.2.11",
+            "business_ip": "10.112.126.124",
+            "business_ipv6": "2001:db8:215:6a01::11",
+            "node_kind": "terminal",
+            "topology_node_id": "h-ipv6-source-id",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert source_response.status_code == 200
+    sink_response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "h-ipv6-sink",
+            "display_name": "h-ipv6-sink",
+            "agent_address": "http://172.16.2.12:8001",
+            "management_ip": "172.16.2.12",
+            "business_ip": "10.112.253.42",
+            "business_ipv6": "2001:db8:215:6a01::12",
+            "node_kind": "terminal",
+            "topology_node_id": "h-ipv6-sink-id",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert sink_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "IPv6 端点矩阵任务"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+
+    patch_response = await client.patch(
+        f"/api/conversations/{conversation_id}/draft",
+        json={
+            "source_endpoint_input": "h-ipv6-source",
+            "destination_endpoint_input": "h-ipv6-sink",
+            "destination_port": 9000,
+        },
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+    draft = patch_response.json()["latest_draft"]
+    assert draft["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
+    assert sink_node["business_ip"] == "10.112.253.42"
+    assert sink_node["business_ipv6"] == "2001:db8:215:6a01::12"
+    assert sink_node["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
+    assert order.runtime_config["business_task"]["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
+
+
+@pytest.mark.asyncio
 async def test_update_draft_can_clear_destination_port_and_generated_callback(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session, username="clear-port-user")

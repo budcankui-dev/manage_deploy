@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from api.auth import get_current_user
+from config import settings
 from database import async_session_maker, get_db
 from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
 from models import BusinessTemplateCatalog, Conversation, ConversationMessage, IntentDraft, Node, RoutingRequest, TaskOrder, User
@@ -160,8 +161,14 @@ def _endpoint_dict(endpoint: ResolvedEndpoint | None) -> dict | None:
     return endpoint.model_dump() if endpoint else None
 
 
+def _preferred_business_host(endpoint: ResolvedEndpoint) -> str | None:
+    if settings.prefer_business_ipv6:
+        return endpoint.business_ipv6 or endpoint.business_ip
+    return endpoint.business_ip or endpoint.business_ipv6
+
+
 def _callback_url_for_destination(endpoint: ResolvedEndpoint, port: int) -> str:
-    host = endpoint.business_ip or endpoint.business_ipv6
+    host = _preferred_business_host(endpoint)
     if not host:
         raise EndpointResolutionError("Destination endpoint has no data-plane IP")
     if ":" in host and not host.startswith("["):

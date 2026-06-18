@@ -41,6 +41,48 @@ def test_video_profile_reports_p90_latency():
     assert result["detections"]
     assert result["detections"][0]["label_zh"]
     assert result["detections"][0]["bbox_xyxy"]
+    assert result["preview_frames"]
+    assert len(result["preview_frames"]) <= 4
+    assert result["preview_frames"][0]["data_url"].startswith("data:image/")
+    assert "latency_ms" in result["preview_frames"][0]
+
+
+def test_video_profile_emits_progress_without_changing_final_result(monkeypatch):
+    events = []
+
+    result = run_video_profile(
+        {
+            "inference_mode": "surrogate",
+            "frame_count": 90,
+            "frame_stride": 30,
+            "profile_id": "video_industrial_inspection_720p",
+            "resolution": "720p",
+            "fps": 30,
+            "warmup_frames": 1,
+            "measured_frames": 3,
+            "work_units": 100,
+            "seed": 7,
+        },
+        progress_callback=events.append,
+    )
+
+    assert len(events) == 3
+    assert all("latency_ms" in event for event in events)
+    assert result["measured_frames"] == 3
+    assert "frame_latency_p90_ms" in result
+
+
+def test_asset_path_rejects_traversal(tmp_path):
+    asset_root = tmp_path / "assets"
+    asset_root.mkdir()
+
+    assert video_core._resolve_asset_path(asset_root, "demo.mp4") == asset_root / "demo.mp4"
+    try:
+        video_core._resolve_asset_path(asset_root, "../secret.mp4")
+    except RuntimeError as exc:
+        assert "escapes asset directory" in str(exc)
+    else:
+        raise AssertionError("expected traversal path to be rejected")
 
 
 def test_dnn_backend_auto_prefers_cuda_when_gpu_requested(monkeypatch):

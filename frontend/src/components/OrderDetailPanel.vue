@@ -698,7 +698,7 @@ function normalizePlacementRow(role, placement) {
     roleLabel: roleLabel(roleKey),
     instance_node_name: item.instance_node_name || item.template_node_name || roleKey,
     hostname: item.topology_node_id || (deployable ? '未部署' : '外部端点'),
-    business_address: item.business_address || item.business_ip || item.business_ipv6 || '',
+    business_address: item.business_address || item.business_ipv6 || item.business_ip || '',
     gpu,
     requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline'].includes(taskType.value),
     portValues,
