@@ -246,10 +246,51 @@
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-for="row in draftDataProfileRows" :key="row.label"><span class="param-label">{{ row.label }}：</span>{{ row.value }}</p>
                 <p v-if="destinationReceiverText"><span class="param-label">结果接收：</span>{{ destinationReceiverText }}</p>
+                <p v-if="effectiveCallbackUrl"><span class="param-label">回调地址：</span>{{ effectiveCallbackUrl }}</p>
               </div>
               <el-collapse class="submit-options-collapse">
                 <el-collapse-item title="高级提交选项" name="submit-options">
-                  <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，不启动任务</el-checkbox>
+                  <div class="submit-options-form">
+                    <el-form label-position="top" size="small">
+                      <el-row :gutter="10">
+                        <el-col :span="12">
+                          <el-form-item label="源端点">
+                            <el-input v-model="endpointForm.source_endpoint_input" placeholder="例如 h1 或 10.112.x.x" />
+                          </el-form-item>
+                        </el-col>
+                        <el-col :span="12">
+                          <el-form-item label="目的端点">
+                            <el-input v-model="endpointForm.destination_endpoint_input" placeholder="例如 h2 或 10.112.x.x" />
+                          </el-form-item>
+                        </el-col>
+                      </el-row>
+                      <el-row :gutter="10">
+                        <el-col :span="10">
+                          <el-form-item label="目的端接收端口">
+                            <el-input-number
+                              v-model="endpointForm.destination_port"
+                              :min="1"
+                              :max="65535"
+                              :controls="false"
+                              placeholder="按任务类型默认"
+                              style="width: 100%"
+                            />
+                          </el-form-item>
+                        </el-col>
+                        <el-col :span="14">
+                          <el-form-item label="目的端回调地址">
+                            <el-input
+                              v-model="endpointForm.callback_url"
+                              placeholder="默认按目的端 IP 和端口生成"
+                              @input="endpointForm.callback_url_customized = true"
+                            />
+                          </el-form-item>
+                        </el-col>
+                      </el-row>
+                    </el-form>
+                    <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，不启动任务</el-checkbox>
+                    <p class="submit-options-note">一般无需修改。源/目的端点可填节点别名、拓扑 ID 或业务面 IP；端口默认按任务类型固定。</p>
+                  </div>
                 </el-collapse-item>
               </el-collapse>
             </div>
@@ -450,6 +491,8 @@ const endpointForm = ref({
   source_endpoint_input: '',
   destination_endpoint_input: '',
   destination_port: null,
+  callback_url: '',
+  callback_url_customized: false,
   route_only: false,
 })
 
@@ -505,6 +548,15 @@ const destinationReceiverText = computed(() => {
   const name = draft.value?.destination_name || '目的端'
   return `${name}（${destinationHost.value}:${destinationPort.value}）`
 })
+const effectiveCallbackUrl = computed(() => {
+  if (endpointForm.value.callback_url_customized && endpointForm.value.callback_url) {
+    return endpointForm.value.callback_url
+  }
+  if (destinationHost.value && destinationPort.value) {
+    return `http://${formatCallbackHost(destinationHost.value)}:${destinationPort.value}/callback`
+  }
+  return draft.value?.callback_url || draft.value?.runtime_plan?.callback_url || ''
+})
 const sourceExecutionHint = computed(() => formatExecutionHint('源端', draft.value?.source_name, draft.value?.source_endpoint))
 const destinationExecutionHint = computed(() => formatExecutionHint('目的端', draft.value?.destination_name, draft.value?.destination_endpoint))
 const endpointImage = computed(() => ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type] || '')
@@ -525,14 +577,20 @@ const receiverCommand = computed(() => {
 const sourceCommand = computed(() => {
   if (!showClientCommands.value || !endpointImage.value) return ''
   const profile = JSON.stringify(draft.value.data_profile || {})
-  return [
+  const lines = [
     'docker run --rm --network host \\',
     '  -e PEER_COMPUTE_URL=<工单详情中的计算服务地址> \\',
     '  -e SOURCE_LISTEN=false \\',
+  ]
+  if (draft.value?.task_type === 'low_latency_video_pipeline') {
+    lines.push('  -e WAIT_FOR_COMPUTE_READY=false \\')
+  }
+  lines.push(
     `  -e DATA_PROFILE='${profile}' \\`,
     `  ${endpointImage.value} \\`,
     '  python /app/src/source_main.py',
-  ].join('\n')
+  )
+  return lines.join('\n')
 })
 const isDraftSubmittable = computed(() =>
   draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
@@ -568,10 +626,15 @@ watch(draft, syncEndpointFormFromDraft, { immediate: true })
 
 function syncEndpointFormFromDraft(currentDraft) {
   const runtimePlan = currentDraft?.runtime_plan || {}
+  const savedCallbackUrl = currentDraft?.callback_url || runtimePlan.callback_url || ''
+  const defaultCallbackUrl = buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan)
+  const callbackCustomized = Boolean(savedCallbackUrl && savedCallbackUrl !== defaultCallbackUrl)
   endpointForm.value = {
     source_endpoint_input: runtimePlan.source_endpoint_input || currentDraft?.source_name || '',
     destination_endpoint_input: runtimePlan.destination_endpoint_input || currentDraft?.destination_name || '',
-    destination_port: runtimePlan.destination_port ?? null,
+    destination_port: runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type] ?? null,
+    callback_url: callbackCustomized ? savedCallbackUrl : '',
+    callback_url_customized: callbackCustomized,
     route_only: Boolean(runtimePlan.route_only),
   }
 }
@@ -656,6 +719,14 @@ function getDraftValidationErrors(currentDraft) {
   }
   if (isBlankValue(currentDraft.source_name)) add('源节点不能为空')
   if (isBlankValue(currentDraft.destination_name)) add('目的节点不能为空')
+  const runtimePlan = currentDraft.runtime_plan || {}
+  const port = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft.task_type]
+  if (!runtimePlan.route_only && port !== null && port !== undefined && port !== '') {
+    const numericPort = asInteger(port)
+    if (numericPort === null || numericPort < 1 || numericPort > 65535) add('目的端口需要是 1-65535 之间的整数')
+  }
+  const callbackUrl = runtimePlan.callback_url || currentDraft.callback_url
+  if (callbackUrl && !isHttpUrl(callbackUrl)) add('目的端回调地址需要是 http:// 或 https:// 开头的完整地址')
   if (isBlankValue(currentDraft.business_start_time)) add('开始时间不能为空')
   if (isBlankValue(currentDraft.business_end_time)) add('结束时间不能为空')
   if (!isBlankValue(currentDraft.business_start_time) && !isBlankValue(currentDraft.business_end_time)) {
@@ -666,6 +737,27 @@ function getDraftValidationErrors(currentDraft) {
   }
   if (isBlankValue(currentDraft.runtime_plan?.routing_strategy)) add('路由策略不能为空')
   return errors
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value))
+    return ['http:', 'https:'].includes(parsed.protocol) && Boolean(parsed.host)
+  } catch {
+    return false
+  }
+}
+
+function formatCallbackHost(host) {
+  const text = String(host || '')
+  return text.includes(':') && !text.startsWith('[') ? `[${text}]` : text
+}
+
+function buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan = {}) {
+  const endpoint = currentDraft?.destination_endpoint || {}
+  const host = endpoint.business_ip || endpoint.business_ipv6 || currentDraft?.destination_name
+  const port = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type]
+  return host && port ? `http://${formatCallbackHost(host)}:${port}/callback` : ''
 }
 
 function formatEndpoint(endpoint, fallback) {
@@ -1041,11 +1133,8 @@ async function confirmIntent() {
   }
   isConfirming.value = true
   try {
-    if (endpointForm.value.route_only !== Boolean(draft.value?.runtime_plan?.route_only)) {
-      await conversationApi.updateDraft(conversation.value.id, {
-        route_only: Boolean(endpointForm.value.route_only),
-      })
-    }
+    const updated = await syncEndpointDraftBeforeConfirm()
+    if (updated) conversation.value = updated
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
     await refreshList()
@@ -1069,6 +1158,43 @@ async function confirmIntent() {
   } finally {
     isConfirming.value = false
   }
+}
+
+function normalizedEndpointFormPayload() {
+  const port = endpointForm.value.destination_port
+  const callbackUrl = endpointForm.value.callback_url_customized
+    ? endpointForm.value.callback_url?.trim() || null
+    : undefined
+  return {
+    source_endpoint_input: endpointForm.value.source_endpoint_input?.trim() || null,
+    destination_endpoint_input: endpointForm.value.destination_endpoint_input?.trim() || null,
+    destination_port: port === '' || port === null || port === undefined ? null : Number(port),
+    callback_url: callbackUrl,
+    route_only: Boolean(endpointForm.value.route_only),
+  }
+}
+
+function endpointPayloadChanged(payload) {
+  const runtimePlan = draft.value?.runtime_plan || {}
+  const currentPort = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[draft.value?.task_type] ?? null
+  return (
+    payload.source_endpoint_input !== (runtimePlan.source_endpoint_input || draft.value?.source_name || null)
+    || payload.destination_endpoint_input !== (runtimePlan.destination_endpoint_input || draft.value?.destination_name || null)
+    || payload.destination_port !== currentPort
+    || (endpointForm.value.callback_url_customized && payload.callback_url !== (runtimePlan.callback_url || null))
+    || payload.route_only !== Boolean(runtimePlan.route_only)
+  )
+}
+
+async function syncEndpointDraftBeforeConfirm() {
+  const payload = normalizedEndpointFormPayload()
+  if (!endpointPayloadChanged(payload)) return null
+  const { data } = await conversationApi.updateDraft(conversation.value.id, payload)
+  const errors = getDraftValidationErrors(data.latest_draft)
+  if (errors.length) {
+    throw { response: { data: { detail: { validation_errors: errors } } } }
+  }
+  return data
 }
 
 async function cancelOrder() {
@@ -1755,6 +1881,27 @@ onBeforeUnmount(stopRoutingPolling)
 .submit-options-collapse :deep(.el-collapse-item__wrap) {
   background: transparent;
   border-bottom: 0;
+}
+
+.submit-options-form {
+  padding: 2px 0 6px;
+}
+
+.submit-options-form :deep(.el-form-item) {
+  margin-bottom: 8px;
+}
+
+.submit-options-form :deep(.el-form-item__label) {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.submit-options-note {
+  margin: 6px 0 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .client-command-panel {
