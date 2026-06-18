@@ -40,7 +40,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { consumeAuthExpiredNotice } from '@/utils/authExpired'
+import { consumeAuthExpiredNotice, resetAuthExpiredRedirecting } from '@/utils/authExpired'
 import { clearSessionState } from '@/utils/sessionState'
 import { resolvePostLoginTarget } from '@/utils/routeAccess'
 
@@ -73,6 +73,7 @@ async function handleBootstrap() {
 }
 
 onMounted(() => {
+  resetAuthExpiredRedirecting()
   if (consumeAuthExpiredNotice()) {
     ElMessage.warning('登录已过期，请重新登录')
   }

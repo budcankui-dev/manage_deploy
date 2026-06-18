@@ -255,7 +255,7 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 
 脚本会创建对话工单、确认 `user_access_demo` + `deployable_roles=["compute"]`、模拟仅 compute 的路由回写，并断言 `network_bindings` 含 `src_external=true` 与 `dst_access_url`。
 
-如需演示外部目的端回调，可先通过 `PATCH /api/conversations/{id}/draft` 写入 `{"callback_url":"https://user.example.com/api/result-callback"}`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
+如需演示外部目的端回调，用户端对话页会按任务类型固定目的端接收端口：矩阵计算 `9000`，视频推理 `9100`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
 
 目的端 receiver 冒烟可在本机或终端节点上运行：
 
@@ -263,7 +263,13 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 PYTHONPATH=workers python3 workers/high-throughput-matmul/src/receiver_main.py --port 9000
 ```
 
-另开终端发送回调：
+视频推理 receiver 冒烟使用：
+
+```bash
+PYTHONPATH=workers python3 workers/low-latency-video/src/receiver_main.py --port 9100
+```
+
+矩阵 receiver 另开终端发送回调：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:9000/callback \
@@ -272,7 +278,16 @@ curl -sS -X POST http://127.0.0.1:9000/callback \
 curl -sS http://127.0.0.1:9000/latest | python3 -m json.tool
 ```
 
-期望：`POST /callback` 返回 `status=ok`，浏览器打开 `http://127.0.0.1:9000/` 能看到“用户端结果接收器”、工单 ID 和指标值。视频业务使用 `workers/low-latency-video/src/receiver_main.py`，如果回调包含 `annotated_frame_data_url`，首页会展示带框预览图。
+视频 receiver 另开终端发送回调：
+
+```bash
+curl -sS -X POST http://127.0.0.1:9100/callback \
+  -H 'Content-Type: application/json' \
+  -d '{"order_id":"demo-video-order","metric_key":"frame_latency_p90_ms","result":{"frame_latency_p90_ms":12.3}}'
+curl -sS http://127.0.0.1:9100/latest | python3 -m json.tool
+```
+
+期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID 和指标值；视频回调如果包含 `annotated_frame_data_url`，首页会展示带框预览图。
 
 若 compute 容器已运行且业务面可达，可用轻量用户端客户端提交任务：
 

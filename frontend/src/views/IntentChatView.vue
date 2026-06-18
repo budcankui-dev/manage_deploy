@@ -1123,20 +1123,31 @@ function logout() {
 }
 
 onMounted(async () => {
-  await loadSystemSettings()
-  await refreshList()
-  const lastId = getLastConversationId()
-  const target = lastId && conversations.value.find(c => c.id === lastId)
-  const editableTarget = conversations.value.find(item =>
-    item.status === 'drafting' && !item.materialized_order_id
-  )
-  if (target && target.status === 'drafting' && !target.materialized_order_id) {
-    await loadConversation(lastId)
-  } else if (editableTarget) {
-    setLastConversationId(editableTarget.id)
-    await loadConversation(editableTarget.id)
-  } else {
-    await startNewConversation()
+  try {
+    await loadSystemSettings()
+    await refreshList()
+    const lastId = getLastConversationId()
+    const target = lastId && conversations.value.find(c => c.id === lastId)
+    const editableTarget = conversations.value.find(item =>
+      item.status === 'drafting' && !item.materialized_order_id
+    )
+    if (target && target.status === 'drafting' && !target.materialized_order_id) {
+      await loadConversation(lastId)
+    } else if (editableTarget) {
+      setLastConversationId(editableTarget.id)
+      await loadConversation(editableTarget.id)
+    } else {
+      await startNewConversation()
+    }
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.error(extractErrorMessage(err, '页面初始化失败，请刷新重试'))
+    }
+  } finally {
+    loading.value = false
+    isStreaming.value = false
+    ordersLoading.value = false
+    orderDetailLoading.value = false
   }
 })
 

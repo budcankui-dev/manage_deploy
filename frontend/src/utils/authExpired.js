@@ -30,9 +30,14 @@ export function handleAuthExpired() {
   const currentPath = `${window.location.pathname}${window.location.search}`
   if (window.location.pathname === '/login' || window.location.pathname === '/register') {
     ElMessage.warning('登录已过期，请重新登录')
+    redirecting = false
     return
   }
 
   const target = `/login?redirect=${encodeURIComponent(currentPath)}`
   window.location.href = target
+}
+
+export function resetAuthExpiredRedirecting() {
+  redirecting = false
 }

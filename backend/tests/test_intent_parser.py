@@ -94,6 +94,59 @@ def test_parse_half_hour_duration():
     assert (result.business_end_time - result.business_start_time).total_seconds() == 30 * 60
 
 
+def test_parse_rejects_unknown_node_and_keeps_draft_incomplete():
+    result = parse_intent(
+        "矩阵乘法任务，从 unknown-node 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略",
+        valid_nodes=["h1", "h2", "compute-1"],
+    )
+
+    assert result.parse_status == "incomplete"
+    assert result.source_name is None
+    assert result.destination_name == "h2"
+    assert "源节点不存在：unknown-node" in result.validation_errors
+
+
+def test_parse_multiturn_completion_merges_existing_draft():
+    first = parse_intent(
+        "视频AI推理任务，从 h1 到 h2，720p视频，100帧，现在开始跑2小时，低时延策略",
+        valid_nodes=["h1", "h2"],
+    )
+    assert first.parse_status == "incomplete"
+    assert any("帧率" in item for item in first.validation_errors)
+
+    second = parse_intent(
+        "补充帧率 30fps",
+        existing_draft={
+            "task_type": first.task_type,
+            "modality": first.modality,
+            "source_name": first.source_name,
+            "destination_name": first.destination_name,
+            "business_start_time": first.business_start_time,
+            "business_end_time": first.business_end_time,
+            "data_profile": first.data_profile,
+            "business_objective": first.business_objective,
+            "runtime_plan": first.runtime_plan,
+        },
+        valid_nodes=["h1", "h2"],
+    )
+
+    assert second.parse_status == "valid"
+    assert second.data_profile["fps"] == 30
+    assert second.source_name == "h1"
+    assert second.destination_name == "h2"
+
+
+def test_parse_rejects_unsupported_absolute_time_in_rule_parser():
+    result = parse_intent(
+        "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，2026-06-20 09:00开始，2026-06-20 11:00结束，资源保障策略",
+        valid_nodes=["h1", "h2"],
+    )
+
+    assert result.parse_status == "incomplete"
+    assert "业务开始时间（如：现在开始跑2小时）" in result.validation_errors
+    assert "业务结束时间" in result.validation_errors
+
+
 def test_llm_parse_result_normalizes_relative_duration_from_utterance():
     raw = {
         "task_type": "high_throughput_matmul",

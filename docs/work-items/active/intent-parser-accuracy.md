@@ -75,12 +75,18 @@ task_type = low_latency_video_pipeline
 
 ## 数据集覆盖
 
-- valid：251 条
-- missing_source：22 条
-- missing_destination：22 条
-- missing_time：22 条
-- wrong_source_node：22 条
-- wrong_destination_node：21 条
+当前固定数据集为 `datasets/intent_eval/multi_business.jsonl`，共 360 条，真实分布如下：
+
+- valid：288 条
+- valid_default_strategy：36 条
+- valid_colloquial：21 条
+- missing_source：3 条
+- missing_destination：3 条
+- missing_time：3 条
+- wrong_source_node：3 条
+- wrong_destination_node：3 条
+
+节点槽位覆盖 `h1-h13` 和 `compute-1`、`compute-2`、`compute-3`。路由策略覆盖 `resource_guarantee` 101 条、`low_latency_forwarding` 66 条、`fastest_completion` 65 条、`load_balance` 64 条、`cost_priority` 64 条。
 
 样本字段覆盖矩阵规模/批次数、视频帧数/分辨率/fps、LLM prompt tokens/max_new_tokens/batch_size、训练样本数、存算数据量、连接数、抖动上限、边缘推理功耗预算、安全等级、路由策略、节点名称写错和缺失时间等场景。相对时间表达额外标注 `expected_time.duration_minutes`，仅用于评测时校验 `business_end_time - business_start_time`，不是业务工单字段。
 

@@ -23,6 +23,7 @@ TASK_CONFIG = {
     "high_throughput_matmul": {
         "message": "矩阵乘法任务，从 h1 到 h2，256阶矩阵，10批，现在开始跑30分钟，资源保障策略",
         "endpoint_image": "10.112.244.94:5000/scientific-matmul-endpoint:dev",
+        "destination_port": 9000,
         "receiver_command": "python /app/src/receiver_main.py --port 9000",
         "source_command": "python /app/src/source_main.py",
         "source_env": {
@@ -42,7 +43,8 @@ TASK_CONFIG = {
     "low_latency_video_pipeline": {
         "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，30fps，低时延转发策略，现在开始跑30分钟",
         "endpoint_image": "10.112.244.94:5000/low-latency-video-endpoint:dev",
-        "receiver_command": "python /app/src/receiver_main.py --port 9000",
+        "destination_port": 9100,
+        "receiver_command": "python /app/src/receiver_main.py --port 9100",
         "source_command": "python /app/src/source_main.py",
         "source_env": {
             "SOURCE_LISTEN": "false",
@@ -207,7 +209,7 @@ def main() -> int:
     parser.add_argument("--task-type", choices=sorted(TASK_CONFIG), default="high_throughput_matmul")
     parser.add_argument("--source-node", default="h1")
     parser.add_argument("--destination-node", default="h2")
-    parser.add_argument("--destination-port", type=int, default=9000)
+    parser.add_argument("--destination-port", type=int)
     parser.add_argument("--compute-nodes", default="compute-1,compute-3")
     parser.add_argument("--gpu-device", default="0")
     parser.add_argument("--wait-seconds", type=float, default=240.0)
@@ -215,6 +217,8 @@ def main() -> int:
     args = parser.parse_args()
 
     config = TASK_CONFIG[args.task_type]
+    if args.destination_port is None:
+        args.destination_port = int(config["destination_port"])
     base = args.base_url.rstrip("/")
     session = requests.Session()
 

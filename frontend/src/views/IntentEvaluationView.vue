@@ -5,7 +5,7 @@
         <p class="eyebrow">意图解析评测</p>
         <h1>数据集意图解析参数提取准确率</h1>
         <p class="subtitle">
-          数据集由模板和槽位替换构造，覆盖八类模态、多种路由策略倾向、口语化表达、缺字段、错误节点和噪声文本。
+          数据集由模板和槽位替换构造，覆盖八类模态、多种路由策略倾向、口语化表达、缺字段和错误节点等边界输入。
           页面按统一解析流程展示一个正式准确率，便于专家按测试方案核对结果。
         </p>
       </div>
@@ -827,7 +827,7 @@ const CASE_TYPE_LABELS = {
   wrong_node: '错误节点',
   wrong_source_node: '错误源节点',
   wrong_destination_node: '错误目的节点',
-  noisy: '噪声文本',
+  noisy: '边界输入',
   boundary: '边界值',
   llm_text_generation: '文本生成',
 }
@@ -1285,9 +1285,22 @@ watch(isBatchActive, active => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadLatest(), loadSystemSettings(), loadOnlineStatus()])
-  startAutoRefresh()
-  if (onlineStatus.value?.status === 'running') startOnlineRefresh()
+  try {
+    await Promise.all([loadLatest(), loadSystemSettings(), loadOnlineStatus()])
+    startAutoRefresh()
+    if (onlineStatus.value?.status === 'running') startOnlineRefresh()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.error('意图评测页面初始化失败，请刷新重试')
+    }
+  } finally {
+    loading.value = false
+    onlineRunning.value = false
+    batchSubmitting.value = false
+    batchRefreshing.value = false
+    batchCancelling.value = false
+    parserLoading.value = false
+  }
 })
 
 onUnmounted(() => {
