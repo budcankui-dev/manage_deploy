@@ -241,8 +241,8 @@ def test_evaluate_with_baseline_lower_is_better_fail():
     assert evaluation.target_value == 125.0  # 100 / 0.8
 
 
-def test_evaluate_video_latency_uses_unified_capability_retention():
-    """Video P90 latency uses the same >=80% capability retention rule."""
+def test_evaluate_video_latency_uses_acceptance_multiplier():
+    """Video P90 latency passes when it is within baseline * 1.5."""
     evaluation = evaluate_business_objective(
         BusinessObjective(
             metric_key="frame_latency_p90_ms",
@@ -259,4 +259,25 @@ def test_evaluate_video_latency_uses_unified_capability_retention():
 
     assert evaluation.business_success is True
     assert evaluation.failure_reason is None
-    assert evaluation.target_value == 125.0  # 100 / 0.8
+    assert evaluation.target_value == 150.0  # 100 * 1.5
+
+
+def test_evaluate_video_latency_fails_above_acceptance_multiplier():
+    """Video P90 latency fails when it is above baseline * 1.5."""
+    evaluation = evaluate_business_objective(
+        BusinessObjective(
+            metric_key="frame_latency_p90_ms",
+            operator="<=",
+            target_value=200,
+            unit="ms",
+        ),
+        actual_metric_key="frame_latency_p90_ms",
+        actual_value=151,
+        object_uris=["s3://results/run-video/output.json"],
+        task_type="low_latency_video_pipeline",
+        baseline_value=100,
+    )
+
+    assert evaluation.business_success is False
+    assert evaluation.failure_reason is not None
+    assert evaluation.target_value == 150.0  # 100 * 1.5

@@ -175,9 +175,83 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 }
 ```
 
-典型响应会包含 `routing_status=network_binding_ready` 和 `network_bindings`。如果是 `route_only` 工单，平台会保存 placements/metadata，但不会物化实例；响应中 `route_only=true`，`network_bindings=[]`，通常无需再调用 `/network-ready`。
+典型响应会包含 `routing_status=network_binding_ready` 和 `network_bindings`。如果是 `route_only` 工单，平台会保存 placements/metadata，但不会物化实例；响应以 `deployment_required=false` 和 `deployment_mode=route_only` 为准，`network_bindings=[]`，通常无需再调用 `/network-ready`。`route_only=true` 只作为平台内部 `runtime_config.routing_result` 的辅助标记，不作为顶层响应字段依赖。
 
-下面是可选运维接口，不是最小联调必需。只有当路由系统要完整维护资源占用、失败恢复和资源释放时再实现：
+`/result` 请求字段已冻结，额外字段会被平台拒绝：
+
+| 字段 | 说明 |
+|------|------|
+| `placements` | 路由结果列表。每项只接受 `task_node_id`、`topology_node_id`、`gpu_device`。 |
+| `strategy` / `selected_strategy` | 可选，路由策略和算法侧具体策略名。 |
+| `external_routing_id` | 可选，路由系统自己的结果 ID。 |
+| `metadata` | 可选，算法版本、路径、成本、解释、候选评分等扩展字典。 |
+| `estimated_metric` / `result_payload` | 可选，算法侧估计值和原始结果。 |
+| `require_network_ready` | 是否要求路由系统下发网络规则后再调用 `/network-ready`，默认 `true`。 |
+
+`/result` 成功响应的关键字段如下：
+
+| 字段 | 普通部署 | `route_only` | 路由系统怎么用 |
+|------|----------|--------------|----------------|
+| `status` | `ok` | `ok` | 接口调用成功。 |
+| `order_id` | 当前工单 ID | 当前工单 ID | 用于日志关联。 |
+| `routing_status` | 通常为 `network_binding_ready` | `completed` | 普通部署需要继续下发网络规则；只路由不部署到这里已结束。 |
+| `instance_id` | 平台物化后的实例 ID | `null` | 普通部署可用于排障；路由系统通常不用。 |
+| `network_bindings` | 非空数组 | `[]` | 下发 A->B、B->C 流表/QoS 的最终依据。 |
+| `network_ready_required` | `true` 或请求指定值 | `false` | 为 `true` 时下发网络后必须调用 `/network-ready`。 |
+| `network_ready` | `false` | `true` | 表示平台是否认为网络阶段已完成。 |
+
+`network_bindings[]` 常用字段如下。下发真实业务流规则时优先使用这些字段，而不是提前猜测容器端口：
+
+| 字段 | 含义 | 是否重点使用 |
+|------|------|--------------|
+| `flow_id` | 平台生成的业务流 ID，通常形如 `<order_id>:source->compute`。 | 是，用于日志和幂等。 |
+| `from` / `to` | DAG 子任务角色名，引用 `task_node_id`，例如 `source -> compute`。 | 是，用于识别流向。 |
+| `src_topology_node_id` / `dst_topology_node_id` | 源/目的资产拓扑 ID；缺失时回退为平台节点别名。 | 是，用于映射拓扑节点。 |
+| `src_ip` / `dst_ip` | 源/目的数据面 IP。 | 是，用于生成业务流规则。 |
+| `dst_port` / `dst_named_ports` | 下游目的端实际监听端口。 | 是，端口以这里为准。 |
+| `dst_access_url` | 可访问目的端服务的 URL。 | 可选，便于调试。 |
+| `src_external` / `dst_external` | 是否为用户自行控制的外部端点。 | 是，用于区分平台容器和用户端点。 |
+| `binding_source` | 绑定来源说明。 | 可选，便于排障。 |
+
+注意：回写请求中的 `placements[].topology_node_id` 当前必须填写 `nodes.hostname`；响应中的 `src_topology_node_id/dst_topology_node_id` 则优先表示资产拓扑 ID。路由系统如果要拿平台节点别名，应使用响应里的 `src_host/dst_host`。
+
+最小本地 mock 验收可以直接按下面 4 步执行。示例默认把 compute 固定选到 `compute-1` 的 `GPU 0`：
+
+```bash
+# 1. 查看待路由工单
+curl -sS 'http://127.0.0.1:8181/api/routing-orders?status=pending&limit=1' | python3 -m json.tool
+
+# 2. 领取工单，替换为上一步返回的 order_id
+ORDER_ID=<order_id>
+curl -sS -X PATCH "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/claim" | python3 -m json.tool
+
+# 3. 回写最小路由结果
+curl -sS -X POST "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/result" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "placements": [
+      {"task_node_id":"compute","topology_node_id":"compute-1","gpu_device":"0"}
+    ],
+    "metadata": {
+      "algorithm_version":"mock-v1",
+      "selected_reason":"local mock fixed placement"
+    },
+    "require_network_ready": true
+  }' | python3 -m json.tool
+
+# 4. 如果第 3 步返回 network_ready_required=true，则下发规则后确认网络就绪
+curl -sS -X POST "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/network-ready" \
+  -H 'Content-Type: application/json' \
+  -d '{"metadata":{"mock":true,"flow_rule_count":2}}' | python3 -m json.tool
+```
+
+验收判断：
+
+- 普通部署工单：第 3 步应返回 `routing_status=network_binding_ready` 且 `network_bindings` 非空；第 4 步后应变为 `routing_status=completed`。
+- `route_only` 工单：第 3 步应返回 `routing_status=completed`、`network_bindings=[]`、`network_ready=true`，通常不需要第 4 步。
+- 重复 claim 同一工单应返回 `409`，证明并发领取控制生效。
+
+下面是资源闭环接口。HTTP smoke mock 可以暂不实现；正式连续批量路由或维护 GPU 独占资源池时必须实现 release 查询与 ack，否则任务释放后资源不会回补：
 
 | 动作 | 方法与路径 | 说明 |
 |------|------------|------|
@@ -249,12 +323,14 @@ while True:
             PATCH(f"/api/routing-orders/{order_id}/requeue", {"reason": result.text})
             continue
 
-        bindings = result.json()["network_bindings"]
-        install_flow_rules(bindings)
-        POST(
-            f"/api/routing-orders/{order_id}/network-ready",
-            {"metadata": {"flow_rule_count": len(bindings)}},
-        )
+        result_body = result.json()
+        bindings = result_body["network_bindings"]
+        if result_body.get("network_ready_required"):
+            install_flow_rules(bindings)
+            POST(
+                f"/api/routing-orders/{order_id}/network-ready",
+                {"metadata": {"flow_rule_count": len(bindings)}},
+            )
 ```
 
 ## 6. MySQL 扫表和 HTTP 接口怎么配合

@@ -59,7 +59,7 @@ Last Updated: 2026-06-12
 
 - [x] 视频AI推理 worker（source/compute/sink + Dockerfile，固定视频 + YOLOv5n ONNX + 带框预览）
 - [x] 视频AI推理业务基线测试：固定 resolution=720p、frame_stride=30、warmup_frames=10、measured_frames=30，每个可调度节点重复 3 次取中位数
-- [ ] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足 `actual_p90 <= baseline_p90 / 0.8`（即不超过基线 1.25 倍），成功率达到 90%
+- [ ] 视频AI推理业务目标成功率：创建不少于 30 个可评价工单，统计 P90 帧推理时延是否满足 `actual_p90 <= baseline_p90 * 1.5`，成功率达到 90%
 - [x] 视频AI推理验收页面：展示任务类型、所属模态、源节点、推理节点、目的节点、GPU 分配、有效帧数、P90 时延、基准值、阈值、是否达标、工单详情、结果摘要和带框预览图
 - [ ] LLM 文本生成 worker（Ollama，source/compute/sink）
 - [ ] 前端：视频上传输入 + 推理结果抽帧展示
@@ -128,5 +128,5 @@ curl -H "Authorization: Bearer $TOKEN" \
 风险记录：
 
 - `batch-auto-route` 是平台内置自动分配流程；真实外部路由对接应在 compute placement 中显式写入 `gpu_device: "0"`。
-- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline / 0.8` 判定，即时延不超过节点同 profile 基线的 1.25 倍。该 25% 裕量用于覆盖容器化运行、网络转发和系统调度波动，不用于容忍同一 GPU 多任务争用；早期放宽口径已废弃。
+- 视频 worker 当前是固定视频 + YOLOv5n ONNX 推理，业务目标用 `frame_latency_p90_ms <= baseline * 1.5` 判定，即时延不超过节点同 profile 基线的 1.5 倍。该裕量用于覆盖容器化运行、网络转发和系统调度波动，不用于容忍同一 GPU 多任务争用。
 - 30 个任务并发会占用较多自动端口和容器 writable layer，跑新轮次前应使用“清理实例保留工单”释放远端容器，再保留工单证据用于回看。

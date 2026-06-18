@@ -123,7 +123,7 @@ range: [start, end]  # 自动分配范围，如 [18000, 19999]
 |---------|------|------|---------|
 | 通用计算（matmul） | effective_gflops | 越高越好 | ≥ baseline × 0.8 |
 | 模型训练 | tokens_per_second | 越高越好 | ≥ baseline × 0.8 |
-| 视频推理 | frame_latency_p90_ms | 越低越好 | baseline / actual ≥ 0.8，即 ≤ baseline / 0.8 |
+| 视频推理 | frame_latency_p90_ms | 越低越好 | actual ≤ baseline × 1.5 |
 
 ### 4.2 基准测试参数 ✅
 

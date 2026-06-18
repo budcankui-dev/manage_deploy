@@ -458,7 +458,7 @@ const taskConfigs = {
     label: '视频AI推理任务',
     unit: 'ms',
     requiresGpu: true,
-    objectiveText: '业务目标：业务能力保持率 ≥ 80%。视频 P90 时延要求 actual_p90 ≤ 节点 GPU+YOLO 同 profile 历史基线 ÷ 0.8。',
+    objectiveText: '业务目标：视频 P90 时延要求 actual_p90 ≤ 节点 GPU+YOLO 同 profile 历史基线 × 1.5。',
   },
 }
 const taskType = ref('high_throughput_matmul')

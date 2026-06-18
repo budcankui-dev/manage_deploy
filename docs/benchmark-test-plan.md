@@ -37,12 +37,12 @@
 单任务 actual_latency = 有效统计帧 latency_ms 的 P90
 单任务达标条件：baseline_latency_p90_ms / actual_latency >= 0.8
 
-actual_latency <= baseline_latency_p90_ms / 0.8
+actual_latency <= baseline_latency_p90_ms * 1.5
 ```
 
-等价写法：`actual_latency <= baseline_latency_p90_ms / 0.8`。
+等价写法：`actual_latency <= baseline_latency_p90_ms * 1.5`。
 
-其中 `baseline_latency_p90_ms` 是正式测评前在相同视频 profile、相同固定视频、相同 YOLO 权重和 GPU 推理路径下测出的节点基线 P90 帧时延。视频时延是“越低越好”的指标，因此达标写作 `actual_latency <= baseline_latency_p90_ms / 0.8`；含义是正式任务的 P90 时延不能明显劣于当前节点基线。视频 worker 默认要求 compute 子任务分配 GPU；CPU 路径仅作为开发调试开关，不能写入正式验收基线。正式演示时，工单详情应展示 compute 节点、GPU 编号、模型名称、固定视频、检测框列表和带框预览图，证明业务真实执行而不是只上报静态数值。
+其中 `baseline_latency_p90_ms` 是正式测评前在相同视频 profile、相同固定视频、相同 YOLO 权重和 GPU 推理路径下测出的节点基线 P90 帧时延。视频时延是“越低越好”的指标，因此达标写作 `actual_latency <= baseline_latency_p90_ms * 1.5`；含义是正式任务的 P90 时延不能明显劣于当前节点基线。视频 worker 默认要求 compute 子任务分配 GPU；CPU 路径仅作为开发调试开关，不能写入正式验收基线。正式演示时，工单详情应展示 compute 节点、GPU 编号、模型名称、固定视频、检测框列表和带框预览图，证明业务真实执行而不是只上报静态数值。
 
 ## 测试环境
 

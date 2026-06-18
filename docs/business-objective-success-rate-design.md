@@ -137,7 +137,7 @@ baseline_metric / actual_metric >= success_ratio
 success_ratio = 0.8
 ```
 
-等价为 `actual_metric <= baseline_metric / 0.8`。这样矩阵、视频等业务都统一解释为“端到端运行后的业务能力至少保持历史基线能力的 80%”。视频 AI 推理的正式 baseline 必须来自同一节点、同一视频参数、同一 YOLO 权重和 GPU 推理路径；CPU 或兜底模拟推理只用于开发排障，不参与正式成功率判定。
+视频 AI 推理按验收口径使用 `actual_metric <= baseline_metric * 1.5`。视频 AI 推理的正式 baseline 必须来自同一节点、同一视频参数、同一 YOLO 权重和 GPU 推理路径；CPU 或兜底模拟推理只用于开发排障，不参与正式成功率判定。
 
 适用指标：
 

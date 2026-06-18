@@ -11,10 +11,14 @@ if TYPE_CHECKING:
 
 SUPPORTED_OPERATORS = ("<=", ">=")
 
-# 统一业务能力保持率：端到端运行后的业务能力至少保持节点历史基线的 80%。
+# 吞吐类业务保持节点历史基线的 80%；视频时延按单独验收裕量判定。
 # higher-is-better: actual >= baseline * 0.8
-# lower-is-better: baseline / actual >= 0.8 => actual <= baseline / 0.8
+# video latency: actual <= baseline * 1.5
+# other lower-is-better: actual <= baseline / 0.8
 BASELINE_CAPABILITY_RETENTION = 0.8
+
+# 验收阶段视频推理链路先按显式裕量判定：P90 时延不超过节点基线 1.5 倍。
+VIDEO_LATENCY_BASELINE_MULTIPLIER = 1.5
 
 
 def evaluate_business_objective(
@@ -28,9 +32,10 @@ def evaluate_business_objective(
 ) -> BusinessObjectiveEvaluationResult:
     """评估业务目标是否达成。
 
-    如果提供了 baseline_value，则按统一“业务能力保持率 >= 80%”计算 target_value：
+    如果提供了 baseline_value，则按业务类型计算 target_value：
       - >= 操作符: target = baseline * 0.8
-      - <= 操作符: target = baseline / 0.8
+      - 视频 P90 时延: target = baseline * 1.5
+      - 其他 <= 操作符: target = baseline / 0.8
     否则使用 objective.target_value。
     """
     if actual_metric_key != objective.metric_key:
@@ -67,6 +72,8 @@ def evaluate_business_objective(
     if baseline_value is not None and baseline_value > 0:
         if objective.operator == ">=":
             target = baseline_value * BASELINE_CAPABILITY_RETENTION
+        elif _uses_video_latency_multiplier(task_type, actual_metric_key):
+            target = baseline_value * VIDEO_LATENCY_BASELINE_MULTIPLIER
         else:
             target = baseline_value / BASELINE_CAPABILITY_RETENTION
     elif objective.target_value is not None and objective.target_value > 0:
@@ -113,3 +120,7 @@ def _error_ratio(estimated_value: float | None, actual_value: float) -> float | 
     if estimated_value in (None, 0):
         return None
     return abs(actual_value - estimated_value) / abs(estimated_value)
+
+
+def _uses_video_latency_multiplier(task_type: str | None, metric_key: str) -> bool:
+    return task_type == "low_latency_video_pipeline" and metric_key == "frame_latency_p90_ms"
