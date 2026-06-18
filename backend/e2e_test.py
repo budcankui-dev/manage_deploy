@@ -6,7 +6,7 @@ import httpx
 
 BASE = "http://localhost:8000"
 AGENT_C1 = "http://10.112.249.191:8001"
-AGENT_C2 = "http://10.112.150.166:8001"
+AGENT_C2 = "http://10.112.17.51:8001"
 
 async def main():
     async with httpx.AsyncClient(base_url=BASE, timeout=30) as c:

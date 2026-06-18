@@ -10,7 +10,7 @@
 |------|------|----|----------|----------|-----|--------|------|
 | admin-server | 管理面主控 | `10.112.244.94` | `22` | `bupt` | - | `/mnt/data` | 部署前端、后端、MySQL、MinIO、私有 Registry |
 | compute-1 | 业务节点 | `10.112.249.191` | `2345` | `chengyubin` | TITAN X x 1 | `/disk/sdc` | 可作为 source / compute / sink |
-| compute-2 | 业务节点 | `10.112.150.166` | `2345` | `chengyubin` | TITAN X x 1 | `/data/hdd1` | 可作为 source / compute / sink |
+| compute-2 | 业务节点 | `10.112.17.51` | `2345` | `chengyubin` | TITAN X x 1 | `/data/hdd1` | 可作为 source / compute / sink |
 | compute-3 | 业务节点 | `10.112.59.209` | `22` | `compute` | Tesla P40 x 8 | `/data` | 静态 IP，MAC `0c:c4:7a:85:78:14`，可作为 source / compute / sink |
 
 当前阶段默认 `admin-server` 是管理节点，`compute-*` 是业务节点。矩阵乘法演示仍按随路计算数据流 `source -> compute -> sink` 验证，业务数据不通过共享宿主机文件传递。
@@ -54,7 +54,7 @@ ssh manage-compute-3 hostname
 ```bash
 ssh -p 22 bupt@10.112.244.94 hostname
 ssh -p 2345 chengyubin@10.112.249.191 hostname
-ssh -p 2345 chengyubin@10.112.150.166 hostname
+ssh -p 2345 chengyubin@10.112.17.51 hostname
 ssh -p 22 compute@10.112.59.209 hostname
 ```
 
