@@ -2,6 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ADMIN_ROUTE_NAMES, USER_ROUTE_NAMES } from '@/utils/routeAccess'
 import { markAuthExpiredNotice } from '@/utils/authExpired'
+import {
+  clearChunkReloadMarker,
+  isDynamicImportLoadError,
+  recoverFromChunkLoadError,
+} from '@/utils/routeChunkRecovery'
+import { ElMessage } from 'element-plus'
 
 const routes = [
   {
@@ -139,6 +145,21 @@ router.beforeEach(async (to) => {
   }
 
   return true
+})
+
+router.onError((error, to) => {
+  if (isDynamicImportLoadError(error)) {
+    const recovered = recoverFromChunkLoadError(to, (message) => {
+      ElMessage.warning(message)
+    })
+    if (recovered) return
+  }
+
+  console.error('路由跳转失败', error)
+})
+
+router.afterEach((to) => {
+  clearChunkReloadMarker(to.fullPath)
 })
 
 export default router

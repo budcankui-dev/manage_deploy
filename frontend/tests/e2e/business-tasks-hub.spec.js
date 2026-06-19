@@ -46,6 +46,26 @@ test('admin can inspect the business task hub', async ({ page }, testInfo) => {
   })
 })
 
+test('admin sidebar navigation responds from benchmark page', async ({ page }, testInfo) => {
+  await loginOrBootstrap(page)
+
+  await page.goto('/benchmark')
+  await expect(page.getByRole('button', { name: '拓扑节点' })).toBeVisible()
+
+  await page.getByRole('button', { name: '拓扑节点' }).click()
+  await page.waitForURL(/\/nodes/, { timeout: 10_000 })
+  await expect(page.getByRole('heading', { name: /节点|拓扑/ })).toBeVisible()
+
+  await page.getByRole('button', { name: '系统设置' }).click()
+  await page.waitForURL(/\/settings/, { timeout: 10_000 })
+  await expect(page.getByRole('heading', { name: '运行配置与系统参数' })).toBeVisible()
+
+  await page.screenshot({
+    path: testInfo.outputPath('admin-sidebar-navigation.png'),
+    fullPage: true,
+  })
+})
+
 test('optional headed matmul demo trigger is visible', async ({ page }, testInfo) => {
   test.skip(
     process.env.E2E_TRIGGER_MATMUL_DEMO !== '1',
