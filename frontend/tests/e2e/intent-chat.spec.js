@@ -21,6 +21,26 @@ async function loginByApi(request) {
   return login.json()
 }
 
+async function loginUserByApi(request, suffix = Date.now().toString(36)) {
+  const user = process.env.E2E_USER_USERNAME || `intent-user-${suffix}`
+  const userPassword = process.env.E2E_USER_PASSWORD || '123456'
+  let login = await request.post('/api/auth/login', {
+    data: { username: user, password: userPassword },
+  })
+
+  if (!login.ok()) {
+    await request.post('/api/auth/register', {
+      data: { username: user, password: userPassword, role: 'user' },
+    })
+    login = await request.post('/api/auth/login', {
+      data: { username: user, password: userPassword },
+    })
+  }
+
+  expect(login.ok()).toBeTruthy()
+  return { ...(await login.json()), username: user }
+}
+
 async function createNode(request, suffix, index) {
   const response = await request.post('/api/nodes', {
     data: {
@@ -123,7 +143,7 @@ async function createConversation(request, token) {
 }
 
 test('intent chat parses matrix task and submits order', async ({ page, request }, testInfo) => {
-  const auth = await loginByApi(request)
+  const auth = await loginUserByApi(request)
   const { source, destination } = await prepareMatmulCatalog(request)
   const conversation = await createConversation(request, auth.access_token)
 
@@ -135,7 +155,7 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
   }, {
     token: auth.access_token,
     role: auth.role,
-    username,
+    username: auth.username,
     conversationId: conversation.id,
   })
 
@@ -148,14 +168,13 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
 
   await expect(page.getByText('参数完整')).toBeVisible({ timeout: 20_000 })
   const panel = page.locator('.intent-panel')
-  await expect(panel.getByRole('cell', { name: '矩阵乘法计算任务' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '高通量计算模态' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: source })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: destination })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '1024' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '50' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '资源保障', exact: true })).toBeVisible()
-  await expect(panel.getByText('路由 DAG JSON 预览')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '任务类型' }).getByText('矩阵乘法计算任务')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '所属模态' }).getByText('高通量计算模态')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '源节点' }).getByText(source)).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '目的节点' }).getByText(destination)).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '矩阵规模' }).getByText('1024')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '批次数' }).getByText('50')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '路由策略' }).getByText('资源预留保障', { exact: true })).toBeVisible()
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-parsed.png'),
@@ -164,7 +183,7 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
 
   await page.getByRole('button', { name: '确认提交任务' }).first().click()
   await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('.confirm-card').getByText('待路由')).toBeVisible()
+  await expect(page.locator('.confirm-card').getByText('待分配')).toBeVisible()
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-submitted.png'),
@@ -198,11 +217,10 @@ test('intent chat parses video task and demo-routes deployment', async ({ page, 
 
   await expect(page.getByText('参数完整')).toBeVisible({ timeout: 20_000 })
   const panel = page.locator('.intent-panel')
-  await expect(panel.getByRole('cell', { name: '视频AI推理任务' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '低时延转发模态' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '720p' })).toBeVisible()
-  await expect(panel.getByRole('cell', { name: '100' })).toBeVisible()
-  await expect(panel.getByText('路由 DAG JSON 预览')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '任务类型' }).getByText('视频AI推理任务')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '所属模态' }).getByText('低时延转发模态')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '分辨率' }).getByText('720p')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '视频帧数' }).getByText('100')).toBeVisible()
 
   await page.getByRole('button', { name: '确认提交任务' }).first().click()
   await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
@@ -218,7 +236,7 @@ test('intent chat parses video task and demo-routes deployment', async ({ page, 
 })
 
 test('intent chat keeps incomplete video draft unsubmitted and compactly shows node help', async ({ page, request }, testInfo) => {
-  const auth = await loginByApi(request)
+  const auth = await loginUserByApi(request)
   const conversation = await createConversation(request, auth.access_token)
 
   await page.addInitScript(({ token, role, username, conversationId }) => {
@@ -229,7 +247,7 @@ test('intent chat keeps incomplete video draft unsubmitted and compactly shows n
   }, {
     token: auth.access_token,
     role: auth.role,
-    username,
+    username: auth.username,
     conversationId: conversation.id,
   })
 

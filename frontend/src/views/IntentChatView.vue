@@ -403,17 +403,12 @@
           <el-tag v-if="conversation?.materialized_order_id" type="success" size="small" style="margin-left:8px">已提交</el-tag>
         </template>
         <template v-if="draft">
-          <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="任务类型">{{ taskTypeLabel(draft.task_type) || draft.task_type || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="所属模态">{{ modalityLabel(draft.modality) }}</el-descriptions-item>
-            <el-descriptions-item label="源节点">{{ formatDraftEndpoint('source') }}</el-descriptions-item>
-            <el-descriptions-item label="目的节点">{{ formatDraftEndpoint('destination') }}</el-descriptions-item>
-            <el-descriptions-item v-if="destinationReceiverText" label="结果接收">{{ destinationReceiverText }}</el-descriptions-item>
-            <el-descriptions-item label="开始时间">{{ formatTime(draft.business_start_time) }}</el-descriptions-item>
-            <el-descriptions-item label="结束时间">{{ formatTime(draft.business_end_time) }}</el-descriptions-item>
-            <el-descriptions-item v-for="row in draftDataProfileRows" :key="row.label" :label="row.label">{{ row.value }}</el-descriptions-item>
-            <el-descriptions-item label="路由策略">{{ formatRoutingStrategy(draft.runtime_plan?.routing_strategy) }}</el-descriptions-item>
-          </el-descriptions>
+          <div class="intent-summary-list" aria-label="意图参数摘要">
+            <div v-for="row in intentSummaryRows" :key="row.label" class="intent-summary-row">
+              <span class="intent-summary-label">{{ row.label }}</span>
+              <span class="intent-summary-value">{{ row.value }}</span>
+            </div>
+          </div>
           <div v-if="showClientCommands" class="client-command-panel">
             <div class="client-command-header">
               <strong>用户端启动命令</strong>
@@ -538,6 +533,21 @@ const exampleChips = [
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
+const intentSummaryRows = computed(() => {
+  if (!draft.value) return []
+  const rows = [
+    { label: '任务类型', value: taskTypeLabel(draft.value.task_type) || draft.value.task_type || '-' },
+    { label: '所属模态', value: modalityLabel(draft.value.modality) },
+    { label: '源节点', value: formatDraftEndpoint('source') },
+    { label: '目的节点', value: formatDraftEndpoint('destination') },
+    ...(destinationReceiverText.value ? [{ label: '结果接收', value: destinationReceiverText.value }] : []),
+    { label: '开始时间', value: formatTime(draft.value.business_start_time) },
+    { label: '结束时间', value: formatTime(draft.value.business_end_time) },
+    ...draftDataProfileRows.value,
+    { label: '路由策略', value: formatRoutingStrategy(draft.value.runtime_plan?.routing_strategy) },
+  ]
+  return rows.filter(row => !isBlankValue(row.value))
+})
 const effectiveDraftForValidation = computed(() => buildDraftWithEndpointForm(draft.value))
 const draftValidationErrors = computed(() => getDraftValidationErrors(effectiveDraftForValidation.value))
 const destinationPort = computed(() => {
@@ -2126,6 +2136,46 @@ onBeforeUnmount(stopRoutingPolling)
 
 .panel-card { margin-bottom: 12px; }
 .panel-card.valid-border { border-color: var(--el-color-success); }
+
+.intent-summary-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #d8e2ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.intent-summary-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e6edf5;
+}
+
+.intent-summary-row:last-child {
+  border-bottom: 0;
+}
+
+.intent-summary-label {
+  min-width: 0;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.intent-summary-value {
+  min-width: 0;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 .errors {
   margin-top: 12px;

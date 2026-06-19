@@ -57,6 +57,20 @@ cd frontend
 npm run test:display
 ```
 
+前端 UI 排版巡检：
+
+```bash
+cd frontend
+npm run ui:smoke
+```
+
+`ui:smoke` 会登录普通用户和管理员，访问用户对话、业务工单、业务测评、拓扑节点、任务模板、系统设置、意图评测等主要页面，自动截图并检查横向溢出、中文标签被挤成竖排、明显超出视口等问题。截图和报告默认输出到 `frontend/output/ui-smoke/`。如需检查线上部署：
+
+```bash
+cd frontend
+UI_SMOKE_BASE_URL=http://10.112.244.94:8182 npm run ui:smoke
+```
+
 前端浏览器 E2E：
 
 ```bash
@@ -408,6 +422,6 @@ docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}'
 ## 提交前最低要求
 
 - 后端改动：跑相关单测；共享行为变更跑全量 `backend/tests`。
-- 前端展示改动：跑 `npm run test:display`；涉及页面流程时跑 `npm run test:e2e`，需要人工观察时跑 `npm run test:e2e:headed`。
+- 前端展示改动：跑 `npm run test:display`、`npm run ui:smoke` 和 `npm run build`；涉及页面流程时跑 `npm run test:e2e`，需要人工观察时跑 `npm run test:e2e:headed`。
 - Worker/Docker 改动：跑 `./scripts/build_workers.sh`，能跑 E2E 时跑 `e2e_matmul_live.sh`。
 - 文档/agent 提示词改动：跑 `git diff --check`，确认 README 链接不指向已删除文件。
