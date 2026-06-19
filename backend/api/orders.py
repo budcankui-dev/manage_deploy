@@ -58,6 +58,7 @@ from services.instance_lifecycle import cleanup_instance_runtime
 from services.order_sync import (
     mark_orders_completed_for_instance,
     purge_instance_artifacts_preserve_evidence,
+    purge_order_instances_by_source_order,
     purge_order_instance_artifacts,
     reconcile_orphan_orders,
 )
@@ -864,6 +865,7 @@ async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
         reason="delete_order",
         metadata={"instance_id": order.materialized_instance_id},
     )
+    await purge_order_instances_by_source_order(db, order.id)
     await purge_order_instance_artifacts(db, order.materialized_instance_id)
     await db.delete(order)
     await db.commit()
@@ -888,6 +890,7 @@ async def batch_delete_orders(
                 reason="delete_order",
                 metadata={"instance_id": order.materialized_instance_id, "batch": True},
             )
+            await purge_order_instances_by_source_order(db, order.id)
             await purge_order_instance_artifacts(db, order.materialized_instance_id)
             await db.delete(order)
             succeeded.append(order.id)

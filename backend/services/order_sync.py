@@ -127,6 +127,17 @@ async def purge_order_instance_artifacts(db: AsyncSession, instance_id: str | No
     await db.execute(delete(TaskInstance).where(TaskInstance.id == instance_id))
 
 
+async def purge_order_instances_by_source_order(db: AsyncSession, order_id: str) -> list[str]:
+    """删除仍通过 source_order_id 引用工单的实例，解决中断测评轮次删除失败。"""
+    rows = await db.execute(
+        select(TaskInstance.id).where(TaskInstance.source_order_id == order_id)
+    )
+    instance_ids = [row[0] for row in rows.all()]
+    for instance_id in instance_ids:
+        await purge_order_instance_artifacts(db, instance_id)
+    return instance_ids
+
+
 async def purge_instance_artifacts_preserve_evidence(
     db: AsyncSession, instance_id: str | None
 ) -> bool:
