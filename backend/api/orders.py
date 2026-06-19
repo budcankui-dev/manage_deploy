@@ -1076,6 +1076,10 @@ async def delete_order(
         conversation = conversation_row.scalar_one_or_none()
         if conversation and conversation.materialized_order_id == order.id:
             conversation.status = ConversationStatus.CANCELLED
+            conversation.materialized_order_id = None
+    routing_rows = await db.execute(select(RoutingRequest).where(RoutingRequest.order_id == order.id))
+    for routing in routing_rows.scalars().all():
+        routing.order_id = None
     await purge_order_instances_by_source_order(db, order.id)
     await purge_order_instance_artifacts(db, order.materialized_instance_id)
     await db.delete(order)

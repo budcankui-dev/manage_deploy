@@ -89,6 +89,24 @@ async def test_admin_can_delete_other_users_order(client, db_session):
 async def test_user_delete_materialized_order_cleans_instance_before_deleting(client, db_session, monkeypatch):
     headers, owner = await _auth_headers(client, db_session, username="order-delete-materialized")
     order = await _create_order(db_session, "delete-materialized-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    conversation = Conversation(
+        id="conversation-delete-materialized-order",
+        user_id=owner.id,
+        status=ConversationStatus.SUBMITTED,
+        materialized_order_id=order.id,
+    )
+    draft = IntentDraft(
+        id="draft-delete-materialized-order",
+        conversation_id=conversation.id,
+    )
+    routing = RoutingRequest(
+        id="routing-delete-materialized-order",
+        conversation_id=conversation.id,
+        order_id=order.id,
+        intent_draft_id=draft.id,
+        strategy="resource_guarantee",
+        status="completed",
+    )
     instance = TaskInstance(
         id="delete-materialized-instance",
         template_id=order.template_id,
@@ -96,8 +114,10 @@ async def test_user_delete_materialized_order_cleans_instance_before_deleting(cl
         status=TaskStatus.RUNNING,
         source_order_id=order.id,
     )
+    order.conversation_id = conversation.id
+    order.routing_request_id = routing.id
     order.materialized_instance_id = instance.id
-    db_session.add(instance)
+    db_session.add_all([conversation, draft, routing, instance])
     await db_session.commit()
     calls = []
 
@@ -119,6 +139,12 @@ async def test_user_delete_materialized_order_cleans_instance_before_deleting(cl
     assert order_row.scalar_one_or_none() is None
     instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
     assert instance_row.scalar_one_or_none() is None
+    conversation_row = await db_session.execute(select(Conversation).where(Conversation.id == conversation.id))
+    updated_conversation = conversation_row.scalar_one()
+    assert updated_conversation.status == ConversationStatus.CANCELLED.value
+    assert updated_conversation.materialized_order_id is None
+    routing_row = await db_session.execute(select(RoutingRequest).where(RoutingRequest.id == routing.id))
+    assert routing_row.scalar_one().order_id is None
 
 
 @pytest.mark.asyncio
