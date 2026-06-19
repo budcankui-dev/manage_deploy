@@ -25,7 +25,7 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "environment_mode": PRODUCTION_MODE,
     "intent_parser_mode": "llm",
     "intent_rule_fallback_enabled": True,
-    "benchmark_routing_mode": "external",
+    "benchmark_routing_mode": "internal_auto",
     "expert_mode": True,
     "show_internal_controls": False,
     "show_routing_dag_json": False,

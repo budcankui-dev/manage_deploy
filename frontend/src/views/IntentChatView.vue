@@ -368,10 +368,16 @@
       class="order-detail-drawer"
     >
       <template #header>
-        <el-tooltip v-if="selectedOrderId && !selectedOrderDetail?.name" :content="selectedOrderId" placement="top">
-          <span>{{ selectedOrderId.slice(0, 8) }}...</span>
-        </el-tooltip>
-        <span v-else>{{ selectedOrderDetail?.name || '任务详情' }}</span>
+        <span>任务工单详情</span>
+        <el-tag
+          v-if="selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type"
+          size="small"
+          type="info"
+          effect="plain"
+          style="margin-left: 8px"
+        >
+          {{ taskTypeLabel(selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type) }}
+        </el-tag>
         <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small" style="margin-left: 8px">
           {{ formatOrderStatus(selectedOrderDetail.status) }}
         </el-tag>

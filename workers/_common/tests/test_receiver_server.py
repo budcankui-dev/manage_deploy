@@ -164,7 +164,7 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     assert body.index("本端接收信息") < body.index("结果预览")
     assert "原始测试视频" in body
     assert "/assets/bottle-detection.mp4" in body
-    assert "抽帧检测证据" in body
+    assert "抽样检测帧" in body
     assert "推理时延趋势" in body
     assert "帧 30" in body
     assert "帧 60" in body

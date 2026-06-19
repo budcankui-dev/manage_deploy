@@ -273,8 +273,8 @@ def _render_receiver_page(
     preview_gallery_html = (
         f"""
           <div class="inline-evidence">
-            <h3>抽帧检测证据</h3>
-            <div class="muted">下方展示本次任务抽样推理的多帧结果；鼠标悬停可查看帧序号、单帧时延和识别目标。</div>
+            <h3>抽样检测帧</h3>
+            <div class="muted">下方展示本次任务已处理视频帧中的代表性检测结果；鼠标悬停可查看帧序号、单帧时延和识别目标。</div>
             {_render_preview_frame_gallery(result)}
           </div>
         """
@@ -478,7 +478,7 @@ def _render_receiver_page(
     <section class="card hero">
       <div class="pill">目的端用户设备正在接收结果</div>
       <h1>{task_title}结果接收页</h1>
-      <div class="muted">本页面运行在目的端容器内，用固定端口接收 compute 节点推送的随路计算结果。固定端口可连续接收多个工单，请通过右侧工单列表切换查看历史结果。</div>
+      <div class="muted">本页面运行在目的端容器内，用固定端口接收 compute 节点推送的随路计算结果。固定端口可连续接收多个工单，并按工单 ID 区分展示。</div>
       <div class="grid">
         <div class="metric"><span>工单 ID</span><strong>{order_id}</strong></div>
         <div class="metric"><span>接收状态</span><strong>{status_text}</strong></div>
@@ -509,7 +509,7 @@ def _render_receiver_page(
       <aside>
         <section class="card">
           <h2>已接收工单</h2>
-          <div class="muted">同一固定端口可接收多个工单，点击切换查看。</div>
+          <div class="muted">同一固定端口可接收多个工单，点击工单 ID 可切换查看。</div>
           <div class="order-list">{stored_orders}</div>
         </section>
       </aside>
@@ -712,6 +712,8 @@ def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
         else:
             return '<div class="muted">暂无抽帧图片。任务运行中会逐步展示检测画框。</div>'
     cards = []
+    total_frames = result.get("measured_frames")
+    p90_latency = result.get("frame_latency_p90_ms")
     for item in frames[:8]:
         if not isinstance(item, dict):
             continue
@@ -723,10 +725,16 @@ def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
         label = escape(str(item.get("top_label_zh") or item.get("top_label") or "-"))
         confidence = item.get("confidence")
         confidence_text = f"，置信度 {float(confidence):.2f}" if isinstance(confidence, int | float) else ""
+        title_parts = [f"第 {frame_index} 帧", f"推理时延 {latency_ms}", f"识别目标 {label}"]
+        if isinstance(total_frames, int | float):
+            title_parts.append(f"本次有效推理 {int(total_frames)} 帧")
+        if isinstance(p90_latency, int | float):
+            title_parts.append(f"P90 {float(p90_latency):.2f} ms")
+        title = "；".join(title_parts)
         cards.append(
             f"""
             <div class="thumb-card">
-              <img class="thumb-image" src="{escape(data_url, quote=True)}" alt="帧 {frame_index} 检测画框" />
+              <img class="thumb-image" src="{escape(data_url, quote=True)}" alt="帧 {frame_index} 检测画框" title="{escape(title, quote=True)}" />
               <div class="thumb-meta">帧 {frame_index}<br />推理时延 {escape(latency_ms)}<br />目标 {label}{escape(confidence_text)}</div>
             </div>
             """

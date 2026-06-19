@@ -80,6 +80,7 @@ def main() -> int:
         "top_label_zh",
         "top_confidence",
         "detections",
+        "preview_frames",
         "samples",
     )
     result_meta = {key: result[key] for key in metadata_keys if key in result}

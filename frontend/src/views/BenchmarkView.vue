@@ -268,7 +268,7 @@
         <el-table-column label="工单" min-width="260" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="order-cell">
-              <strong>{{ row.name || shortId(row.id) }}</strong>
+              <strong>{{ taskTypeLabel(row.task_type) || currentTaskConfig.label }}</strong>
               <span>工单ID：{{ shortId(row.id) }}</span>
             </div>
           </template>
@@ -435,6 +435,7 @@ import {
   describeDataProfile,
   describeObjectiveMeaning,
   formatObjectiveSentence,
+  metricLabel,
   taskTypeSummary,
   videoDetectionBoxStyle,
   videoDetections,
@@ -516,7 +517,7 @@ const executionForm = reactive({
   per_compute_slot_limit: 1,
 })
 const settingsForm = reactive({
-  benchmark_routing_mode: 'external',
+  benchmark_routing_mode: 'internal_auto',
   expert_mode: true,
   show_internal_controls: false,
   show_routing_dag_json: false,
@@ -527,7 +528,7 @@ const settingsForm = reactive({
   },
 })
 
-const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'external')
+const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'internal_auto')
 const showInternalControls = computed(() => Boolean(settingsForm.show_internal_controls))
 const showRoutingDagJson = computed(() => Boolean(settingsForm.show_routing_dag_json))
 
@@ -551,10 +552,10 @@ const currentTaskConfig = computed(() =>
 
 const baselineHintText = computed(() => {
   if (taskType.value === 'low_latency_video_pipeline') {
-    return '波动提示基于多次基线样本的标准差计算；样本差异小显示稳定，差异大提示波动。若重测值与历史基线差距明显，应优先核对 GPU 推理后端、worker 镜像版本和同 GPU 并发占用情况。'
+    return '基线状态由多次测试样本计算得出：样本差异小显示稳定，差异明显显示波动大。若重测值与历史基线差距明显，优先核对 GPU 推理后端、镜像版本和同 GPU 并发占用情况。'
   }
   if (taskType.value === 'high_throughput_matmul') {
-    return '波动提示基于多次基线样本的标准差计算；样本差异小显示稳定，差异大提示波动。若重测值与历史基线差距明显，应优先核对 GPU 运行后端、worker 镜像版本和同 GPU 并发占用情况。'
+    return '基线状态由多次测试样本计算得出：样本差异小显示稳定，差异明显显示波动大。若重测值与历史基线差距明显，优先核对 GPU 运行后端、镜像版本和同 GPU 并发占用情况。'
   }
   return ''
 })
@@ -748,7 +749,7 @@ const detailOutputRows = computed(() => {
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulOutputRows(meta, evaluation)
   if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoOutputRows(meta, evaluation)
   if (evaluation) {
-    return [{ label: '上报指标', value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() }]
+    return [{ label: '上报指标', value: `${metricLabel(evaluation.metric_key)} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() }]
   }
   return [{ label: '状态', value: '尚未收到计算输出' }]
 })
@@ -1014,7 +1015,7 @@ async function loadSystemSettings() {
   settingsLoading.value = true
   try {
     const { data } = await adminApi.getSystemSettings()
-    settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'external'
+    settingsForm.benchmark_routing_mode = data?.benchmark_routing_mode || 'internal_auto'
     settingsForm.expert_mode = data?.expert_mode ?? true
     settingsForm.show_internal_controls = data?.show_internal_controls ?? false
     settingsForm.show_routing_dag_json = data?.show_routing_dag_json ?? false

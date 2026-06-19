@@ -232,9 +232,9 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
     defaults = default_response.json()
     assert defaults["environment_mode"] == "production"
     assert defaults["labels"]["environment_mode"] == "标准模式"
-    assert defaults["benchmark_routing_mode"] == "external"
+    assert defaults["benchmark_routing_mode"] == "internal_auto"
     assert defaults["expert_mode"] is True
-    assert defaults["labels"]["benchmark_routing_mode"] == "外部路由系统"
+    assert defaults["labels"]["benchmark_routing_mode"] == "自动路由"
     assert defaults["modality_priority_map"]["低时延转发模态"] == 1
     assert defaults["task_modality_override_enabled"] is False
     assert defaults["task_resource_override_enabled"] is False

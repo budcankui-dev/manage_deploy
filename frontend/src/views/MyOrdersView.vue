@@ -19,7 +19,7 @@
           :class="{ active: orderId(order) === selectedOrderId }"
           @click="selectOrder(order)"
         >
-          <div class="order-item-name">{{ order.name || shortId(orderId(order)) }}</div>
+          <div class="order-item-name">{{ taskTypeLabel(order.task_type) || '业务工单' }}</div>
           <div class="order-item-meta">
             <el-tag :type="statusTagType(order.status || order.order_status)" size="small">
               {{ formatStatus(order.status || order.order_status) }}
@@ -64,6 +64,7 @@ import { Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { businessApi, ordersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
+import { taskTypeLabel } from '@/constants/businessTaskDisplay'
 
 const orders = ref([])
 const selectedOrderId = ref('')

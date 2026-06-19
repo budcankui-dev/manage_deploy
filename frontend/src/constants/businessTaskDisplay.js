@@ -52,7 +52,7 @@ export const TASK_TYPE_SUMMARIES = {
 const METRIC_LABELS = {
   compute_latency_ms: '计算耗时',
   end_to_end_latency_ms: '端到端时延',
-  effective_gflops: '计算性能',
+  effective_gflops: '有效计算吞吐量',
   tokens_per_second: '生成速率',
   frame_latency_p90_ms: '帧推理时延 P90',
 }
@@ -87,6 +87,11 @@ export function modalityLabel(modality) {
 
 export function taskTypeSummary(taskType) {
   return TASK_TYPE_SUMMARIES[taskType] || '按业务目标指标验收任务是否达标。'
+}
+
+export function metricLabel(metricKey) {
+  if (!metricKey) return '-'
+  return METRIC_LABELS[metricKey] || metricKey
 }
 
 export function formatMetricValue(value, digits = 2) {
@@ -231,7 +236,7 @@ export function buildMatmulOutputRows(resultMetadata, evaluation) {
     const unit = evaluation.unit || 'ms'
     rows.push({
       label: '上报指标',
-      value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${unit}`,
+      value: `${metricLabel(evaluation.metric_key)} = ${Number(evaluation.actual_value).toFixed(2)} ${unit}`,
     })
   }
   if (!rows.length) {
@@ -348,7 +353,7 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
   if (evaluation) {
     rows.push({
       label: '上报指标',
-      value: `${evaluation.metric_key} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim(),
+      value: `${metricLabel(evaluation.metric_key)} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim(),
     })
   }
   if (!rows.length) rows.push({ label: '状态', value: '尚未收到视频推理输出' })

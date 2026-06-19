@@ -25,7 +25,7 @@
         <el-tab-pane label="业务" name="business">
           <el-descriptions :column="2" border class="detail-desc">
             <el-descriptions-item label="工单 ID"><code>{{ detail.id }}</code></el-descriptions-item>
-            <el-descriptions-item v-if="detail.external_task_id" label="外部任务 ID">{{ detail.external_task_id }}</el-descriptions-item>
+            <el-descriptions-item v-if="externalTaskIdForDisplay" label="外部任务 ID">{{ externalTaskIdForDisplay }}</el-descriptions-item>
             <el-descriptions-item label="任务类型">{{ taskTypeLabel(taskType) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="业务优先级">{{ businessPriorityText }}</el-descriptions-item>
@@ -296,6 +296,10 @@
             <div class="video-result-card">
               <div class="video-preview">
                 <template v-if="videoPreview">
+                  <div class="video-proof-summary">
+                    <strong>{{ activeVideoFrameSummary }}</strong>
+                    <span>{{ videoFrameGallerySummary }}</span>
+                  </div>
                   <div class="video-proof-frame">
                     <img :src="videoPreview" alt="视频推理分类画框结果" :title="activeVideoFrame?.title || ''" />
                     <div v-if="videoNeedsOverlay" class="video-proof-overlay">
@@ -435,6 +439,7 @@ import {
   describeObjectiveMeaning,
   describeRuntimePlan,
   formatObjectiveSentence,
+  metricLabel,
   modalityLabel,
   taskTypeLabel,
   taskTypeSummary,
@@ -654,6 +659,22 @@ const activeVideoFrame = computed(() => {
   return selected || frames[0]
 })
 const videoPreview = computed(() => activeVideoFrame.value?.data_url || videoPreviewDataUrl(resultMetadata.value))
+const activeVideoFrameSummary = computed(() => {
+  const frame = activeVideoFrame.value
+  if (!frame) return '等待视频推理结果'
+  const parts = [`当前展示第 ${frame.frame_index} 帧`]
+  if (frame.latency_ms != null) parts.push(`单帧推理 ${frame.latency_ms.toFixed(2)} ms`)
+  if (frame.label) parts.push(`识别目标：${frame.label}`)
+  return parts.join('，')
+})
+const videoFrameGallerySummary = computed(() => {
+  const meta = resultMetadata.value || {}
+  const measured = meta.measured_frames != null ? `本次有效推理 ${meta.measured_frames} 帧` : '本次有效推理帧数待上报'
+  const shown = videoPreviewFrames.value.length > 1
+    ? `下方展示 ${videoPreviewFrames.value.length} 张抽样检测帧`
+    : '当前展示 1 张代表性检测帧'
+  return `${measured}，${shown}；鼠标悬停缩略图可查看帧序号和时延。`
+})
 const videoDetectionRows = computed(() => videoDetections(resultMetadata.value))
 const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(resultMetadata.value))
 const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(resultMetadata.value))
@@ -682,6 +703,12 @@ const businessPriorityText = computed(() => {
     ?? routingResult.value?.priority
     ?? routingResult.value?.metadata?.priority
   return value === null || value === undefined || value === '' ? '-' : String(value)
+})
+const externalTaskIdForDisplay = computed(() => {
+  const value = detail.value?.external_task_id
+  if (value === null || value === undefined) return ''
+  const text = String(value).trim()
+  return text && text !== '-' ? text : ''
 })
 
 const selectedCompute = computed(() => routingDecision.value?.selected_compute || null)
@@ -778,7 +805,7 @@ function gpuDisplay(row) {
 
 function formatBaseline(value) {
   if (!value) return '-'
-  const metric = value.metric_key || 'baseline'
+  const metric = metricLabel(value.metric_key) || '基线'
   const formatted = value.baseline_value == null ? '-' : formatMetric(value.baseline_value)
   return `${metric}: ${formatted}${value.unit ? ` ${value.unit}` : ''}`
 }
@@ -1140,6 +1167,25 @@ function nodeStatusLabel(value) {
   border-radius: 12px;
   background: var(--bg-tertiary, #f8fafc);
   overflow: hidden;
+}
+
+.video-proof-summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
+  background: #ffffff;
+}
+
+.video-proof-summary strong {
+  color: #111827;
+  font-size: 14px;
+}
+
+.video-proof-summary span {
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .video-proof-frame {

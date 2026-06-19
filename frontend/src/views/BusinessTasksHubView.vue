@@ -261,7 +261,7 @@
 
     <!-- 内部调试：手动路由对话框 -->
     <el-dialog v-if="showInternalControls" v-model="manualRoutingVisible" title="手动分配路由" width="520px" destroy-on-close>
-      <p style="margin-bottom:12px">为任务 <strong>{{ manualRoutingOrder?.name || '未命名' }}</strong> 分配计算节点</p>
+      <p style="margin-bottom:12px">为任务 <strong>{{ taskTypeLabel(manualRoutingOrder?.task_type) || '业务工单' }}</strong> 分配计算节点</p>
       <el-form label-width="100px" size="small">
         <el-form-item label="数据源节点">
           <el-select v-model="manualPlacements.source.topology_node_id" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">

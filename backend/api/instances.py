@@ -1008,6 +1008,7 @@ _ALLOWED_METRIC_TAGS = frozenset([
     "frame_latency_max_ms", "measured_frames", "actual_backend", "detector_backend",
     "device", "gpu_requested", "gpu_available", "gpu_assigned", "gpu_error",
     "model_name", "video_asset", "detections", "annotated_frame_data_url",
+    "preview_frames",
 ])
 
 

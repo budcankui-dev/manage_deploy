@@ -674,6 +674,7 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
                 "top_label_zh",
                 "top_confidence",
                 "detections",
+                "preview_frames",
                 "samples",
             )
             if raw.get(key) is not None
