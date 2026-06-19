@@ -402,10 +402,10 @@
     </el-drawer>
 
     <aside class="intent-panel" v-show="!showOrders" :style="showOrders ? 'overflow: hidden; padding: 0;' : ''">
-      <el-card class="panel-card" :class="{ 'valid-border': draft?.parse_status === 'valid' }">
+      <el-card class="panel-card" :class="{ 'valid-border': effectiveParseStatus === 'valid' }">
         <template #header>
           意图参数
-          <el-tag v-if="draft" :type="parseStatusType(draft.parse_status)" size="small" style="margin-left:8px">{{ formatParseStatus(draft.parse_status) }}</el-tag>
+          <el-tag v-if="draft" :type="parseStatusType(effectiveParseStatus)" size="small" style="margin-left:8px">{{ formatParseStatus(effectiveParseStatus) }}</el-tag>
           <el-tag v-if="conversation?.materialized_order_id" type="success" size="small" style="margin-left:8px">已提交</el-tag>
         </template>
         <template v-if="draft">
@@ -564,6 +564,11 @@ const intentSummaryRows = computed(() => {
 })
 const effectiveDraftForValidation = computed(() => buildDraftWithEndpointForm(draft.value))
 const draftValidationErrors = computed(() => getDraftValidationErrors(effectiveDraftForValidation.value))
+const effectiveParseStatus = computed(() => {
+  if (!draft.value) return ''
+  if (draft.value.parse_status === 'rejected') return 'rejected'
+  return draftValidationErrors.value.length ? 'incomplete' : draft.value.parse_status
+})
 const destinationPort = computed(() => {
   const explicitPort = endpointForm.value.destination_port ?? draft.value?.runtime_plan?.destination_port
   if (explicitPort) return Number(explicitPort)
