@@ -141,7 +141,9 @@ def post_json_to_url(
         raise RuntimeError("No callback URL configured")
     import httpx
 
-    deadline = time.time() + max(1.0, float(timeout_sec))
+    timeout_sec = max(float(timeout_sec), _env_float("CALLBACK_RETRY_TIMEOUT_SEC", timeout_sec))
+    interval_sec = max(0.1, _env_float("CALLBACK_RETRY_INTERVAL_SEC", interval_sec))
+    deadline = time.time() + max(1.0, timeout_sec)
     last_error: Exception | None = None
     while time.time() < deadline:
         try:

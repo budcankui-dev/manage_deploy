@@ -613,6 +613,20 @@ async def test_confirm_intent_supports_route_only_mode(client, db_session, monke
     assert order.runtime_config["platform_deployment"]["deployable_roles"] == []
     assert all(node["deployable"] is False for node in order.routing_input_dag["nodes"])
 
+    route_response = await client.post(
+        f"/api/conversations/{conversation_id}/demo-route",
+        headers=headers,
+    )
+    assert route_response.status_code == 200
+    route_body = route_response.json()
+    assert route_body["status"] == "submitted"
+
+    await db_session.refresh(order)
+    assert order.status == OrderStatus.MATERIALIZED
+    assert order.materialized_instance_id
+    assert order.runtime_config["platform_deployment"]["mode"] == "user_access_demo"
+    assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["compute"]
+
 
 @pytest.mark.asyncio
 async def test_video_conversation_demo_route_materializes_same_order(client, db_session, monkeypatch):

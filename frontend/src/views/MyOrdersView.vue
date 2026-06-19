@@ -21,8 +21,8 @@
         >
           <div class="order-item-name">{{ taskTypeLabel(order.task_type) || '业务工单' }}</div>
           <div class="order-item-meta">
-            <el-tag :type="statusTagType(order.status || order.order_status)" size="small">
-              {{ formatStatus(order.status || order.order_status) }}
+            <el-tag :type="statusTagType(order.status || order.order_status, order)" size="small">
+              {{ formatStatus(order.status || order.order_status, order) }}
             </el-tag>
             <span class="order-item-time">{{ formatTime(order.created_at) }}</span>
           </div>
@@ -147,7 +147,8 @@ async function cancelOrder() {
   }
 }
 
-function formatStatus(status) {
+function formatStatus(status, order = null) {
+  if (isRouteOnlyWaitingOrder(order)) return '待启动'
   return {
     pending: '待分配',
     routing: '分配中',
@@ -162,7 +163,8 @@ function formatStatus(status) {
   }[status] || status || '-'
 }
 
-function statusTagType(status) {
+function statusTagType(status, order = null) {
+  if (isRouteOnlyWaitingOrder(order)) return 'warning'
   return {
     pending: 'info',
     routing: 'warning',
@@ -175,6 +177,14 @@ function statusTagType(status) {
     awaiting_routing: 'warning',
     orphaned: 'info',
   }[status] || 'info'
+}
+
+function isRouteOnlyWaitingOrder(order) {
+  const deployment = order?.runtime_config?.platform_deployment
+  return order?.status === 'pending'
+    && order?.routing_status === 'completed'
+    && deployment?.mode === 'route_only'
+    && order?.materialized_instance_id == null
 }
 
 function formatTime(value) {

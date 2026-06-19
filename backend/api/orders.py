@@ -1548,11 +1548,15 @@ async def _sync_conversation_after_order_routing(
 
     if conversation is not None:
         conversation.materialized_order_id = order.id
-        conversation.status = (
-            ConversationStatus.READY_TO_SUBMIT
-            if require_network_ready
-            else ConversationStatus.SUBMITTED
-        )
+        deployment_mode = _platform_deployment_mode(order)
+        if deployment_mode == "route_only" and order.materialized_instance_id is None:
+            conversation.status = ConversationStatus.AWAITING_ROUTING
+        else:
+            conversation.status = (
+                ConversationStatus.READY_TO_SUBMIT
+                if require_network_ready
+                else ConversationStatus.SUBMITTED
+            )
         conversation.updated_at = datetime.utcnow()
 
 
@@ -1777,9 +1781,11 @@ async def receive_routing_result(
         deployment_mode = _platform_deployment_mode(order)
         route_only = deployment_mode == "route_only"
         order.materialized_instance_id = None
-        order.status = OrderStatus.COMPLETED
+        order.status = OrderStatus.PENDING if route_only else OrderStatus.COMPLETED
         order.routing_status = RoutingStatus.COMPLETED.value
         rc["deployment_required"] = False
+        if route_only:
+            rc["manual_start_required"] = True
         if route_only:
             rc["deployment_mode"] = "route_only"
         rc["routing_result"] = {

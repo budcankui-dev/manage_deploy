@@ -1231,11 +1231,12 @@ async def test_route_only_with_compute_placement_does_not_materialize_instance(c
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["deployment_required"] is False
+    assert body["routing_status"] == RoutingStatus.COMPLETED.value
     assert body["instance_id"] is None
 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
     saved = row.scalar_one()
-    assert saved.status == OrderStatus.COMPLETED
+    assert saved.status == OrderStatus.PENDING
     assert saved.routing_status == RoutingStatus.COMPLETED.value
     assert saved.materialized_instance_id is None
     assert saved.runtime_config["deployment_required"] is False

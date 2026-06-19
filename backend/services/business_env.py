@@ -78,6 +78,17 @@ def _external_input_wait_timeout(platform_deployment: dict[str, Any]) -> str:
     return str(seconds)
 
 
+def _external_callback_retry_timeout(platform_deployment: dict[str, Any]) -> str:
+    value = platform_deployment.get("external_callback_retry_timeout_sec")
+    if value is None:
+        value = 1800
+    try:
+        seconds = max(60, int(value))
+    except (TypeError, ValueError):
+        seconds = 1800
+    return str(seconds)
+
+
 def build_business_env(
     *,
     order: TaskOrder | None = None,
@@ -143,6 +154,9 @@ def build_business_env(
         env["TASK_ROLE"] = str(task_role)
     if _is_compute_only_external_source(task_role, platform_deployment):
         env.setdefault("PEER_WAIT_TIMEOUT_SEC", _external_input_wait_timeout(platform_deployment))
+        if callback_url:
+            env.setdefault("CALLBACK_RETRY_TIMEOUT_SEC", _external_callback_retry_timeout(platform_deployment))
+            env.setdefault("CALLBACK_RETRY_INTERVAL_SEC", "2")
     if task_type in GPU_TASK_TYPES and normalized_role in {"compute", "worker", "infer", "train"}:
         env["USE_GPU"] = "true"
     return env

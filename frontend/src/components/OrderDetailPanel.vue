@@ -86,102 +86,9 @@
         </el-tab-pane>
 
         <el-tab-pane label="路由与节点" name="routing">
-          <div v-if="routingDecision" class="routing-decision-card">
-            <div class="decision-main">
-              <p class="eyebrow">路由决策摘要</p>
-              <h3>{{ selectedComputeTitle }}</h3>
-              <p>{{ routingDecision.selected_reason || '已根据当前策略返回节点分配结果。' }}</p>
-            </div>
-            <div class="decision-facts">
-              <div>
-                <span>策略</span>
-                <strong>{{ routingPolicyLabel(routingDecision.strategy || routingDecision.selected_strategy || detail.routing_policy) }}</strong>
-              </div>
-              <div>
-                <span>GPU</span>
-                <strong>{{ selectedComputeGpu }}</strong>
-              </div>
-              <div>
-                <span>基线能力</span>
-                <strong>{{ selectedComputeBaselineText }}</strong>
-              </div>
-              <div>
-                <span>业务链路</span>
-                <strong>{{ decisionPathText }}</strong>
-              </div>
-            </div>
-            <el-table v-if="decisionCandidateRows.length" :data="decisionCandidateRows" size="small" border class="decision-table">
-              <el-table-column label="候选节点" min-width="150">
-                <template #default="{ row }">{{ row.nodeName }}</template>
-              </el-table-column>
-              <el-table-column label="基线能力" min-width="150">
-                <template #default="{ row }">{{ row.baselineText }}</template>
-              </el-table-column>
-              <el-table-column label="评分/代价" min-width="180">
-                <template #default="{ row }">{{ row.scoreText }}</template>
-              </el-table-column>
-            </el-table>
-          </div>
-
-          <div v-if="nodeCapabilityProfile" class="capability-profile-card">
-            <div class="capability-profile-head">
-              <div>
-                <p class="eyebrow">节点能力画像</p>
-                <h3>{{ nodeCapabilityProfile.headline || '算力节点匹配结果' }}</h3>
-                <p>{{ nodeCapabilityProfile.description || '根据本系统历史业务测评数据展示算力节点能力。' }}</p>
-              </div>
-              <el-tag :type="capabilityDirectionTagType" effect="plain" size="large">
-                {{ capabilityDirectionText }}
-              </el-tag>
-            </div>
-            <div class="capability-facts">
-              <div>
-                <span>已分配计算节点</span>
-                <strong>{{ capabilitySelectedNodeText }}</strong>
-              </div>
-              <div>
-                <span>历史测评指标</span>
-                <strong>{{ nodeCapabilityProfile.metric_label || metricLabel(nodeCapabilityProfile.metric_key) }}</strong>
-              </div>
-              <div>
-                <span>当前节点基线</span>
-                <strong>{{ capabilitySelectedBaselineText }}</strong>
-              </div>
-              <div>
-                <span>候选节点排名</span>
-                <strong>{{ capabilitySelectedRankText }}</strong>
-              </div>
-            </div>
-            <el-table
-              v-if="capabilityCandidateRows.length"
-              :data="capabilityCandidateRows"
-              size="small"
-              border
-              class="capability-table"
-            >
-              <el-table-column prop="rankText" label="排名" width="90" />
-              <el-table-column prop="nodeName" label="算力节点" min-width="150" />
-              <el-table-column prop="baselineText" label="历史基线" min-width="170" />
-              <el-table-column prop="gpuText" label="GPU" min-width="160" />
-              <el-table-column label="匹配结果" width="130">
-                <template #default="{ row }">
-                  <el-tag v-if="row.selected" type="success" effect="dark" size="small">已选择</el-tag>
-                  <span v-else class="muted">候选</span>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-alert
-              v-else
-              type="info"
-              show-icon
-              :closable="false"
-              title="暂无可展示的节点基线数据，请先在业务测评页完成该任务的基线测试。"
-            />
-          </div>
-
-          <el-descriptions :column="2" border class="detail-desc">
+          <el-descriptions :column="2" border class="detail-desc routing-overview-desc">
             <el-descriptions-item label="分配状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
-            <el-descriptions-item label="任务策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
+            <el-descriptions-item label="任务策略">{{ strategyDisplay(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="网络确认">{{ networkReadyText }}</el-descriptions-item>
             <el-descriptions-item label="部署模式">{{ deploymentModeText || '-' }}</el-descriptions-item>
@@ -265,6 +172,95 @@
               <li v-for="(hint, index) in userAccessHints" :key="index">{{ hint }}</li>
             </ul>
           </el-alert>
+
+          <div v-if="routingDecision" class="routing-decision-card">
+            <div class="decision-main">
+              <p class="eyebrow">路由决策摘要</p>
+              <h3>{{ selectedComputeTitle }}</h3>
+              <p>{{ routingDecision.selected_reason || '已根据当前策略返回节点分配结果。' }}</p>
+            </div>
+            <div class="decision-facts">
+              <div>
+                <span>策略</span>
+                <strong>{{ strategyDisplay(routingDecision.strategy || routingDecision.selected_strategy || detail.routing_policy) }}</strong>
+              </div>
+              <div>
+                <span>GPU</span>
+                <strong>{{ selectedComputeGpu }}</strong>
+              </div>
+              <div>
+                <span>基线能力</span>
+                <strong>{{ selectedComputeBaselineText }}</strong>
+              </div>
+            </div>
+            <el-table v-if="decisionCandidateRows.length" :data="decisionCandidateRows" size="small" border class="decision-table">
+              <el-table-column label="候选节点" min-width="150">
+                <template #default="{ row }">{{ row.nodeName }}</template>
+              </el-table-column>
+              <el-table-column label="基线能力" min-width="150">
+                <template #default="{ row }">{{ row.baselineText }}</template>
+              </el-table-column>
+              <el-table-column label="评分/代价" min-width="180">
+                <template #default="{ row }">{{ row.scoreText }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div v-if="nodeCapabilityProfile" class="capability-profile-card">
+            <div class="capability-profile-head">
+              <div>
+                <p class="eyebrow">节点能力画像</p>
+                <h3>{{ nodeCapabilityProfile.headline || '算力节点匹配结果' }}</h3>
+                <p>{{ nodeCapabilityProfile.description || '根据本系统历史业务测评数据展示算力节点能力。' }}</p>
+              </div>
+              <el-tag :type="capabilityDirectionTagType" effect="plain" size="large">
+                {{ capabilityDirectionText }}
+              </el-tag>
+            </div>
+            <div class="capability-facts">
+              <div>
+                <span>已分配计算节点</span>
+                <strong>{{ capabilitySelectedNodeText }}</strong>
+              </div>
+              <div>
+                <span>历史测评指标</span>
+                <strong>{{ nodeCapabilityProfile.metric_label || metricLabel(nodeCapabilityProfile.metric_key) }}</strong>
+              </div>
+              <div>
+                <span>当前节点基线</span>
+                <strong>{{ capabilitySelectedBaselineText }}</strong>
+              </div>
+              <div>
+                <span>候选节点排名</span>
+                <strong>{{ capabilitySelectedRankText }}</strong>
+              </div>
+            </div>
+            <el-table
+              v-if="capabilityCandidateRows.length"
+              :data="capabilityCandidateRows"
+              size="small"
+              border
+              class="capability-table"
+            >
+              <el-table-column prop="rankText" label="排名" width="90" />
+              <el-table-column prop="nodeName" label="算力节点" min-width="150" />
+              <el-table-column prop="baselineText" label="历史基线" min-width="170" />
+              <el-table-column prop="gpuText" label="GPU" min-width="160" />
+              <el-table-column label="匹配结果" width="130">
+                <template #default="{ row }">
+                  <el-tag v-if="row.selected" type="success" effect="dark" size="small">已选择</el-tag>
+                  <span v-else class="muted">候选</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-alert
+              v-else
+              type="info"
+              show-icon
+              :closable="false"
+              title="暂无可展示的节点基线数据，请先在业务测评页完成该任务的基线测试。"
+            />
+          </div>
 
           <el-collapse v-if="showRoutingDagJson && (detail.routing_input_dag || routingResult)" class="raw-collapse">
             <el-collapse-item v-if="detail.routing_input_dag" title="提交给路由系统的 DAG JSON" name="routing-input">
@@ -745,13 +741,13 @@ const deploymentModeText = computed(() => {
   const mode = platformDeployment.value?.mode
   if (mode === 'automated_benchmark') return '可控测评部署'
   if (mode === 'user_access_demo') return '用户端外部接入'
-  if (mode === 'route_only') return '仅生成路由方案'
+  if (mode === 'route_only') return '方案已生成，待手动启动计算节点'
   if (detail.value?.is_benchmark) return '可控测评部署'
   return ''
 })
 const deployableRolesText = computed(() => {
   if (!deployableRoles.value) return '默认按路由角色部署'
-  if (!deployableRoles.value.length) return '不部署容器'
+  if (!deployableRoles.value.length) return '暂不启动平台容器'
   return deployableRoles.value.map(roleLabel).join(' / ')
 })
 const businessPriorityText = computed(() => {
@@ -780,10 +776,6 @@ const selectedComputeGpu = computed(() => {
   return hasGpuValue(gpu) ? `GPU ${gpu}` : '未指定'
 })
 const selectedComputeBaselineText = computed(() => formatBaseline(selectedCompute.value?.baseline))
-const decisionPathText = computed(() => {
-  const path = routingDecision.value?.path
-  return Array.isArray(path) && path.length ? path.join(' → ') : '-'
-})
 const decisionCandidateRows = computed(() => {
   const rows = routingDecision.value?.candidate_scores
   if (!Array.isArray(rows)) return []
@@ -906,6 +898,14 @@ function formatCandidateScore(row) {
   return parts.join(' / ') || '-'
 }
 
+function strategyDisplay(value) {
+  return {
+    platform_managed: '系统自动分配',
+    local_mock: '本地模拟路由',
+    external: '外部路由系统',
+  }[value] || routingPolicyLabel(value)
+}
+
 function videoBoxStyle(row) {
   return videoDetectionBoxStyle(row, resultMetadata.value)
 }
@@ -941,6 +941,7 @@ function formatTime(value) {
 }
 
 function orderStatusLabel(value) {
+  if (isRouteOnlyWaitingOrder(detail.value)) return '待启动'
   return {
     pending: '待分配',
     routing: '分配中',
@@ -955,6 +956,7 @@ function orderStatusLabel(value) {
 }
 
 function orderStatusType(value) {
+  if (isRouteOnlyWaitingOrder(detail.value)) return 'warning'
   return {
     pending: 'info',
     materialized: 'warning',
@@ -963,6 +965,14 @@ function orderStatusType(value) {
     failed: 'danger',
     cancelled: 'info',
   }[value] || 'info'
+}
+
+function isRouteOnlyWaitingOrder(order) {
+  const deployment = order?.runtime_config?.platform_deployment
+  return order?.status === 'pending'
+    && order?.routing_status === 'completed'
+    && deployment?.mode === 'route_only'
+    && order?.materialized_instance_id == null
 }
 
 function routingStatusLabel(value) {
@@ -1076,10 +1086,14 @@ function nodeStatusLabel(value) {
   margin-bottom: 8px;
 }
 
+.routing-overview-desc {
+  margin-bottom: 14px;
+}
+
 .routing-decision-card {
   display: grid;
   gap: 14px;
-  margin: 4px 0 16px;
+  margin: 16px 0;
   padding: 16px;
   border: 1px solid #bfdbfe;
   border-radius: 14px;
@@ -1491,12 +1505,27 @@ function nodeStatusLabel(value) {
 }
 
 .muted {
-  color: #64748b;
+  color: #475569;
 }
 
 .warning-text {
   color: var(--el-color-warning);
   font-weight: 700;
+}
+
+:deep(.el-table th.el-table__cell) {
+  color: #1f2937;
+  background: #f8fafc;
+  font-weight: 700;
+}
+
+:deep(.el-descriptions__label) {
+  color: #1f2937;
+  font-weight: 700;
+}
+
+:deep(.el-table .cell) {
+  color: #334155;
 }
 
 code {

@@ -753,7 +753,7 @@ async def confirm_intent(
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 
     if runtime_settings.get("benchmark_routing_mode") == "internal_auto":
-        await _apply_platform_managed_route(db, conversation, order)
+        await _apply_platform_managed_route(db, conversation, order, start_deployment=False)
 
     await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
@@ -809,7 +809,7 @@ async def demo_route_conversation(
     ).scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="工单不存在")
-    await _apply_platform_managed_route(db, conversation, order)
+    await _apply_platform_managed_route(db, conversation, order, start_deployment=True)
     await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
@@ -818,6 +818,8 @@ async def _apply_platform_managed_route(
     db: AsyncSession,
     conversation: Conversation,
     order: TaskOrder,
+    *,
+    start_deployment: bool = True,
 ) -> None:
     """Apply the built-in compute placement for user-access demo orders."""
     if order.materialized_instance_id:
@@ -845,6 +847,21 @@ async def _apply_platform_managed_route(
     compute_candidates = _prefer_gpu_nodes(preferred_compute or compute_nodes)
     # Import lazily to avoid coupling the conversation module to order router setup.
     from api.orders import receive_routing_result as receive_order_routing_result
+
+    runtime_config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    platform_deployment = runtime_config.get("platform_deployment") if isinstance(runtime_config.get("platform_deployment"), dict) else {}
+    if start_deployment and platform_deployment.get("mode") == "route_only":
+        platform_deployment = {
+            **platform_deployment,
+            "mode": "user_access_demo",
+            "deployable_roles": ["compute"],
+        }
+        runtime_config["platform_deployment"] = platform_deployment
+        runtime_config["manual_start_required"] = False
+        runtime_config["deployment_required"] = True
+        order.runtime_config = runtime_config
+        order.routing_status = RoutingStatus.PENDING.value
+        flag_modified(order, "runtime_config")
 
     last_conflict: HTTPException | None = None
     for compute_node in compute_candidates:

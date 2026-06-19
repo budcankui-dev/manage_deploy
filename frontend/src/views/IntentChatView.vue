@@ -288,7 +288,7 @@
                         </el-col>
                       </el-row>
                     </el-form>
-                    <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，不启动任务</el-checkbox>
+                    <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，暂不启动计算节点</el-checkbox>
                     <p class="submit-options-note">一般无需修改。源/目的端点可填节点别名、拓扑 ID 或业务面 IP；端口默认按任务类型固定。</p>
                   </div>
                 </el-collapse-item>
@@ -302,7 +302,7 @@
               <strong>任务已提交</strong>
               <p>{{ conversationStatusLabel }}</p>
             </div>
-            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">执行部署流程</el-button>
+            <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">启动计算节点</el-button>
             <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
@@ -418,7 +418,7 @@
           <div v-if="showClientCommands" class="client-command-panel">
             <div class="client-command-header">
               <strong>用户端启动步骤</strong>
-              <span>先在目的端启动接收程序，节点分配完成后再从源端提交输入。</span>
+              <span>目的端可稍后启动，计算节点会保留较长回调重试窗口；节点分配完成后再从源端提交输入。</span>
             </div>
             <ol class="client-step-list">
               <li>{{ destinationExecutionHint }} 启动接收程序，监听固定业务端口。</li>
@@ -928,6 +928,7 @@ const PARSE_STATUS_LABEL = {
 }
 
 function formatOrderStatus(status) {
+  if (isRouteOnlyWaitingOrder(selectedOrderDetail.value)) return '待启动'
   return ORDER_STATUS_LABEL[status] || status || '-'
 }
 
@@ -942,6 +943,7 @@ function combinedStatusType(row) {
 }
 
 function combinedStatusLabel(row) {
+  if (isRouteOnlyWaitingOrder(row)) return '待启动'
   if (row.status === 'materialized') return '已部署'
   if (row.status === 'completed') return '已完成'
   if (row.status === 'failed') return '失败'
@@ -949,6 +951,14 @@ function combinedStatusLabel(row) {
   if (row.routing_status === 'network_binding_ready') return '网络准备中'
   if (row.routing_status === 'computing') return '分配中'
   return '待分配'
+}
+
+function isRouteOnlyWaitingOrder(order) {
+  const deployment = order?.runtime_config?.platform_deployment
+  return order?.status === 'pending'
+    && order?.routing_status === 'completed'
+    && deployment?.mode === 'route_only'
+    && order?.materialized_instance_id == null
 }
 
 function formatTaskStatus(status) {
@@ -1263,7 +1273,7 @@ async function confirmIntent() {
     const autoRouted = data.status === 'submitted'
     ElMessage.success(
       routeOnly
-        ? '已提交，仅生成节点分配方案'
+        ? '已提交，节点分配方案生成后将等待手动启动'
         : autoRouted
           ? '任务已提交，系统已完成节点分配'
           : '任务已提交，系统将继续处理'
@@ -1272,7 +1282,7 @@ async function confirmIntent() {
       id: 'submit-success',
       role: 'assistant',
       content: routeOnly
-        ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，不会自动启动容器。`
+        ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，方案生成后状态为“待启动”，可手动启动计算节点。`
         : autoRouted
           ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统已完成节点分配并生成计算节点接入信息，您可以在“我的工单”查看详情。`
         : `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将等待节点分配并部署计算节点，您可以在“我的工单”查看进度。`,
@@ -1353,9 +1363,9 @@ async function demoRoute() {
     conversation.value = data
     await refreshList()
     if (showOrders.value) await loadOrders()
-    ElMessage.success('部署流程已执行')
+    ElMessage.success('计算节点已启动')
   } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '部署流程执行失败'))
+    ElMessage.error(extractErrorMessage(err, '启动计算节点失败'))
   } finally {
     isDemoRouting.value = false
   }
