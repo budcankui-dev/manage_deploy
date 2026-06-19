@@ -72,7 +72,7 @@ WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=d
 cd backend && WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev PYTHONPATH=. ./venv/bin/python scripts/rebuild_video_template.py
 ```
 
-前端入口：普通用户进入 `/intent-chat`，可输入矩阵乘法或视频AI推理自然语言需求；确认参数后生成统一工单 ID、展示 DAG JSON 和模态信息。外部路由系统未接入时，可在用户端使用“随机路由并部署”完成演示闭环。
+前端入口：普通用户进入 `/intent-chat`，可输入矩阵乘法或视频AI推理自然语言需求；确认参数后生成统一工单 ID，并在页面展示结构化解析结果、源/目的端点和任务参数。系统设置选择“系统自动分配”时使用本系统内置路由完成计算节点分配；选择“外部路由系统”时等待路由模块回写节点分配。路由 DAG JSON 属于管理员调试和路由对接信息，不作为普通用户功能验证的默认观察项。
 
 ## 常用测试
 
