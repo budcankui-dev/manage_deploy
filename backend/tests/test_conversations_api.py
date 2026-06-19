@@ -1,8 +1,11 @@
+from datetime import datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
 from config import settings
-from models import TaskInstanceNode, TaskOrder
+from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus
+from models import Node, TaskInstance, TaskInstanceNode, TaskOrder
 from tests.test_business_tasks_api import _auth_headers, _seed_business_fixture, _set_runtime_settings, _standard_placements
 
 
@@ -754,6 +757,97 @@ async def test_confirm_intent_auto_routes_when_internal_auto_enabled(client, db_
         )
     ).scalars().all()
     assert [node.env["TASK_ROLE"] for node in inst_nodes] == ["compute"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    headers, _user = await _auth_headers(client, db_session, username="auto-route-fallback-user")
+    node_ids, template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    worker_b = (
+        await db_session.execute(select(Node).where(Node.hostname == "worker-b"))
+    ).scalar_one()
+    worker_b.gpu_count = 1
+    extra_compute = Node(
+        hostname="worker-d",
+        agent_address="http://127.0.0.1:8004",
+        management_ip="10.0.0.4",
+        business_ip="10.0.1.4",
+        node_kind="worker",
+        is_schedulable=True,
+        is_routable=True,
+        gpu_count=1,
+    )
+    db_session.add(extra_compute)
+    await db_session.flush()
+
+    occupied_instance = TaskInstance(
+        template_id=template_id,
+        name="占用 worker-b gpu0 的历史工单",
+        status=TaskStatus.RUNNING,
+        deployment_mode=DeploymentMode.SCHEDULED,
+        scheduled_start_time=datetime.utcnow() - timedelta(days=1),
+        scheduled_end_time=datetime.utcnow() + timedelta(days=1),
+    )
+    db_session.add(occupied_instance)
+    await db_session.flush()
+    occupied_order = TaskOrder(
+        id="occupied-worker-b-gpu0",
+        template_id=template_id,
+        name="占用 worker-b gpu0 的历史工单",
+        source_name="worker-a",
+        destination_name="worker-c",
+        business_start_time=datetime.utcnow() - timedelta(days=1),
+        business_end_time=datetime.utcnow() + timedelta(days=1),
+        deployment_mode=DeploymentMode.SCHEDULED,
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        materialized_instance_id=occupied_instance.id,
+        runtime_config={
+            "routing_result": {
+                "placements": [
+                    {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                ],
+            },
+        },
+    )
+    db_session.add(occupied_order)
+    await db_session.flush()
+
+    create_response = await client.post("/api/conversations", json={"title": "自动分配避让"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+
+    assert confirm_response.status_code == 200, confirm_response.text
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    placements = order.runtime_config["routing_result"]["placements"]
+    assert placements == [{"task_node_id": "compute", "topology_node_id": "worker-d", "gpu_device": "0"}]
 
 
 @pytest.mark.asyncio

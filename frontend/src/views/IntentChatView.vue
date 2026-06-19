@@ -417,18 +417,26 @@
           </div>
           <div v-if="showClientCommands" class="client-command-panel">
             <div class="client-command-header">
-              <strong>用户端启动命令</strong>
-              <span>先在目的端启动接收程序，再在源端提交输入。</span>
+              <strong>用户端启动步骤</strong>
+              <span>先在目的端启动接收程序，节点分配完成后再从源端提交输入。</span>
             </div>
-            <div v-if="receiverCommand" class="command-block">
-              <div class="command-title">{{ destinationExecutionHint }} 先启动接收程序</div>
-              <pre>{{ receiverCommand }}</pre>
-            </div>
-            <div v-if="sourceCommand" class="command-block">
-              <div class="command-title">{{ sourceExecutionHint }} 在节点分配完成后提交输入</div>
-              <pre>{{ sourceCommand }}</pre>
-            </div>
-            <p class="command-note">同一台目的端的同类任务只需保留一个接收程序；接收器会按工单 ID 区分结果。</p>
+            <ol class="client-step-list">
+              <li>{{ destinationExecutionHint }} 启动接收程序，监听固定业务端口。</li>
+              <li>提交工单后查看“计算服务接入地址”，再由 {{ sourceExecutionHint }} 发起输入。</li>
+              <li>接收器会按工单 ID 区分结果，同类任务无需重复占用新端口。</li>
+            </ol>
+            <el-collapse class="advanced-command-collapse">
+              <el-collapse-item title="高级启动命令（演示人员使用）" name="commands">
+                <div v-if="receiverCommand" class="command-block">
+                  <div class="command-title">{{ destinationExecutionHint }} 先启动接收程序</div>
+                  <pre>{{ receiverCommand }}</pre>
+                </div>
+                <div v-if="sourceCommand" class="command-block">
+                  <div class="command-title">{{ sourceExecutionHint }} 在节点分配完成后提交输入</div>
+                  <pre>{{ sourceCommand }}</pre>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </div>
         </template>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
@@ -658,6 +666,30 @@ const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13'))
 const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
 
 watch(draft, syncEndpointFormFromDraft, { immediate: true })
+watch(orderDrawerVisible, (visible) => {
+  if (!visible) {
+    orderDetailLoading.value = false
+  }
+})
+
+function cleanupStaleElementOverlays() {
+  if (orderDrawerVisible.value) return
+  orderDetailLoading.value = false
+  document.querySelectorAll('.el-overlay, .el-loading-mask').forEach((element) => {
+    const text = element.textContent || ''
+    const hasDialog = element.querySelector('.el-drawer, .el-dialog, .el-message-box')
+    if (!hasDialog && !text.includes('加载中')) {
+      element.remove()
+    }
+  })
+  document.body.classList.remove('el-popup-parent--hidden')
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    cleanupStaleElementOverlays()
+  }
+}
 
 function buildDraftWithEndpointForm(currentDraft) {
   if (!currentDraft) return null
@@ -1345,6 +1377,7 @@ function logout() {
 }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   try {
     await loadSystemSettings()
     await loadAvailableNodes()
@@ -1374,7 +1407,10 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(stopRoutingPolling)
+onBeforeUnmount(() => {
+  stopRoutingPolling()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 </script>
 
 <style scoped>
@@ -2024,6 +2060,29 @@ onBeforeUnmount(stopRoutingPolling)
   color: #334155;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.client-step-list {
+  margin: 0 0 8px 18px;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.advanced-command-collapse {
+  --el-collapse-header-height: 34px;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.advanced-command-collapse :deep(.el-collapse-item__header) {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.advanced-command-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
 }
 
 .command-block {

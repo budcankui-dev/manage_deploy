@@ -67,7 +67,9 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const showAdminShell = computed(() => auth.isAuthenticated && auth.isAdmin && !route.meta.public)
+const showAdminShell = computed(() =>
+  auth.isAuthenticated && auth.isAdmin && !auth.needsTokenValidation && !route.meta.public
+)
 const adminMenuItems = [
   { path: '/business-tasks', label: '业务任务中心', icon: DataAnalysis },
   { path: '/benchmark', label: '业务测评', icon: TrendCharts },

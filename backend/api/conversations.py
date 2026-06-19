@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from api.auth import get_current_user
+from api.orders import RoutingPlacement, RoutingResultPayload
 from config import settings
 from database import async_session_maker, get_db
 from enums import ConversationStatus, DeploymentMode, MessageRole, OrderStatus, ParseStatus, RoutingRequestStatus, RoutingStatus
@@ -842,32 +843,44 @@ async def _apply_platform_managed_route(
     source_destination = {name for name in (order.source_name, order.destination_name) if name}
     preferred_compute = [node for node in compute_nodes if node.hostname not in source_destination]
     compute_candidates = _prefer_gpu_nodes(preferred_compute or compute_nodes)
-    compute_node = compute_candidates[0]
-
     # Import lazily to avoid coupling the conversation module to order router setup.
-    from api.orders import RoutingPlacement, RoutingResultPayload, receive_routing_result as receive_order_routing_result
+    from api.orders import receive_routing_result as receive_order_routing_result
 
-    await receive_order_routing_result(
-        order_id=order.id,
-        payload=RoutingResultPayload(
-            strategy="platform_managed",
-            selected_strategy="系统自动分配",
-            external_routing_id=f"platform-route-{conversation.id[:8]}",
-            placements=[
-                RoutingPlacement(
-                    task_node_id="compute",
-                    topology_node_id=compute_node.hostname,
-                    gpu_device="0",
-                )
-            ],
-            metadata={
-                "mode": "platform_managed_route",
-                "description": "平台按当前可调度节点完成一次部署流程。",
-            },
-            require_network_ready=False,
-        ),
-        db=db,
-    )
+    last_conflict: HTTPException | None = None
+    for compute_node in compute_candidates:
+        try:
+            await receive_order_routing_result(
+                order_id=order.id,
+                payload=RoutingResultPayload(
+                    strategy="platform_managed",
+                    selected_strategy="系统自动分配",
+                    external_routing_id=f"platform-route-{conversation.id[:8]}",
+                    placements=[
+                        RoutingPlacement(
+                            task_node_id="compute",
+                            topology_node_id=compute_node.hostname,
+                            gpu_device="0",
+                        )
+                    ],
+                    metadata={
+                        "mode": "platform_managed_route",
+                        "description": "平台按当前可调度节点完成一次部署流程。",
+                        "selected_compute": compute_node.hostname,
+                    },
+                    require_network_ready=False,
+                ),
+                db=db,
+            )
+            return
+        except HTTPException as exc:
+            if exc.status_code == 409 and "GPU slot conflict" in str(exc.detail):
+                last_conflict = exc
+                continue
+            raise
+
+    if last_conflict:
+        raise HTTPException(status_code=409, detail="所有可用计算节点的 GPU 均已被当前时间窗口内的任务占用，请释放旧任务后重试")
+    raise HTTPException(status_code=400, detail="没有可用计算节点，无法执行部署流程")
 
 
 @router.delete("/{conversation_id}", status_code=204)

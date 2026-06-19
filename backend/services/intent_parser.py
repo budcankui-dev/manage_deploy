@@ -16,6 +16,25 @@ from zoneinfo import ZoneInfo
 
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
 
+METRIC_LABELS = {
+    "effective_gflops": "有效计算吞吐量",
+    "frame_latency_p90_ms": "帧推理时延 P90",
+    "tokens_per_second": "文本生成速率",
+    "samples_per_second": "样本训练速率",
+    "data_throughput_mb_s": "数据吞吐量",
+    "connection_count": "连接数量",
+    "jitter_ms": "链路抖动",
+    "energy_per_frame_j": "单帧能耗",
+    "secure_throughput_mb_s": "安全传输吞吐量",
+    "service_success_rate": "业务成功率",
+}
+
+OPERATOR_LABELS = {
+    ">=": "不低于",
+    "<=": "不超过",
+    "==": "等于",
+}
+
 
 @dataclass
 class ParseResult:
@@ -451,7 +470,7 @@ def parse_intent(
     # 必填字段检查
     missing = []
     if not result.source_name:
-        missing.append("源节点名称（如：从 nodeA 到 nodeB）")
+        missing.append("源节点名称（例如：从 h1 到 h2）")
     if not result.destination_name:
         missing.append("目的节点名称")
     if not result.business_start_time:
@@ -498,12 +517,14 @@ def parse_intent(
         obj = result.business_objective
         op = obj.get("operator", ">=")
         target = obj.get("target_value")
-        target_text = f" {op} {target}{obj.get('unit', '')}" if target is not None else "按节点历史基线判定"
+        metric_name = METRIC_LABELS.get(obj.get("metric_key"), "业务指标")
+        operator_name = OPERATOR_LABELS.get(op, op)
+        target_text = f"{operator_name} {target}{obj.get('unit', '')}" if target is not None else "按节点历史基线判定"
         result.assistant_message = (
             f"已解析：任务类型 {task_name_for_task_type(result.task_type)}，"
             f"所属模态 {result.modality or '-'}，"
             f"从 {result.source_name} 到 {result.destination_name}，"
-            f"业务目标 {obj.get('metric_key')}{target_text}。"
+            f"业务目标 {metric_name}{target_text}。"
             "请确认或补充参数后请求路由。"
         )
 

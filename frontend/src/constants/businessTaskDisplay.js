@@ -42,11 +42,11 @@ export const MODALITY_LABELS = {
 
 export const TASK_TYPE_SUMMARIES = {
   high_throughput_matmul:
-    '在 source → compute → sink 三节点流水线中通过 HTTP 传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
+    '在数据源、计算节点、结果接收端之间传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
-    '在 source → compute → sink 链路上读取固定测试视频并按帧间隔抽样，使用 YOLOv5n 进行工业检测推理，以帧推理时延 P90 作为验收指标。',
+    '在数据源、计算节点、结果接收端之间传递视频帧，使用内置检测模型进行工业检测推理，以帧推理时延 P90 作为验收指标。',
   llm_text_generation:
-    '在 source → inference → sink 链路上完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
+    '完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
 
 const METRIC_LABELS = {
@@ -65,14 +65,14 @@ const OPERATOR_LABELS = {
 
 export const MATMUL_PIPELINE_STEPS = [
   { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
-  { role: 'compute', title: '执行计算', detail: '按路由分配的 CPU/GPU 后端执行 batched FP32 矩阵乘法，并通过 HTTP 发给 sink' },
-  { role: 'sink', title: '上报结果', detail: '接收计算结果，向 Manager 上报 effective_gflops 和采样元数据' },
+  { role: 'compute', title: '执行计算', detail: '按路由分配的计算节点执行批量 FP32 矩阵乘法，并回传结果' },
+  { role: 'sink', title: '上报结果', detail: '接收计算结果，向平台上报有效计算吞吐量和采样元数据' },
 ]
 
 export const VIDEO_PIPELINE_STEPS = [
   { role: 'source', title: '读取固定视频', detail: '使用验收镜像内置 bottle-detection.mp4，按 frame_stride 抽帧发送给 compute' },
   { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n-fp32.onnx，对抽样帧执行检测并生成分类画框预览图' },
-  { role: 'sink', title: '汇总时延与结果', detail: '上报 frame_latency_p90_ms、检测框、模型信息和带框图片，用于业务目标判定与演示' },
+  { role: 'sink', title: '汇总时延与结果', detail: '上报帧推理时延、检测框、模型信息和带框图片，用于业务目标判定与演示' },
 ]
 
 export function taskTypeLabel(taskType) {
@@ -134,12 +134,10 @@ export function describeDataProfile(taskType, profile) {
       { label: '矩阵规模', value: `${size} × ${size}` },
       { label: '批次数', value: String(batch) },
       { label: '随机种子', value: profile.seed },
-      { label: '画像 ID', value: profile.profile_id },
     ])
   }
   if (taskType === 'low_latency_video_pipeline') {
     return compactRows([
-      { label: '画像 ID', value: profile.profile_id },
       { label: '分辨率', value: profile.resolution || '-' },
       { label: '总帧数', value: String(profile.frame_count ?? '-') },
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
@@ -272,7 +270,7 @@ export function buildMatmulVerdict(evaluation) {
   if (!evaluation) {
     return {
       title: '等待计算完成',
-      subtitle: '启动实例并完成矩阵乘法后，sink 将上报 effective_gflops。',
+      subtitle: '启动实例并完成矩阵乘法后，结果接收端将上报有效计算吞吐量。',
       statusClass: 'pending',
     }
   }
