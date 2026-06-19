@@ -293,7 +293,7 @@ curl -sS -X POST http://127.0.0.1:9100/callback \
 curl -sS http://127.0.0.1:9100/latest | python3 -m json.tool
 ```
 
-期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID、节点别名、拓扑节点 ID、数据面 IPv6/IPv4、监听端口和指标值；视频回调如果包含 `annotated_frame_data_url` / `preview_frames` / `samples` / `detections`，首页会展示带框预览图、原始测试视频、抽帧检测证据、推理时延趋势和检测目标列表。同一固定端口接收多个工单时，页面右侧“已接收工单”列表可切换历史结果，也可用 `/?order_id=<order_id>` 直达指定工单。
+期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID、节点别名、拓扑节点 ID、数据面 IPv6/IPv4、监听端口和指标值；视频回调如果包含 `annotated_frame_data_url` / `preview_frames` / `samples` / `detections`，首页会展示带框预览图、原始测试视频、抽帧检测证据、推理时延趋势和检测目标列表。同一固定端口接收多个工单时，首页默认展示最近结果，页面顶部“切换已接收工单”下拉可切换历史结果；脚本排查使用 `/latest` 或 `/orders/{order_id}`。
 
 视频 compute-only 用户演示模式支持 `event_type=progress` 实时进度回调和 `event_type=final` 最终回调。receiver 页面可以用 progress 展示运行中增长的样本，但平台业务目标成功率、工单最终指标和验收结论只以 final 结果为准。
 

@@ -294,7 +294,7 @@
                 </el-collapse-item>
               </el-collapse>
             </div>
-            <el-button type="success" :loading="isConfirming" :disabled="isConfirming" @click="confirmIntent">确认提交任务</el-button>
+            <el-button type="success" :loading="isConfirming" :disabled="isConfirming || !canConfirm" @click="confirmIntent">确认提交任务</el-button>
           </div>
           <div v-else-if="conversation?.materialized_order_id" class="confirm-card-inner submitted">
             <el-icon class="confirm-icon" style="color:var(--el-color-success)"><SuccessFilled /></el-icon>
@@ -336,10 +336,10 @@
               </template>
               <div class="node-popover-body">
                 <strong>可用拓扑节点</strong>
-                <p>源节点和目的节点请使用这些别名，系统会按数据库中的拓扑节点校验。</p>
+                <p>源节点和目的节点请使用已登记的别名、拓扑节点 ID 或业务面 IP，系统会按数据库校验。</p>
                 <div class="node-popover-tags">
-                  <span>终端节点：h1-h13</span>
-                  <span>计算节点：compute-1、compute-2、compute-3</span>
+                  <span>终端节点：{{ terminalNodeHint }}</span>
+                  <span>计算节点：{{ computeNodeHint }}</span>
                 </div>
               </div>
             </el-popover>
@@ -457,7 +457,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete as DeleteIcon, Loading, VideoPause, Plus, Promotion, List, Refresh, CircleCheck, SuccessFilled, WarningFilled } from '@element-plus/icons-vue'
-import { adminApi, conversationApi, ordersApi, businessApi } from '@/api'
+import { adminApi, conversationApi, ordersApi, businessApi, nodesApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { handleAuthExpired } from '@/utils/authExpired'
 import { extractErrorMessage } from '@/utils/errorMessage'
@@ -493,6 +493,7 @@ const orderStatusFilter = ref('')
 const orderDetailTab = ref('business')
 const orderResultObjects = ref([])
 const showRoutingDagJson = ref(false)
+const availableNodes = ref([])
 const endpointForm = ref({
   source_endpoint_input: '',
   destination_endpoint_input: '',
@@ -537,9 +538,10 @@ const exampleChips = [
 
 const draft = computed(() => conversation.value?.latest_draft || null)
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
-const draftValidationErrors = computed(() => getDraftValidationErrors(draft.value))
+const effectiveDraftForValidation = computed(() => buildDraftWithEndpointForm(draft.value))
+const draftValidationErrors = computed(() => getDraftValidationErrors(effectiveDraftForValidation.value))
 const destinationPort = computed(() => {
-  const explicitPort = draft.value?.runtime_plan?.destination_port
+  const explicitPort = endpointForm.value.destination_port ?? draft.value?.runtime_plan?.destination_port
   if (explicitPort) return Number(explicitPort)
   return DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[draft.value?.task_type] || null
 })
@@ -574,8 +576,16 @@ const showClientCommands = computed(() =>
 )
 const receiverCommand = computed(() => {
   if (!showClientCommands.value || !endpointImage.value || !destinationPort.value) return ''
+  const destinationEndpoint = draft.value?.destination_endpoint || {}
+  const envLines = [
+    `  -e ENDPOINT_NODE_ALIAS=${draft.value?.destination_name || 'destination'} \\`,
+    `  -e ENDPOINT_TOPOLOGY_NODE_ID=${destinationEndpoint.topology_node_id || draft.value?.destination_name || 'destination'} \\`,
+  ]
+  if (destinationEndpoint.business_ip) envLines.push(`  -e ENDPOINT_BUSINESS_IP=${destinationEndpoint.business_ip} \\`)
+  if (destinationEndpoint.business_ipv6) envLines.push(`  -e ENDPOINT_BUSINESS_IPV6=${destinationEndpoint.business_ipv6} \\`)
   return [
     'docker run --rm --network host \\',
+    ...envLines,
     `  ${endpointImage.value} \\`,
     `  python /app/src/receiver_main.py --port ${destinationPort.value}`,
   ].join('\n')
@@ -584,8 +594,9 @@ const sourceCommand = computed(() => {
   if (!showClientCommands.value || !endpointImage.value) return ''
   const profile = JSON.stringify(draft.value.data_profile || {})
   const lines = [
+    '# 节点分配完成后，在工单详情中复制真实“计算服务接入地址”再启动源端',
     'docker run --rm --network host \\',
-    '  -e PEER_COMPUTE_URL=<工单详情中的计算服务地址> \\',
+    '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
     '  -e SOURCE_LISTEN=false \\',
   ]
   if (draft.value?.task_type === 'low_latency_video_pipeline') {
@@ -627,8 +638,31 @@ const canCancelOrder = computed(() => {
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
+const terminalNodeHint = computed(() => nodeHintByKinds(['terminal', 'both'], 'h1-h13'))
+const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
 
 watch(draft, syncEndpointFormFromDraft, { immediate: true })
+
+function buildDraftWithEndpointForm(currentDraft) {
+  if (!currentDraft) return null
+  const runtimePlan = {
+    ...(currentDraft.runtime_plan || {}),
+    source_endpoint_input: endpointForm.value.source_endpoint_input || currentDraft.source_name,
+    destination_endpoint_input: endpointForm.value.destination_endpoint_input || currentDraft.destination_name,
+    destination_port: endpointForm.value.destination_port,
+    route_only: Boolean(endpointForm.value.route_only),
+  }
+  if (endpointForm.value.callback_url_customized) {
+    runtimePlan.callback_url = endpointForm.value.callback_url?.trim() || ''
+  }
+  return {
+    ...currentDraft,
+    source_name: endpointForm.value.source_endpoint_input || currentDraft.source_name,
+    destination_name: endpointForm.value.destination_endpoint_input || currentDraft.destination_name,
+    callback_url: runtimePlan.callback_url ?? currentDraft.callback_url,
+    runtime_plan: runtimePlan,
+  }
+}
 
 function syncEndpointFormFromDraft(currentDraft) {
   const runtimePlan = currentDraft?.runtime_plan || {}
@@ -643,6 +677,21 @@ function syncEndpointFormFromDraft(currentDraft) {
     callback_url_customized: callbackCustomized,
     route_only: Boolean(runtimePlan.route_only),
   }
+}
+
+function nodeHintByKinds(kinds, fallback) {
+  const names = availableNodes.value
+    .filter(node => {
+      if (node.is_routable === false) return false
+      const kind = String(node.node_kind || '').toLowerCase()
+      return kinds.includes(kind)
+    })
+    .map(node => node.hostname || node.topology_node_id)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN', { numeric: true }))
+  if (!names.length) return fallback
+  if (names.length <= 8) return names.join('、')
+  return `${names.slice(0, 8).join('、')} 等 ${names.length} 个`
 }
 
 function formatTime(value) {
@@ -972,6 +1021,15 @@ async function loadSystemSettings() {
   }
 }
 
+async function loadAvailableNodes() {
+  try {
+    const { data } = await nodesApi.list()
+    availableNodes.value = Array.isArray(data) ? data : []
+  } catch {
+    availableNodes.value = []
+  }
+}
+
 watch(showOrders, (val) => {
   if (val) loadOrders()
 })
@@ -1144,11 +1202,14 @@ async function confirmIntent() {
     const { data } = await conversationApi.confirmIntent(conversation.value.id)
     conversation.value = data
     await refreshList()
-    ElMessage.success('任务已提交，系统将继续处理')
+    const routeOnly = isRouteOnlyDraft.value
+    ElMessage.success(routeOnly ? '已提交，仅生成节点分配方案' : '任务已提交，系统将继续处理')
     localMessages.value.push({
       id: 'submit-success',
       role: 'assistant',
-      content: `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将继续完成节点分配和部署准备，您可以在“我的工单”查看进度。`,
+      content: routeOnly
+        ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，不会自动启动容器。`
+        : `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将等待节点分配并部署计算节点，您可以在“我的工单”查看进度。`,
       created_at: new Date().toISOString(),
     })
     await scrollToBottom()
@@ -1257,6 +1318,7 @@ function logout() {
 onMounted(async () => {
   try {
     await loadSystemSettings()
+    await loadAvailableNodes()
     await refreshList()
     const lastId = getLastConversationId()
     const target = lastId && conversations.value.find(c => c.id === lastId)

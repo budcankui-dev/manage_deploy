@@ -831,6 +831,36 @@ async def start_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
     return {"message": "Instance started"}
 
 
+async def _start_instance_with_preflight(db: AsyncSession, instance_id: str) -> tuple[bool, str | None]:
+    """Start an existing instance using the same guardrails as the public API."""
+    result = await db.execute(
+        select(TaskInstance)
+        .options(selectinload(TaskInstance.nodes))
+        .where(TaskInstance.id == instance_id)
+    )
+    instance = result.scalar_one_or_none()
+    if not instance:
+        return False, "Instance not found"
+    if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+        return True, "Instance already running"
+    if instance.status not in (TaskStatus.PENDING, TaskStatus.SCHEDULED, TaskStatus.STOPPED, TaskStatus.FAILED):
+        return False, f"Cannot start instance in status: {instance.status}"
+    waiting_order = await instance_waiting_for_network_ready(db, instance_id)
+    if waiting_order:
+        return False, f"工单 {waiting_order.id} 等待外部路由系统确认 network-ready"
+    preflight = await _preflight_instance_plan(
+        db,
+        await _build_preflight_plan_from_instance(instance),
+        exclude_instance_id=instance_id,
+        instance_id_for_events=instance_id,
+    )
+    if not preflight.ok:
+        messages = "; ".join(issue.message for issue in preflight.conflicts)
+        return False, f"启动前预检查失败: {messages}"
+    executor = DAGExecutor(db)
+    return await executor.execute_dag_start(instance_id)
+
+
 @router.post("/{instance_id}/stop")
 async def stop_instance(instance_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(TaskInstance).where(TaskInstance.id == instance_id))
@@ -870,14 +900,7 @@ async def batch_start_instances(request: BatchOperationRequest, db: AsyncSession
     failed: dict[str, str] = {}
     for instance_id in request.instance_ids:
         try:
-            waiting_order = await instance_waiting_for_network_ready(db, instance_id)
-            if waiting_order:
-                failed[instance_id] = (
-                    f"工单 {waiting_order.id} 等待外部路由系统确认 network-ready"
-                )
-                continue
-            executor = DAGExecutor(db)
-            success, error = await executor.execute_dag_start(instance_id)
+            success, error = await _start_instance_with_preflight(db, instance_id)
             if success:
                 succeeded.append(instance_id)
             else:

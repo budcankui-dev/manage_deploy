@@ -77,7 +77,7 @@ from services.system_settings import (
 )
 from services.time_utils import business_now
 
-from .instances import _create_instance_from_template
+from .instances import _build_preflight_plan_from_instance, _create_instance_from_template, _preflight_instance_plan
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -294,11 +294,11 @@ def _merged_benchmark_profile(task_type: str, data_profile: dict | None) -> dict
 def _default_compute_gpu_for_order(order: TaskOrder) -> str | None:
     task_type = _benchmark_task_type(order)
     if not task_type:
-        return None
+        return "0"
     try:
-        return _benchmark_config(task_type).get("default_compute_gpu")
+        return _benchmark_config(task_type).get("default_compute_gpu") or "0"
     except HTTPException:
-        return None
+        return "0"
 
 
 def _benchmark_routing_result(order: TaskOrder) -> dict:
@@ -1371,11 +1371,11 @@ def _normalize_effective_placement_resources(
 ) -> list[RoutingPlacement]:
     """Persist the resources the platform will actually allocate.
 
-    Benchmark tasks default to one GPU per compute role when the router omits a
-    GPU id.  Normalizing before conflict checks keeps routing_result, conflict
-    detection, and release events consistent.
+    Compute roles default to GPU 0 when the router omits a GPU id.  Normalizing
+    before conflict checks keeps routing_result, UI display, and release events
+    consistent with the acceptance rule: one task occupies one GPU by default.
     """
-    default_gpu = _default_compute_gpu_for_order(order) if order.is_benchmark else None
+    default_gpu = _default_compute_gpu_for_order(order)
     if default_gpu is None:
         return placements
 
@@ -1390,12 +1390,21 @@ def _normalize_effective_placement_resources(
 
 
 async def _resolve_topology_node(db: AsyncSession, raw: str) -> NodeModel:
-    result = await db.execute(select(NodeModel).where(NodeModel.hostname == raw))
+    result = await db.execute(
+        select(NodeModel).where(
+            NodeModel.deleted_at.is_(None),
+            (
+                (NodeModel.id == raw)
+                | (NodeModel.hostname == raw)
+                | (NodeModel.topology_node_id == raw)
+            ),
+        )
+    )
     node = result.scalar_one_or_none()
     if node:
         return node
 
-    raise HTTPException(status_code=422, detail=f"Node hostname not found: {raw}")
+    raise HTTPException(status_code=422, detail=f"Node not found by alias/topology id: {raw}")
 
 
 async def _validate_deployable_placements(
@@ -2102,6 +2111,16 @@ async def start_all_routed_benchmark_orders(
             continue
 
         try:
+            preflight = await _preflight_instance_plan(
+                db,
+                await _build_preflight_plan_from_instance(instance),
+                exclude_instance_id=instance_id,
+                instance_id_for_events=instance_id,
+            )
+            if not preflight.ok:
+                messages = "; ".join(issue.message for issue in preflight.conflicts)
+                failed[order.id] = f"启动前预检查失败: {messages}"
+                continue
             executor = DAGExecutor(db)
             success, error = await executor.execute_dag_start(instance_id)
             if success:
@@ -2351,6 +2370,16 @@ async def start_controlled_routed_benchmark_orders(
             continue
 
         try:
+            preflight = await _preflight_instance_plan(
+                db,
+                await _build_preflight_plan_from_instance(instance),
+                exclude_instance_id=instance_id,
+                instance_id_for_events=instance_id,
+            )
+            if not preflight.ok:
+                messages = "; ".join(issue.message for issue in preflight.conflicts)
+                failed[order.id] = f"启动前预检查失败: {messages}"
+                continue
             success, error = await executor.execute_dag_start(instance_id)
             if success:
                 started.append(instance_id)
