@@ -64,13 +64,13 @@ const OPERATOR_LABELS = {
 }
 
 export const MATMUL_PIPELINE_STEPS = [
-  { role: 'source', title: '准备输入', detail: '根据 data_profile 生成矩阵乘法任务并通过 HTTP 发给 compute' },
+  { role: 'source', title: '准备输入', detail: '根据页面展示的业务参数生成矩阵乘法任务，并发送给计算节点' },
   { role: 'compute', title: '执行计算', detail: '按路由分配的计算节点执行批量 FP32 矩阵乘法，并回传结果' },
   { role: 'sink', title: '上报结果', detail: '接收计算结果，向平台上报有效计算吞吐量和采样元数据' },
 ]
 
 export const VIDEO_PIPELINE_STEPS = [
-  { role: 'source', title: '读取固定视频', detail: '使用验收镜像内置 bottle-detection.mp4，按 frame_stride 抽帧发送给 compute' },
+  { role: 'source', title: '读取固定视频', detail: '使用验收镜像内置测试视频，按抽帧间隔发送给计算节点' },
   { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n-fp32.onnx，对抽样帧执行检测并生成分类画框预览图' },
   { role: 'sink', title: '汇总时延与结果', detail: '上报帧推理时延、检测框、模型信息和带框图片，用于业务目标判定与演示' },
 ]
@@ -261,8 +261,8 @@ export function buildMatmulParamConsistency(dataProfile, resultMetadata) {
     ok,
     label: ok ? '输入与运行规模一致' : '输入与运行规模不一致',
     detail: ok
-      ? '提交的 data_profile 与 compute 实际执行的规模一致。'
-      : '请检查 source/compute 是否使用了不同的 job 参数。',
+      ? '提交的业务参数与计算节点实际执行的规模一致。'
+      : '请检查业务输入与计算节点实际运行参数是否一致。',
   }
 }
 

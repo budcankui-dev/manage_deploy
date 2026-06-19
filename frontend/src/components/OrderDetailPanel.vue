@@ -334,7 +334,7 @@
           <p class="task-summary">{{ taskSummary }}</p>
           <ol class="pipeline-steps">
             <li v-for="step in pipelineSteps" :key="step.role">
-              <strong>{{ step.role }}</strong> — {{ step.title }}：{{ step.detail }}
+              <strong>{{ roleLabel(step.role) }}</strong> — {{ step.title }}：{{ step.detail }}
             </li>
           </ol>
 
@@ -461,7 +461,7 @@
             <p>{{ verdict.subtitle }}</p>
           </div>
 
-          <el-collapse v-if="evaluation?.result_metadata || resultObjects.length" class="raw-collapse">
+          <el-collapse v-if="showRoutingDagJson && (evaluation?.result_metadata || resultObjects.length)" class="raw-collapse">
             <el-collapse-item v-if="evaluation?.result_metadata" title="指标采集结果 JSON" name="result-metadata">
               <pre class="json-block">{{ prettyJson(evaluation.result_metadata) }}</pre>
             </el-collapse-item>
@@ -567,15 +567,15 @@ const userAccessHints = computed(() => {
   networkBindingRows.value.forEach((row) => {
     if (row.from === 'source' && row.to === 'compute' && row.src_external && row.dst_access_url) {
       const base = String(row.dst_access_url).replace(/\/$/, '')
-      hints.push(`向 compute 提交业务输入：POST ${base}/data（JSON 任务参数，矩阵乘法含 matrix_size / batch_count / seed）`)
-      hints.push(`查询 compute 本地结果：GET ${base}/result（任务完成后返回 JSON）`)
+      hints.push(`源端向计算服务提交业务输入：${base}/data（按任务参数提交）`)
+      hints.push(`任务完成后可查看计算服务结果：${base}/result`)
     }
     if (row.dst_external && row.dst_callback_url) {
-      hints.push(`compute 业务完成后可回调外部目的端：POST ${row.dst_callback_url}`)
+      hints.push(`业务完成后会把结果回调到目的端：${row.dst_callback_url}`)
     }
   })
   if (isComputeOnlyDeployment.value) {
-    hints.push('compute-only 模式下由 compute 直接向平台上报业务指标，无需部署 sink 容器。')
+    hints.push('用户接入模式下，平台只部署计算节点，源端和目的端由用户侧程序接入。')
   }
   return [...new Set(hints)]
 })
@@ -587,19 +587,19 @@ const pipelineSteps = computed(() => {
   if (isComputeOnlyDeployment.value) {
     if (isMatmulTask.value) {
       return [
-        { role: 'source', title: '外部提交输入', detail: '用户终端按 network_bindings 中的接入地址 POST /data 提交矩阵任务' },
-        { role: 'compute', title: '执行并上报', detail: 'compute 完成观测窗口后直接上报 effective_gflops，可通过 GET /result 查询结果' },
+        { role: 'source', title: '外部提交输入', detail: '用户终端按工单详情中的计算服务接入地址提交矩阵任务' },
+        { role: 'compute', title: '执行并上报', detail: '计算节点完成观测窗口后直接上报有效计算吞吐量，可在结果页查看' },
       ]
     }
     if (isVideoTask.value) {
       return [
-        { role: 'source', title: '外部提交输入', detail: '用户终端向 compute 接入地址 POST /data 提交视频抽帧任务' },
-        { role: 'compute', title: '推理并上报', detail: 'compute 执行 YOLO 检测后直接上报 frame_latency_p90_ms 等指标' },
+        { role: 'source', title: '外部提交输入', detail: '用户终端向计算服务接入地址提交视频抽帧任务' },
+        { role: 'compute', title: '推理并上报', detail: '计算节点执行目标检测后直接上报帧推理时延等指标' },
       ]
     }
     return [
-      { role: 'source', title: '外部提交输入', detail: '用户终端向 compute 接入地址 POST /data' },
-      { role: 'compute', title: '执行并上报', detail: 'compute 完成后直接上报业务指标' },
+      { role: 'source', title: '外部提交输入', detail: '用户终端向计算服务接入地址提交任务输入' },
+      { role: 'compute', title: '执行并上报', detail: '计算节点完成后直接上报业务指标' },
     ]
   }
   if (isMatmulTask.value) return MATMUL_PIPELINE_STEPS
