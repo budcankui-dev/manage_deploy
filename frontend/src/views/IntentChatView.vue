@@ -349,9 +349,15 @@
               <el-icon><VideoPause /></el-icon>
               停止
             </el-button>
-            <el-button v-else type="primary" :loading="loading" :disabled="isStreaming" @click="sendMessage">
+            <el-button
+              v-else
+              type="primary"
+              :loading="loading"
+              :disabled="isStreaming || conversationInputLocked"
+              @click="sendMessage"
+            >
               <el-icon><Promotion /></el-icon>
-              发送
+              {{ conversationInputLocked ? '请新建对话' : '发送' }}
             </el-button>
           </div>
         </div>
@@ -1074,6 +1080,10 @@ function useChip(text) {
 }
 
 async function sendMessage() {
+  if (conversationInputLocked.value) {
+    ElMessage.warning('当前对话已生成工单，请新建对话继续提交新任务')
+    return
+  }
   if (!utterance.value.trim() || loading.value || isStreaming.value) return
   loading.value = true
   const text = utterance.value.trim()
@@ -1213,12 +1223,21 @@ async function confirmIntent() {
     conversation.value = data
     await refreshList()
     const routeOnly = isRouteOnlyDraft.value
-    ElMessage.success(routeOnly ? '已提交，仅生成节点分配方案' : '任务已提交，系统将继续处理')
+    const autoRouted = data.status === 'submitted'
+    ElMessage.success(
+      routeOnly
+        ? '已提交，仅生成节点分配方案'
+        : autoRouted
+          ? '任务已提交，系统已完成节点分配'
+          : '任务已提交，系统将继续处理'
+    )
     localMessages.value.push({
       id: 'submit-success',
       role: 'assistant',
       content: routeOnly
         ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，不会自动启动容器。`
+        : autoRouted
+          ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统已完成节点分配并生成计算节点接入信息，您可以在“我的工单”查看详情。`
         : `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将等待节点分配并部署计算节点，您可以在“我的工单”查看进度。`,
       created_at: new Date().toISOString(),
     })

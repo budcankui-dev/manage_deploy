@@ -3,12 +3,13 @@ from sqlalchemy import select
 
 from config import settings
 from models import TaskInstanceNode, TaskOrder
-from tests.test_business_tasks_api import _auth_headers, _seed_business_fixture, _standard_placements
+from tests.test_business_tasks_api import _auth_headers, _seed_business_fixture, _set_runtime_settings, _standard_placements
 
 
 @pytest.mark.asyncio
 async def test_conversation_parse_confirm_route_and_submit(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session)
     _node_ids, _template_id = await _seed_business_fixture(client)
     catalog_response = await client.post(
@@ -586,6 +587,7 @@ async def test_confirm_intent_supports_route_only_mode(client, db_session, monke
 @pytest.mark.asyncio
 async def test_video_conversation_demo_route_materializes_same_order(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session)
     _node_ids, _template_id = await _seed_business_fixture(client)
     terminal_response = await client.post(
@@ -673,8 +675,64 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
 
 
 @pytest.mark.asyncio
+async def test_confirm_intent_auto_routes_when_internal_auto_enabled(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    headers, _user = await _auth_headers(client, db_session, username="auto-route-conversation-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": _template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post("/api/conversations", json={"title": "自动分配矩阵任务"}, headers=headers)
+    conversation_id = create_response.json()["id"]
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+    assert message_response.status_code == 200
+
+    confirm_response = await client.post(
+        f"/api/conversations/{conversation_id}/confirm-intent",
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+    body = confirm_response.json()
+    assert body["status"] == "submitted"
+    assert body["materialized_order_id"] == conversation_id
+    assert body["latest_routing_request"]["status"] == "completed"
+
+    order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
+    ).scalar_one()
+    assert order.status == "materialized"
+    assert order.routing_status == "completed"
+    assert order.materialized_instance_id
+    placements = order.runtime_config["routing_result"]["placements"]
+    assert placements == [{"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}]
+
+    inst_nodes = (
+        await db_session.execute(
+            select(TaskInstanceNode).where(TaskInstanceNode.instance_id == order.materialized_instance_id)
+        )
+    ).scalars().all()
+    assert [node.env["TASK_ROLE"] for node in inst_nodes] == ["compute"]
+
+
+@pytest.mark.asyncio
 async def test_routing_result_requiring_network_ready_keeps_conversation_pending(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="network-ready-user")
     _node_ids, _template_id = await _seed_business_fixture(client)
     catalog_response = await client.post(
@@ -725,6 +783,7 @@ async def test_routing_result_requiring_network_ready_keeps_conversation_pending
 @pytest.mark.asyncio
 async def test_submit_after_network_ready_reuses_compute_only_order(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="submit-compute-only-user")
     _node_ids, _template_id = await _seed_business_fixture(client)
     catalog_response = await client.post(
@@ -789,6 +848,7 @@ async def test_submit_after_network_ready_reuses_compute_only_order(client, db_s
 @pytest.mark.asyncio
 async def test_submit_after_network_ready_ignores_non_deployable_endpoint_placements(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="submit-extra-placements-user")
     _node_ids, _template_id = await _seed_business_fixture(client)
     catalog_response = await client.post(

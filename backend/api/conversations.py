@@ -751,6 +751,10 @@ async def confirm_intent(
     conversation.status = ConversationStatus.AWAITING_ROUTING
     conversation.materialized_order_id = order.id
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+
+    if runtime_settings.get("benchmark_routing_mode") == "internal_auto":
+        await _apply_platform_managed_route(db, conversation, order)
+
     await db.commit()
     return await _get_conversation_detail(db, conversation.id, current_user.id)
 
@@ -805,11 +809,21 @@ async def demo_route_conversation(
     ).scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="工单不存在")
+    await _apply_platform_managed_route(db, conversation, order)
+    await db.commit()
+    return await _get_conversation_detail(db, conversation.id, current_user.id)
+
+
+async def _apply_platform_managed_route(
+    db: AsyncSession,
+    conversation: Conversation,
+    order: TaskOrder,
+) -> None:
+    """Apply the built-in compute placement for user-access demo orders."""
     if order.materialized_instance_id:
         conversation.status = ConversationStatus.SUBMITTED
         conversation.updated_at = datetime.utcnow()
-        await db.commit()
-        return await _get_conversation_detail(db, conversation.id, current_user.id)
+        return
 
     nodes = (
         await db.execute(
@@ -855,7 +869,6 @@ async def demo_route_conversation(
         ),
         db=db,
     )
-    return await _get_conversation_detail(db, conversation.id, current_user.id)
 
 
 @router.delete("/{conversation_id}", status_code=204)
