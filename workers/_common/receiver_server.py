@@ -244,43 +244,23 @@ def _render_receiver_page(
     selected_order_id: str | None = None,
 ) -> str:
     config = config or ReceiverConfig(task_type=task_type, port=9000)
+    records = _records_for_page(summary)
     latest = _select_record(summary, selected_order_id)
+    selected_id = str(latest.get("order_id") or "")
     payload = latest.get("payload") if isinstance(latest, dict) else {}
     payload = payload if isinstance(payload, dict) else {}
     result = payload.get("result") if isinstance(payload, dict) else {}
     result = result if isinstance(result, dict) else {}
     order_id = escape(str(latest.get("order_id") or payload.get("order_id") or "暂无结果"))
     metric_key = escape(str(payload.get("metric_key") or "-"))
-    metric_value = result.get(payload.get("metric_key", ""))
-    if metric_value is None and payload.get("metric_key") == "effective_gflops":
-        metric_value = result.get("effective_gflops")
-    if metric_value is None and payload.get("metric_key") == "frame_latency_p90_ms":
-        metric_value = result.get("frame_latency_p90_ms")
-    preview_url = result.get("annotated_frame_data_url")
-    raw_json = escape(json.dumps(payload or {}, ensure_ascii=False, indent=2))
-    top_label_zh = escape(str(result.get("top_label_zh") or result.get("top_label") or "-"))
+    metric_value = _metric_value(payload, result)
     received_at = escape(str(latest.get("received_at") or "-"))
     status_text = "已完成" if latest.get("status") == "completed" else "运行中"
-    stored_orders = _render_order_list(summary.get("stored_orders", []), selected_order_id or latest.get("order_id"))
-    image_html = ""
-    if isinstance(preview_url, str) and _is_safe_raster_data_url(preview_url):
-        image_html = f'<img class="preview" src="{escape(preview_url, quote=True)}" alt="视频推理画框预览" />'
     task_title = _task_title(task_type)
-    result_cards = _render_result_cards(task_type, result, payload.get("metric_key"))
     callback_url = _callback_url(config)
     receiver_info = _render_receiver_info(config, callback_url, order_id)
-    evidence_html = _render_video_evidence(task_type, result)
-    preview_gallery_html = (
-        f"""
-          <div class="inline-evidence">
-            <h3>抽样检测帧</h3>
-            <div class="muted">下方展示本次任务已处理视频帧中的代表性检测结果；鼠标悬停可查看帧序号、单帧时延和识别目标。</div>
-            {_render_preview_frame_gallery(result)}
-          </div>
-        """
-        if task_type == "low_latency_video_pipeline"
-        else ""
-    )
+    order_switcher = _render_order_switcher(records, selected_id)
+    panels = "".join(_render_order_panel(task_type, record, selected_id) for record in records)
     auto_refresh = "" if latest.get("status") == "completed" else '<meta http-equiv="refresh" content="2" />'
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -309,11 +289,7 @@ def _render_receiver_page(
         linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
       color: var(--ink);
     }}
-    main {{
-      max-width: 1120px;
-      margin: 32px auto;
-      padding: 0 20px 40px;
-    }}
+    main {{ max-width: 1160px; margin: 32px auto; padding: 0 20px 40px; }}
     .card {{
       background: var(--card);
       border: 1px solid var(--line);
@@ -322,163 +298,55 @@ def _render_receiver_page(
       padding: 24px;
       margin-bottom: 18px;
     }}
-    .hero {{
-      background: linear-gradient(135deg, #ffffff 0%, #eef6ff 100%);
-      border-color: #c9daf4;
-    }}
+    .hero {{ background: linear-gradient(135deg, #ffffff 0%, #eef6ff 100%); border-color: #c9daf4; }}
+    .hero-head {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 18px; align-items: end; }}
     h1 {{ margin: 0 0 10px; font-size: 30px; letter-spacing: -0.02em; }}
     h2 {{ margin: 0 0 14px; font-size: 21px; }}
-    .muted {{ color: var(--subtle); line-height: 1.7; }}
     h3 {{ margin: 18px 0 8px; font-size: 17px; }}
-    .pill {{
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 12px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: var(--green-soft);
-      color: var(--green);
-      font-weight: 700;
-      font-size: 13px;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-      gap: 12px;
-      margin-top: 18px;
-    }}
-    .metric {{
-      border-radius: 12px;
-      background: var(--blue-soft);
-      padding: 14px;
-      min-width: 0;
-    }}
-    .metric span {{ display: block; color: var(--subtle); font-size: 13px; }}
-    .metric strong {{
-      display: block;
-      font-size: 18px;
-      margin-top: 6px;
-      overflow-wrap: anywhere;
-    }}
-    .layout {{
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.6fr);
-      gap: 18px;
-      align-items: start;
-    }}
-    .preview {{
-      width: 100%;
-      max-height: 520px;
-      object-fit: contain;
-      border-radius: 12px;
-      background: #0f172a;
-    }}
-    .video-player {{
-      width: 100%;
-      max-height: 360px;
-      border-radius: 12px;
-      background: #0f172a;
-    }}
-    .thumb-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-      gap: 12px;
-      margin-top: 12px;
-    }}
-    .thumb-card {{
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #fff;
-      overflow: hidden;
-    }}
-    .thumb-image {{
-      width: 100%;
-      height: 150px;
-      object-fit: cover;
-      display: block;
-      background: #0f172a;
-    }}
-    .thumb-meta {{
-      padding: 10px 12px;
-      line-height: 1.6;
-      color: #142033;
-      font-size: 13px;
-      font-weight: 600;
-    }}
-    .latency-chart {{
-      width: 100%;
-      min-height: 170px;
-      border-radius: 14px;
-      background: #f8fbff;
-      border: 1px solid var(--line);
-    }}
-    .detection-list {{
-      display: grid;
-      gap: 10px;
-      margin-top: 12px;
-    }}
-    .detection-item {{
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: #fff;
-      color: #142033;
-      line-height: 1.7;
-    }}
-    .inline-evidence {{
-      margin-top: 18px;
-      padding-top: 16px;
-      border-top: 1px solid var(--line);
-    }}
-    .order-list {{
-      display: grid;
-      gap: 8px;
-      max-height: 300px;
-      overflow: auto;
-    }}
-    .order-link {{
-      display: block;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      color: var(--blue);
-      text-decoration: none;
-      overflow-wrap: anywhere;
-      background: #fff;
-    }}
-    .order-link.active {{
-      border-color: var(--blue);
-      background: var(--blue-soft);
-      font-weight: 700;
-    }}
-    pre {{
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      background: #0f172a;
-      color: #e5edf9;
-      border-radius: 12px;
-      padding: 16px;
-      max-height: 420px;
-      overflow: auto;
-    }}
-    code {{
-      background: rgba(15, 23, 42, 0.08);
-      border-radius: 6px;
-      padding: 2px 6px;
-    }}
-    @media (max-width: 840px) {{
-      .layout {{ grid-template-columns: 1fr; }}
-      h1 {{ font-size: 25px; }}
-    }}
+    .muted {{ color: var(--subtle); line-height: 1.7; }}
+    .pill {{ display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; padding: 6px 10px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-weight: 700; font-size: 13px; }}
+    .order-select-label {{ display: block; margin-bottom: 8px; color: var(--subtle); font-size: 14px; font-weight: 800; }}
+    .order-select {{ width: 100%; min-height: 46px; border-radius: 12px; border: 1px solid #b8c8dc; background: #fff; color: var(--ink); font-size: 15px; font-weight: 800; padding: 0 12px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 18px; }}
+    .metric {{ border-radius: 12px; background: var(--blue-soft); padding: 14px; min-width: 0; }}
+    .metric span {{ display: block; color: var(--subtle); font-size: 13px; font-weight: 700; }}
+    .metric strong {{ display: block; font-size: 18px; margin-top: 6px; overflow-wrap: anywhere; color: var(--ink); }}
+    .layout {{ display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr); gap: 18px; align-items: start; }}
+    .order-panel[hidden] {{ display: none; }}
+    .result-section-title {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }}
+    .preview {{ width: 100%; max-height: 560px; object-fit: contain; border-radius: 12px; background: #0f172a; }}
+    .video-player {{ width: 100%; max-height: 360px; border-radius: 12px; background: #0f172a; }}
+    .thumb-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 12px; }}
+    .thumb-card {{ border: 1px solid var(--line); border-radius: 14px; background: #fff; overflow: hidden; cursor: pointer; transition: 0.16s ease; }}
+    .thumb-card:hover {{ border-color: var(--blue); box-shadow: 0 10px 24px rgba(29, 78, 216, 0.14); transform: translateY(-1px); }}
+    .thumb-image {{ width: 100%; height: 150px; object-fit: cover; display: block; background: #0f172a; }}
+    .thumb-meta {{ padding: 10px 12px; line-height: 1.6; color: #142033; font-size: 13px; font-weight: 700; }}
+    .latency-chart {{ width: 100%; min-height: 170px; border-radius: 14px; background: #f8fbff; border: 1px solid var(--line); }}
+    .detection-list {{ display: grid; gap: 10px; margin-top: 12px; }}
+    .detection-item {{ border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: #fff; color: #142033; line-height: 1.7; }}
+    .inline-evidence {{ margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }}
+    .matrix-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 12px; }}
+    .matrix-table {{ width: 100%; border-collapse: collapse; background: #f8fbff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; font-variant-numeric: tabular-nums; }}
+    .matrix-table td {{ border: 1px solid #e0e8f2; padding: 8px 10px; text-align: right; color: #142033; font-size: 13px; }}
+    .sample-table {{ width: 100%; border-collapse: collapse; margin-top: 12px; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }}
+    .sample-table th, .sample-table td {{ border-bottom: 1px solid #e0e8f2; padding: 10px 12px; text-align: left; color: #142033; font-size: 14px; }}
+    .sample-table th {{ background: #f3f7fb; font-weight: 800; }}
+    pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e5edf9; border-radius: 12px; padding: 16px; max-height: 420px; overflow: auto; }}
+    code {{ background: rgba(15, 23, 42, 0.08); border-radius: 6px; padding: 2px 6px; }}
+    @media (max-width: 840px) {{ .layout, .hero-head {{ grid-template-columns: 1fr; }} h1 {{ font-size: 25px; }} }}
   </style>
 </head>
 <body>
   <main>
     <section class="card hero">
-      <div class="pill">目的端用户设备正在接收结果</div>
-      <h1>{task_title}结果接收页</h1>
-      <div class="muted">本页面运行在目的端容器内，用固定端口接收 compute 节点推送的随路计算结果。固定端口可连续接收多个工单，并按工单 ID 区分展示。</div>
+      <div class="hero-head">
+        <div>
+          <div class="pill">目的端用户设备正在接收结果</div>
+          <h1>{task_title}结果接收页</h1>
+          <div class="muted">本页面运行在目的端容器内，用固定端口接收 compute 节点推送的随路计算结果。固定端口可连续接收多个工单，并可在页面顶部直接切换查看。</div>
+        </div>
+        {order_switcher}
+      </div>
       <div class="grid">
         <div class="metric"><span>工单 ID</span><strong>{order_id}</strong></div>
         <div class="metric"><span>接收状态</span><strong>{status_text}</strong></div>
@@ -487,38 +355,36 @@ def _render_receiver_page(
         <div class="metric"><span>当前指标</span><strong>{metric_key}: {escape(str(metric_value if metric_value is not None else "-"))}</strong></div>
       </div>
     </section>
-    <section class="card">
-      <h2>本端接收信息</h2>
-      {receiver_info}
-    </section>
-    <div class="layout">
-      <div>
-        <section class="card">
-          <h2>结果预览</h2>
-          {image_html or '<div class="muted">暂无图片预览。矩阵计算任务会展示结果数字；视频推理任务回调后会展示带中文标签和检测框的预览图。</div>'}
-          {preview_gallery_html}
-          <div class="grid">{result_cards}</div>
-        </section>
-        {evidence_html}
-        <section class="card">
-          <h2>最近回调数据</h2>
-          <div class="muted">用于排查和复核。专家演示时通常只看上方预览和关键结果。</div>
-          <pre>{raw_json}</pre>
-        </section>
-      </div>
-      <aside>
-        <section class="card">
-          <h2>已接收工单</h2>
-          <div class="muted">同一固定端口可接收多个工单，点击工单 ID 可切换查看。</div>
-          <div class="order-list">{stored_orders}</div>
-        </section>
-      </aside>
-    </div>
+    <section class="card"><h2>本端接收信息</h2>{receiver_info}</section>
+    {panels or '<section class="card"><h2>等待结果</h2><div class="muted">当前固定端口尚未收到工单结果。任务运行后页面会自动刷新。</div></section>'}
   </main>
+  <script>
+    const orderSelect = document.getElementById("orderSelect");
+    function showOrder(orderId) {{
+      document.querySelectorAll(".order-panel").forEach((panel) => {{ panel.hidden = panel.dataset.orderId !== orderId; }});
+    }}
+    if (orderSelect) {{
+      orderSelect.addEventListener("change", (event) => {{
+        showOrder(event.target.value);
+        window.history.replaceState(null, "", window.location.pathname);
+      }});
+      showOrder(orderSelect.value);
+    }}
+    setInterval(async () => {{
+      try {{
+        const res = await fetch("/latest", {{ cache: "no-store" }});
+        if (!res.ok) return;
+        const data = await res.json();
+        const count = Array.isArray(data.stored_orders) ? data.stored_orders.length : 0;
+        const currentCount = orderSelect ? orderSelect.options.length : 0;
+        const currentPanel = orderSelect ? document.querySelector(`.order-panel[data-order-id="${{orderSelect.value}}"]`) : null;
+        const currentRunning = currentPanel && currentPanel.dataset.status !== "completed";
+        if (count !== currentCount || currentRunning) window.location.reload();
+      }} catch (err) {{}}
+    }}, 2500);
+  </script>
 </body>
 </html>"""
-
-
 def _select_record(summary: dict[str, Any], selected_order_id: str | None) -> dict[str, Any]:
     if selected_order_id:
         latest = summary.get("latest")
@@ -531,6 +397,129 @@ def _select_record(summary: dict[str, Any], selected_order_id: str | None) -> di
                 return record
     latest = summary.get("latest")
     return latest if isinstance(latest, dict) else {}
+
+
+def _records_for_page(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    stored = summary.get("stored_records")
+    if isinstance(stored, dict):
+        for order_id, record in stored.items():
+            if isinstance(record, dict):
+                records[str(record.get("order_id") or order_id)] = record
+    latest = summary.get("latest")
+    if isinstance(latest, dict):
+        records[str(latest.get("order_id") or "latest")] = latest
+    return sorted(
+        records.values(),
+        key=lambda item: str(item.get("updated_at") or item.get("received_at") or ""),
+        reverse=True,
+    )
+
+
+def _metric_value(payload: dict[str, Any], result: dict[str, Any]) -> Any:
+    metric_key = payload.get("metric_key")
+    value = result.get(metric_key, "") if metric_key else None
+    if value is None and metric_key == "effective_gflops":
+        return result.get("effective_gflops")
+    if value is None and metric_key == "frame_latency_p90_ms":
+        return result.get("frame_latency_p90_ms")
+    return value
+
+
+def _render_order_switcher(records: list[dict[str, Any]], selected_id: str) -> str:
+    if not records:
+        return '<div class="muted">暂无已接收工单。</div>'
+    options = []
+    for record in records:
+        order_id = str(record.get("order_id") or "unknown-order")
+        status = "已完成" if record.get("status") == "completed" else "运行中"
+        selected = " selected" if order_id == selected_id else ""
+        label = f"{order_id} · {status}"
+        options.append(f'<option value="{escape(order_id, quote=True)}"{selected}>{escape(label)}</option>')
+    return f"""
+      <label class="order-select-label" for="orderSelect">切换已接收工单</label>
+      <select id="orderSelect" class="order-select" aria-label="切换已接收工单">
+        {''.join(options)}
+      </select>
+    """
+
+
+def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str) -> str:
+    order_id = str(record.get("order_id") or "unknown-order")
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    hidden = "" if order_id == selected_id else " hidden"
+    status = escape(str(record.get("status") or "-"))
+    raw_json = escape(json.dumps(payload or {}, ensure_ascii=False, indent=2))
+    result_cards = _render_result_cards(task_type, result, payload.get("metric_key"))
+    if task_type == "low_latency_video_pipeline":
+        main_result = _render_video_result(result)
+        evidence_html = _render_video_evidence(task_type, result)
+    elif task_type == "high_throughput_matmul":
+        main_result = _render_matmul_result(result)
+        evidence_html = _render_matmul_evidence(result)
+    else:
+        main_result = '<div class="muted">暂无专用结果展示。</div>'
+        evidence_html = ""
+    return f"""
+      <section class="order-panel" data-order-id="{escape(order_id, quote=True)}" data-status="{status}"{hidden}>
+        <section class="card">
+          <div class="result-section-title">
+            <h2>业务结果展示</h2>
+            <div class="muted">当前工单：<code>{escape(order_id)}</code></div>
+          </div>
+          {main_result}
+          <div class="grid">{result_cards}</div>
+        </section>
+        {evidence_html}
+        <section class="card">
+          <h2>回调数据</h2>
+          <div class="muted">用于排查和复核。演示时优先查看上方业务结果、过程图表和输入输出说明。</div>
+          <pre>{raw_json}</pre>
+        </section>
+      </section>
+    """
+
+
+def _render_video_result(result: dict[str, Any]) -> str:
+    preview_url = result.get("annotated_frame_data_url")
+    main_image = ""
+    if isinstance(preview_url, str) and _is_safe_raster_data_url(preview_url):
+        main_image = f'<img class="preview" src="{escape(preview_url, quote=True)}" alt="视频推理检测结果" />'
+    else:
+        main_image = '<div class="muted">暂无检测结果图片。任务运行中会持续接收检测帧；最终回调后会展示带中文标签和检测框的结果。</div>'
+    frame_count = _frame_count(result)
+    return f"""
+      {main_image}
+      <div class="inline-evidence">
+        <h3>检测帧结果</h3>
+        <div class="muted">本次已接收 {frame_count} 张检测帧；点击或悬停缩略图可查看帧序号、单帧时延和识别目标。若任务仍在运行，页面会自动刷新显示新增帧。</div>
+        {_render_preview_frame_gallery(result)}
+      </div>
+    """
+
+
+def _render_matmul_result(result: dict[str, Any]) -> str:
+    seed = _as_display_int(result.get("seed"), 42)
+    size = _as_display_int(result.get("matrix_size"), 0)
+    sample_size = 4
+    a_block = _matrix_preview(seed, sample_size, offset=0)
+    b_block = _matrix_preview(seed, sample_size, offset=sample_size * sample_size)
+    result_block = _matmul_preview(a_block, b_block)
+    return f"""
+      <div class="muted">矩阵乘法任务输入为随机种子、矩阵规模和批次数。完整矩阵规模可能很大，页面展示按同一 seed 生成的 4×4 输入样例块和对应乘法结果样例块，用于让验收人员直观看到“输入矩阵 -> 计算结果”的关系。</div>
+      <div class="grid">
+        <div class="metric"><span>输入矩阵规模</span><strong>{escape(str(size or '-'))} × {escape(str(size or '-'))}</strong></div>
+        <div class="metric"><span>输入随机种子</span><strong>{escape(str(seed))}</strong></div>
+        <div class="metric"><span>结果校验值</span><strong>{escape(_format_plain(result.get("result_preview") or result.get("checksum")))}</strong></div>
+        <div class="metric"><span>计算批次数</span><strong>{escape(_format_plain(result.get("batch_count")))}</strong></div>
+      </div>
+      <div class="matrix-grid">
+        <div><h3>输入矩阵 A 样例块</h3>{_render_matrix_table(a_block)}</div>
+        <div><h3>输入矩阵 B 样例块</h3>{_render_matrix_table(b_block)}</div>
+        <div><h3>A × B 结果样例块</h3>{_render_matrix_table(result_block)}</div>
+      </div>
+    """
 
 
 def _merge_progress_payload(existing_payload: Any, progress_payload: dict[str, Any]) -> dict[str, Any]:
@@ -653,6 +642,85 @@ def _render_video_evidence(task_type: str, result: dict[str, Any]) -> str:
     )
 
 
+def _render_matmul_evidence(result: dict[str, Any]) -> str:
+    samples = result.get("samples")
+    return f"""
+      <section class="card">
+        <h2>吞吐采样趋势</h2>
+        <div class="muted">矩阵计算会在任务运行窗口内进行多次小批次采样，最终采用中位数作为有效计算性能。</div>
+        {_render_gflops_chart(samples)}
+        {_render_sample_table(samples, value_key="effective_gflops", value_label="有效计算性能", suffix=" GFLOPS")}
+      </section>
+    """
+
+
+def _render_gflops_chart(samples: Any) -> str:
+    if not isinstance(samples, list) or not samples:
+        return '<div class="muted">暂无采样趋势。当前结果可能为单次运行。</div>'
+    points: list[tuple[int, float]] = []
+    for item in samples[:60]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            points.append((int(item.get("index", len(points) + 1)), float(item.get("effective_gflops", 0.0))))
+        except (TypeError, ValueError):
+            continue
+    if not points:
+        return '<div class="muted">暂无可展示的吞吐样本。</div>'
+    max_value = max(value for _, value in points) or 1.0
+    width = 720
+    height = 190
+    left = 42
+    top = 18
+    plot_width = width - left - 24
+    plot_height = height - top - 34
+    step = plot_width / max(1, len(points) - 1)
+    coords = []
+    labels = []
+    for idx, (sample_index, value) in enumerate(points):
+        x = left + idx * step
+        y = top + plot_height - (value / max_value) * plot_height
+        coords.append(f"{x:.1f},{y:.1f}")
+        labels.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#1d4ed8"><title>样本 {sample_index}: {value:.2f} GFLOPS</title></circle>'
+        )
+    recent = points[-1]
+    return f"""
+      <svg class="latency-chart" viewBox="0 0 {width} {height}" role="img" aria-label="矩阵计算吞吐采样趋势">
+        <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#9fb1c7" />
+        <line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" stroke="#9fb1c7" />
+        <polyline points="{' '.join(coords)}" fill="none" stroke="#1d4ed8" stroke-width="3" />
+        {''.join(labels)}
+        <text x="{left}" y="15" fill="#334155" font-size="13">最高 {max_value:.2f} GFLOPS</text>
+        <text x="{left}" y="{height - 8}" fill="#334155" font-size="13">最近：样本 {recent[0]}，{recent[1]:.2f} GFLOPS</text>
+      </svg>
+    """
+
+
+def _render_sample_table(samples: Any, *, value_key: str, value_label: str, suffix: str) -> str:
+    if not isinstance(samples, list) or not samples:
+        return ""
+    rows = []
+    for item in samples[:12]:
+        if not isinstance(item, dict):
+            continue
+        index = escape(str(item.get("index") or item.get("frame_index") or "-"))
+        relative = escape(str(item.get("relative_sec") or "-"))
+        elapsed = _format_number(item.get("elapsed_ms"), " ms")
+        value = _format_number(item.get(value_key), suffix)
+        rows.append(
+            f"<tr><td>{index}</td><td>{relative}</td><td>{escape(elapsed)}</td><td>{escape(value)}</td></tr>"
+        )
+    if not rows:
+        return ""
+    return f"""
+      <table class="sample-table">
+        <thead><tr><th>样本/帧序号</th><th>相对时间</th><th>耗时</th><th>{escape(value_label)}</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    """
+
+
 def _render_latency_chart(samples: Any) -> str:
     if not isinstance(samples, list) or not samples:
         return '<div class="muted">暂无时延样本。任务运行中会持续刷新。</div>'
@@ -744,6 +812,16 @@ def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
     return f'<div class="thumb-grid">{"".join(cards)}</div>'
 
 
+def _frame_count(result: dict[str, Any]) -> int:
+    frames = result.get("preview_frames")
+    if isinstance(frames, list) and frames:
+        return len(frames)
+    samples = result.get("samples")
+    if isinstance(samples, list) and samples:
+        return len(samples)
+    return 1 if result.get("annotated_frame_data_url") else 0
+
+
 def _render_detection_list(detections: Any) -> str:
     if not isinstance(detections, list) or not detections:
         return '<div class="muted">暂无检测目标。</div>'
@@ -773,6 +851,50 @@ def _format_plain(value: Any) -> str:
     if value is None or value == "":
         return "-"
     return str(value)
+
+
+def _as_display_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _matrix_preview(seed: int, size: int, *, offset: int) -> list[list[float]]:
+    # Lightweight deterministic sample for UI explanation; business computation still uses real worker result.
+    state = (abs(seed) + 17 + offset) % 2147483647
+    rows: list[list[float]] = []
+    for _ in range(size):
+        row = []
+        for _ in range(size):
+            state = (state * 1103515245 + 12345) % 2147483647
+            row.append(round(((state / 2147483647) * 2.0 - 1.0), 3))
+        rows.append(row)
+    return rows
+
+
+def _matmul_preview(a_block: list[list[float]], b_block: list[list[float]]) -> list[list[float]]:
+    if not a_block or not b_block:
+        return []
+    size = min(len(a_block), len(b_block), len(b_block[0]))
+    rows: list[list[float]] = []
+    for i in range(size):
+        row = []
+        for j in range(size):
+            value = sum(float(a_block[i][k]) * float(b_block[k][j]) for k in range(size))
+            row.append(round(value, 3))
+        rows.append(row)
+    return rows
+
+
+def _render_matrix_table(block: list[list[float]]) -> str:
+    if not block:
+        return '<div class="muted">暂无矩阵样例。</div>'
+    rows = []
+    for row in block:
+        cells = "".join(f"<td>{escape(str(value))}</td>" for value in row)
+        rows.append(f"<tr>{cells}</tr>")
+    return f'<table class="matrix-table"><tbody>{"".join(rows)}</tbody></table>'
 
 
 def _task_title(task_type: str) -> str:

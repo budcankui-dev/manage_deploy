@@ -161,10 +161,12 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     assert "h18015002" in body
     assert "2001:db8::2" in body
     assert "9100" in body
-    assert body.index("本端接收信息") < body.index("结果预览")
+    assert body.index("切换已接收工单") < body.index("本端接收信息")
+    assert body.index("本端接收信息") < body.index("业务结果展示")
     assert "原始测试视频" in body
     assert "/assets/bottle-detection.mp4" in body
-    assert "抽样检测帧" in body
+    assert "检测帧结果" in body
+    assert "本次已接收 2 张检测帧" in body
     assert "推理时延趋势" in body
     assert "帧 30" in body
     assert "帧 60" in body
@@ -215,13 +217,17 @@ def test_receiver_homepage_supports_switching_between_orders_on_fixed_port(tmp_p
     assert status == 200
     assert "text/html" in content_type
     assert "固定端口可连续接收多个工单" in body
-    assert "/?order_id=matmul-order-old" in body
-    assert "/?order_id=matmul-order-new" in body
+    assert 'id="orderSelect"' in body
+    assert 'value="matmul-order-old"' in body
+    assert 'value="matmul-order-new"' in body
+    assert "?order_id=" not in body
     assert "matmul-order-new" in body
     assert "有效计算性能" in body
     assert "122.5 GFLOPS" in body
     assert "矩阵规模" in body
     assert "4096" in body
+    assert "输入矩阵 A 样例块" in body
+    assert "A × B 结果样例块" in body
 
     status, content_type, old_body = _request_text("GET", port, "/?order_id=matmul-order-old")
     assert status == 200

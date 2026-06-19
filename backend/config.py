@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     auth_bypass_role: str = "admin"
     auth_bypass_username: str = "dev"
 
-    # 开发默认 IPv4（业务面借用管理面）；验收环境在 .env 设为 true 并配置节点 business_ipv6
-    prefer_business_ipv6: bool = False
+    # 业务数据面默认 IPv6 优先；仅本地无 IPv6 数据面时在 .env 显式覆盖为 false。
+    prefer_business_ipv6: bool = True
 
     minio_endpoint: str = "http://host.docker.internal:9000"
     minio_bucket: str = "task-results"
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # (use when the backend is reachable via a different URL than what is recorded
     # in the nodes table, e.g. behind NAT or a load balancer).
     backend_hostname: str = "admin"
-    backend_port: int = 8000
+    backend_port: int = 8181
     manager_public_url: Optional[str] = None
     platform_scratch_root: str = "/tmp/manage_deploy"
 
