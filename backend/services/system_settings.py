@@ -34,6 +34,11 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "task_modality_overrides": {},
     "task_resource_override_enabled": False,
     "task_resource_overrides": {},
+    "benchmark_execution_defaults": {
+        "default_task_count": 30,
+        "max_parallel": 2,
+        "per_compute_slot_limit": 1,
+    },
     "notes": "标准模式用于常规运行；调试模式用于联调、排障和快速回归。",
 }
 
@@ -60,6 +65,25 @@ BENCHMARK_ROUTING_MODE_LABELS = {
 
 TASK_RESOURCE_ROLES = ("source", "compute", "sink")
 RESOURCE_KEYS = ("cpu_units", "mem_mb", "cpu_mem_mb", "disk_mb", "gpu_units", "gpu_mem_mb")
+
+
+def normalize_benchmark_execution_defaults(value: dict[str, Any] | None = None) -> dict[str, int]:
+    defaults = DEFAULT_RUNTIME_SETTINGS["benchmark_execution_defaults"]
+    source = value if isinstance(value, dict) else {}
+
+    def _int_in_range(key: str, minimum: int, maximum: int) -> int:
+        raw = source.get(key, defaults[key])
+        try:
+            number = int(raw)
+        except (TypeError, ValueError):
+            number = defaults[key]
+        return max(minimum, min(maximum, number))
+
+    return {
+        "default_task_count": _int_in_range("default_task_count", 1, 30),
+        "max_parallel": _int_in_range("max_parallel", 1, 10),
+        "per_compute_slot_limit": _int_in_range("per_compute_slot_limit", 1, 4),
+    }
 
 
 def normalize_task_modality_overrides(value: dict[str, Any] | None = None) -> dict[str, str]:
@@ -142,6 +166,9 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     merged["task_resource_overrides"] = normalize_task_resource_overrides(
         merged.get("task_resource_overrides")
+    )
+    merged["benchmark_execution_defaults"] = normalize_benchmark_execution_defaults(
+        merged.get("benchmark_execution_defaults")
     )
     merged["modality_priority_rows"] = [
         {"modality": modality, "priority": merged["modality_priority_map"][modality]}

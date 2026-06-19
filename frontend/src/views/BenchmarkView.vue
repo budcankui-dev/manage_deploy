@@ -66,13 +66,13 @@
             <el-tag v-else type="danger" size="small">未测试</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="稳定性" min-width="120">
+        <el-table-column label="波动提示" min-width="150">
           <template #default="{ row }">
             <el-tag v-if="row.stable === true" type="success" size="small">稳定</el-tag>
             <el-tag v-else-if="row.stable === false" type="warning" size="small">波动大</el-tag>
             <span v-else class="muted">未测试</span>
             <div v-if="row.std_dev != null" class="baseline-subline">
-              σ={{ row.std_dev.toFixed(2) }}
+              样本标准差 {{ row.std_dev.toFixed(2) }}
             </div>
           </template>
         </el-table-column>
@@ -192,7 +192,7 @@
         <el-input-number v-model="executionForm.max_parallel" :min="1" :max="10" controls-position="right" />
         <span>同一GPU并发数</span>
         <el-input-number v-model="executionForm.per_compute_slot_limit" :min="1" :max="4" controls-position="right" />
-        <span class="muted">GPU 任务默认每个工单只使用 1 张 GPU；建议同一 GPU 并发数设为 1。</span>
+        <span class="muted">GPU 任务默认每个工单使用 1 张 GPU；同一 GPU 并发数来自系统设置，验收建议保持 1。</span>
       </div>
       <div class="status-grid">
         <div class="status-cell waiting">
@@ -520,6 +520,11 @@ const settingsForm = reactive({
   expert_mode: true,
   show_internal_controls: false,
   show_routing_dag_json: false,
+  benchmark_execution_defaults: {
+    default_task_count: formalEvaluationCount,
+    max_parallel: 2,
+    per_compute_slot_limit: 1,
+  },
 })
 
 const routeMode = computed(() => settingsForm.benchmark_routing_mode || 'external')
@@ -546,10 +551,10 @@ const currentTaskConfig = computed(() =>
 
 const baselineHintText = computed(() => {
   if (taskType.value === 'low_latency_video_pipeline') {
-    return '视频业务先预热 3 轮，再统计 5 轮取中位数。若重测值与历史基线差距明显，应优先核对 GPU 推理后端、worker 镜像版本和同 GPU 并发占用情况。'
+    return '波动提示基于多次基线样本的标准差计算；样本差异小显示稳定，差异大提示波动。若重测值与历史基线差距明显，应优先核对 GPU 推理后端、worker 镜像版本和同 GPU 并发占用情况。'
   }
   if (taskType.value === 'high_throughput_matmul') {
-    return '矩阵业务先完成预热，再按固定矩阵规模和批次统计计算速率。若重测值与历史基线差距明显，应优先核对 GPU 运行后端、worker 镜像版本和同 GPU 并发占用情况。'
+    return '波动提示基于多次基线样本的标准差计算；样本差异小显示稳定，差异大提示波动。若重测值与历史基线差距明显，应优先核对 GPU 运行后端、worker 镜像版本和同 GPU 并发占用情况。'
   }
   return ''
 })
@@ -980,6 +985,21 @@ function isGeneratedBenchmarkRunId(runId) {
   return Object.keys(taskConfigs).some(task => runId.startsWith(`${task}-`))
 }
 
+function clampInteger(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, number))
+}
+
+function normalizeBenchmarkExecutionDefaults(value) {
+  const incoming = value && typeof value === 'object' ? value : {}
+  return {
+    default_task_count: clampInteger(incoming.default_task_count, formalEvaluationCount, 1, 30),
+    max_parallel: clampInteger(incoming.max_parallel, 2, 1, 10),
+    per_compute_slot_limit: clampInteger(incoming.per_compute_slot_limit, 1, 1, 4),
+  }
+}
+
 async function loadNodes() {
   nodesLoading.value = true
   try {
@@ -998,6 +1018,10 @@ async function loadSystemSettings() {
     settingsForm.expert_mode = data?.expert_mode ?? true
     settingsForm.show_internal_controls = data?.show_internal_controls ?? false
     settingsForm.show_routing_dag_json = data?.show_routing_dag_json ?? false
+    settingsForm.benchmark_execution_defaults = normalizeBenchmarkExecutionDefaults(data?.benchmark_execution_defaults)
+    benchmarkForm.count = settingsForm.benchmark_execution_defaults.default_task_count
+    executionForm.max_parallel = settingsForm.benchmark_execution_defaults.max_parallel
+    executionForm.per_compute_slot_limit = settingsForm.benchmark_execution_defaults.per_compute_slot_limit
   } finally {
     settingsLoading.value = false
   }

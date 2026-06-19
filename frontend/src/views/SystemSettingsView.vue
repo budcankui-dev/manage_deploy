@@ -59,6 +59,42 @@
           </el-card>
 
           <el-card shadow="never" class="mode-card">
+            <h3>业务测评执行</h3>
+            <div class="execution-defaults">
+              <label>
+                <span>默认任务数</span>
+                <el-input-number
+                  v-model="form.benchmark_execution_defaults.default_task_count"
+                  :min="1"
+                  :max="30"
+                  controls-position="right"
+                />
+              </label>
+              <label>
+                <span>每批最多任务数</span>
+                <el-input-number
+                  v-model="form.benchmark_execution_defaults.max_parallel"
+                  :min="1"
+                  :max="10"
+                  controls-position="right"
+                />
+              </label>
+              <label>
+                <span>同一GPU并发数</span>
+                <el-input-number
+                  v-model="form.benchmark_execution_defaults.per_compute_slot_limit"
+                  :min="1"
+                  :max="4"
+                  controls-position="right"
+                />
+              </label>
+            </div>
+            <p class="form-hint">
+              验收口径默认创建 30 个测评工单；GPU 任务每个工单默认使用 1 张 GPU，建议同一 GPU 并发数保持 1，避免并发争用影响基线判定。
+            </p>
+          </el-card>
+
+          <el-card shadow="never" class="mode-card">
             <h3>页面展示</h3>
             <el-switch
               v-model="form.expert_mode"
@@ -347,6 +383,12 @@ const DEFAULT_TASK_RESOURCE_OVERRIDES = {
   },
 }
 
+const DEFAULT_BENCHMARK_EXECUTION_DEFAULTS = {
+  default_task_count: 30,
+  max_parallel: 2,
+  per_compute_slot_limit: 1,
+}
+
 const ROLE_ROWS = [
   { role: 'source', role_label: 'source' },
   { role: 'compute', role_label: 'compute' },
@@ -369,6 +411,7 @@ const form = reactive({
   task_modality_overrides: { ...TASK_MODALITY_DEFAULTS },
   task_resource_override_enabled: false,
   task_resource_overrides: cloneTaskResources(DEFAULT_TASK_RESOURCE_OVERRIDES),
+  benchmark_execution_defaults: { ...DEFAULT_BENCHMARK_EXECUTION_DEFAULTS },
   notes: '',
 })
 
@@ -431,6 +474,21 @@ function normalizeTaskResourceOverrides(value) {
   return merged
 }
 
+function clampInteger(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, number))
+}
+
+function normalizeBenchmarkExecutionDefaults(value) {
+  const incoming = value && typeof value === 'object' ? value : {}
+  return {
+    default_task_count: clampInteger(incoming.default_task_count, DEFAULT_BENCHMARK_EXECUTION_DEFAULTS.default_task_count, 1, 30),
+    max_parallel: clampInteger(incoming.max_parallel, DEFAULT_BENCHMARK_EXECUTION_DEFAULTS.max_parallel, 1, 10),
+    per_compute_slot_limit: clampInteger(incoming.per_compute_slot_limit, DEFAULT_BENCHMARK_EXECUTION_DEFAULTS.per_compute_slot_limit, 1, 4),
+  }
+}
+
 function applySettings(data) {
   settings.value = data || {}
   const loadedNotes = data?.notes || ''
@@ -451,6 +509,7 @@ function applySettings(data) {
     task_modality_overrides: normalizeTaskModalityOverrides(data?.task_modality_overrides),
     task_resource_override_enabled: data?.task_resource_override_enabled ?? false,
     task_resource_overrides: normalizeTaskResourceOverrides(data?.task_resource_overrides),
+    benchmark_execution_defaults: normalizeBenchmarkExecutionDefaults(data?.benchmark_execution_defaults),
     notes,
   })
 }
@@ -473,6 +532,7 @@ async function saveSettings() {
       modality_priority_map: normalizePriorityMap(form.modality_priority_map),
       task_modality_overrides: normalizeTaskModalityOverrides(form.task_modality_overrides),
       task_resource_overrides: normalizeTaskResourceOverrides(form.task_resource_overrides),
+      benchmark_execution_defaults: normalizeBenchmarkExecutionDefaults(form.benchmark_execution_defaults),
     }
     const { data } = await adminApi.updateSystemSettings(payload)
     applySettings(data)
@@ -540,13 +600,30 @@ onMounted(loadSettings)
 
 .setting-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin: 12px 0 18px;
 }
 
 .mode-card h3 {
   margin: 0 0 12px;
+}
+
+.execution-defaults {
+  display: grid;
+  gap: 12px;
+}
+
+.execution-defaults label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.execution-defaults span {
+  color: #334155;
+  font-size: 13px;
 }
 
 .priority-card {
