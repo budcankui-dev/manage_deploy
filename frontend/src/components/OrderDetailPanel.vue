@@ -123,6 +123,62 @@
             </el-table>
           </div>
 
+          <div v-if="nodeCapabilityProfile" class="capability-profile-card">
+            <div class="capability-profile-head">
+              <div>
+                <p class="eyebrow">节点能力画像</p>
+                <h3>{{ nodeCapabilityProfile.headline || '算力节点匹配结果' }}</h3>
+                <p>{{ nodeCapabilityProfile.description || '根据本系统历史业务测评数据展示算力节点能力。' }}</p>
+              </div>
+              <el-tag :type="capabilityDirectionTagType" effect="plain" size="large">
+                {{ capabilityDirectionText }}
+              </el-tag>
+            </div>
+            <div class="capability-facts">
+              <div>
+                <span>已分配计算节点</span>
+                <strong>{{ capabilitySelectedNodeText }}</strong>
+              </div>
+              <div>
+                <span>历史测评指标</span>
+                <strong>{{ nodeCapabilityProfile.metric_label || metricLabel(nodeCapabilityProfile.metric_key) }}</strong>
+              </div>
+              <div>
+                <span>当前节点基线</span>
+                <strong>{{ capabilitySelectedBaselineText }}</strong>
+              </div>
+              <div>
+                <span>候选节点排名</span>
+                <strong>{{ capabilitySelectedRankText }}</strong>
+              </div>
+            </div>
+            <el-table
+              v-if="capabilityCandidateRows.length"
+              :data="capabilityCandidateRows"
+              size="small"
+              border
+              class="capability-table"
+            >
+              <el-table-column prop="rankText" label="排名" width="90" />
+              <el-table-column prop="nodeName" label="算力节点" min-width="150" />
+              <el-table-column prop="baselineText" label="历史基线" min-width="170" />
+              <el-table-column prop="gpuText" label="GPU" min-width="160" />
+              <el-table-column label="匹配结果" width="130">
+                <template #default="{ row }">
+                  <el-tag v-if="row.selected" type="success" effect="dark" size="small">已选择</el-tag>
+                  <span v-else class="muted">候选</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-alert
+              v-else
+              type="info"
+              show-icon
+              :closable="false"
+              title="暂无可展示的节点基线数据，请先在业务测评页完成该任务的基线测试。"
+            />
+          </div>
+
           <el-descriptions :column="2" border class="detail-desc">
             <el-descriptions-item label="分配状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
             <el-descriptions-item label="任务策略">{{ routingPolicyLabel(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
@@ -472,6 +528,7 @@ const resultObjects = computed(() => props.resultObjects || [])
 const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
 const routingDecision = computed(() => detail.value?.routing_decision || null)
+const nodeCapabilityProfile = computed(() => detail.value?.node_capability_profile || null)
 const platformDeployment = computed(() => detail.value?.runtime_config?.platform_deployment || null)
 const deployableRoles = computed(() => {
   const roles = platformDeployment.value?.deployable_roles
@@ -739,6 +796,36 @@ const decisionCandidateRows = computed(() => {
       scoreText: formatCandidateScore(row),
     }
   })
+})
+const capabilityDirectionText = computed(() => {
+  if (nodeCapabilityProfile.value?.better_direction === 'lower') return '数值越低越好'
+  if (nodeCapabilityProfile.value?.better_direction === 'higher') return '数值越高越好'
+  return '历史测评'
+})
+const capabilityDirectionTagType = computed(() => (
+  nodeCapabilityProfile.value?.better_direction === 'lower' ? 'success' : 'primary'
+))
+const capabilitySelectedNodeText = computed(() => {
+  const node = nodeCapabilityProfile.value?.selected_node || {}
+  return node.display_name || node.hostname || node.topology_node_id || '等待分配'
+})
+const capabilitySelectedBaselineText = computed(() => formatBaseline(nodeCapabilityProfile.value?.selected_baseline))
+const capabilitySelectedRankText = computed(() => {
+  const rank = nodeCapabilityProfile.value?.selected_rank
+  const total = nodeCapabilityProfile.value?.candidate_count
+  if (!rank || !total) return '暂无排名'
+  return `第 ${rank} / ${total}`
+})
+const capabilityCandidateRows = computed(() => {
+  const rows = nodeCapabilityProfile.value?.candidate_rows
+  if (!Array.isArray(rows)) return []
+  return rows.map((row) => ({
+    ...row,
+    rankText: row.rank ? `第 ${row.rank}` : '-',
+    nodeName: row.node_name || row.hostname || row.topology_node_id || '-',
+    baselineText: formatBaseline(row.baseline),
+    gpuText: row.gpu_model ? `${row.gpu_model} × ${row.gpu_count || 1}` : (row.gpu_count ? `GPU × ${row.gpu_count}` : '未记录'),
+  }))
 })
 
 function normalizePlacementRow(role, placement) {
@@ -1040,6 +1127,67 @@ function nodeStatusLabel(value) {
 }
 
 .decision-table {
+  margin-top: 2px;
+}
+
+.capability-profile-card {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.13), transparent 34%),
+    linear-gradient(135deg, #f7fdf9 0%, #ffffff 100%);
+}
+
+.capability-profile-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.capability-profile-head h3 {
+  margin: 0 0 6px;
+  color: #111827;
+  font-size: 17px;
+}
+
+.capability-profile-head p:last-child {
+  margin: 0;
+  color: #334155;
+  line-height: 1.65;
+}
+
+.capability-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 10px;
+}
+
+.capability-facts div {
+  padding: 10px 12px;
+  border: 1px solid rgba(22, 163, 74, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.capability-facts span {
+  display: block;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.capability-facts strong {
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.capability-table {
   margin-top: 2px;
 }
 

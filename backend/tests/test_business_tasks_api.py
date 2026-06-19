@@ -3342,6 +3342,14 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
     assert decision["selected_reason"].startswith("worker-b")
     assert decision["candidate_scores"][0]["baseline"]["baseline_value"] == 120.0
     assert decision["metadata"]["rent"]["amount"] == 1.6
+    profile = detail_response.json()["node_capability_profile"]
+    assert profile["title"] == "算力节点能力画像"
+    assert profile["metric_key"] == "frame_latency_p90_ms"
+    assert profile["better_direction"] == "lower"
+    assert profile["selected_node"]["hostname"] == "worker-b"
+    assert profile["selected_baseline"]["baseline_value"] == 120.0
+    assert profile["selected_rank"] == 1
+    assert profile["candidate_rows"][0]["selected"] is True
 
 
 @pytest.mark.parametrize("tags,expected_keys", [

@@ -66,14 +66,28 @@
             <el-option label="验收测评" :value="true" />
             <el-option label="普通工单" :value="false" />
           </el-select>
-          <el-input
+          <el-select
             v-model="filters.benchmark_run_id"
             placeholder="验收轮次ID"
             clearable
+            filterable
             style="width: 230px"
-            @keyup.enter="applyFilters"
+            :loading="benchmarkRunsLoading"
+            @change="handleBenchmarkRunChange"
             @clear="applyFilters"
-          />
+          >
+            <el-option
+              v-for="run in benchmarkRunOptions"
+              :key="run.value"
+              :label="run.label"
+              :value="run.value"
+            >
+              <div class="run-option">
+                <span class="run-id">{{ run.value }}</span>
+                <small>{{ run.summary }}</small>
+              </div>
+            </el-option>
+          </el-select>
           <el-select v-model="filters.routing_policy" placeholder="路由策略" clearable style="width: 150px" @change="applyFilters">
             <el-option v-for="item in ROUTING_POLICY_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
@@ -339,6 +353,7 @@ const batchDeleteLoading = ref(false)
 const runCleanupLoading = ref(false)
 const runDeleteLoading = ref(false)
 const settingsLoading = ref(false)
+const benchmarkRunsLoading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -369,6 +384,7 @@ const instanceDetail = ref(null)
 const resultObjects = ref([])
 
 const taskTypeOptions = computed(() => Object.keys(TASK_TYPE_LABELS))
+const benchmarkRunOptions = ref([])
 const hasBenchmarkRunScope = computed(() =>
   filters.is_benchmark === true && Boolean(String(filters.benchmark_run_id || '').trim())
 )
@@ -572,7 +588,7 @@ function handleOrderSelectionChange(rows) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadSystemSettings(), loadList(), loadNodes()])
+  await Promise.all([loadSystemSettings(), loadList(), loadNodes(), loadBenchmarkRunOptions()])
 }
 
 async function loadSystemSettings() {
@@ -611,6 +627,58 @@ async function applyFilters() {
   page.value = 1
   selectedOrderIds.value = []
   await loadList()
+}
+
+async function handleBenchmarkRunChange(value) {
+  if (value) {
+    filters.is_benchmark = true
+  }
+  await applyFilters()
+}
+
+function summarizeBenchmarkRuns(rows = []) {
+  const grouped = new Map()
+  rows.forEach((row) => {
+    const runId = row.benchmark_run_id
+    if (!runId) return
+    const current = grouped.get(runId) || {
+      value: runId,
+      taskTypes: new Set(),
+      count: 0,
+      latest: '',
+    }
+    current.count += 1
+    if (row.task_type) current.taskTypes.add(row.task_type)
+    if (!current.latest || String(row.created_at || '') > current.latest) {
+      current.latest = String(row.created_at || '')
+    }
+    grouped.set(runId, current)
+  })
+  return Array.from(grouped.values())
+    .sort((a, b) => String(b.latest || '').localeCompare(String(a.latest || '')))
+    .map((item) => {
+      const taskLabels = Array.from(item.taskTypes).map(taskTypeLabel).join('、') || '测评工单'
+      return {
+        value: item.value,
+        label: item.value,
+        summary: `${taskLabels} · ${item.count} 个工单`,
+      }
+    })
+}
+
+async function loadBenchmarkRunOptions() {
+  benchmarkRunsLoading.value = true
+  try {
+    const { data } = await businessApi.list({
+      page: 1,
+      page_size: 100,
+      is_benchmark: true,
+      include_cancelled: true,
+    })
+    benchmarkRunOptions.value = summarizeBenchmarkRuns(data.items || [])
+  } finally {
+    benchmarkRunsLoading.value = false
+  }
 }
 
 async function loadNodes() {
@@ -1036,7 +1104,7 @@ async function submitSample() {
 
 .order-cell strong {
   overflow: hidden;
-  color: var(--text-primary);
+  color: #303133 !important;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1052,6 +1120,27 @@ async function submitSample() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.run-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.run-option .run-id {
+  overflow: hidden;
+  color: #303133;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-option small {
+  color: #606266;
+  font-size: 12px;
 }
 
 .objective-card {

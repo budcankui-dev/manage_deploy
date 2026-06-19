@@ -417,6 +417,166 @@ def _baseline_summary(baseline: NodeBaseline | None) -> dict[str, Any] | None:
     }
 
 
+def _baseline_better_direction(metric_key: str | None, operator: str | None = None) -> str:
+    metric = (metric_key or "").lower()
+    if operator and str(operator).strip() in {"<", "<="}:
+        return "lower"
+    if any(token in metric for token in ("latency", "delay", "time", "duration", "p90", "p95")):
+        return "lower"
+    return "higher"
+
+
+def _metric_display_name(metric_key: str | None) -> str:
+    return {
+        "effective_gflops": "有效计算吞吐量",
+        "frame_latency_p90_ms": "帧推理时延 P90",
+        "tokens_per_second": "文本生成吞吐量",
+    }.get(metric_key or "", metric_key or "业务指标")
+
+
+def _node_display_name(node: NodeModel) -> str:
+    return node.display_name or node.hostname or node.topology_node_id or node.id
+
+
+def _selected_compute_topology_id(routing_result: dict[str, Any] | None) -> str | None:
+    if not isinstance(routing_result, dict):
+        return None
+    placements = routing_result.get("placements")
+    if not isinstance(placements, list):
+        return None
+    for placement in placements:
+        if not isinstance(placement, dict):
+            continue
+        if _placement_role(placement) in {"compute", "worker", "infer", "inference", "train"}:
+            return _placement_topology_key(placement)
+    return None
+
+
+async def _build_node_capability_profile(
+    db: AsyncSession,
+    order: TaskOrder,
+    routing_result: dict[str, Any] | None,
+    business_task: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    task_type = _routing_decision_task_type(order, business_task)
+    metric_key = _routing_decision_metric_key(order, business_task)
+    if not task_type or not metric_key:
+        return None
+
+    selected_topology_id = _selected_compute_topology_id(routing_result)
+    rows = await db.execute(
+        select(NodeModel)
+        .where(
+            NodeModel.deleted_at.is_(None),
+            NodeModel.is_schedulable == True,
+            NodeModel.is_routable == True,
+        )
+        .order_by(NodeModel.hostname.asc())
+    )
+    compute_nodes = [node for node in rows.scalars().all() if _node_can_host_compute(node)]
+    if not compute_nodes:
+        return None
+
+    node_ids = [node.id for node in compute_nodes]
+    baseline_rows = await db.execute(
+        select(NodeBaseline).where(
+            NodeBaseline.node_id.in_(node_ids),
+            NodeBaseline.task_type == task_type,
+            NodeBaseline.metric_key == metric_key,
+        )
+    )
+    baselines_by_node_id: dict[str, NodeBaseline] = {}
+    for baseline in baseline_rows.scalars().all():
+        baselines_by_node_id.setdefault(baseline.node_id, baseline)
+
+    baseline_values = list(baselines_by_node_id.values())
+    better_direction = _baseline_better_direction(
+        metric_key,
+        baseline_values[0].operator if baseline_values else None,
+    )
+    reverse = better_direction == "higher"
+
+    ranked_nodes = [
+        (node, baselines_by_node_id.get(node.id))
+        for node in compute_nodes
+        if baselines_by_node_id.get(node.id) is not None
+    ]
+    ranked_nodes.sort(
+        key=lambda item: item[1].baseline_value if item[1] else 0,
+        reverse=reverse,
+    )
+    rank_by_node_id = {node.id: index + 1 for index, (node, _) in enumerate(ranked_nodes)}
+
+    nodes_by_key: dict[str, NodeModel] = {}
+    for node in compute_nodes:
+        nodes_by_key[node.hostname] = node
+        nodes_by_key[node.id] = node
+        if node.topology_node_id:
+            nodes_by_key[node.topology_node_id] = node
+    selected_node = nodes_by_key.get(selected_topology_id or "") if selected_topology_id else None
+    selected_baseline = baselines_by_node_id.get(selected_node.id) if selected_node else None
+    selected_rank = rank_by_node_id.get(selected_node.id) if selected_node else None
+
+    metric_label = _metric_display_name(metric_key)
+    unit = selected_baseline.unit if selected_baseline else (baseline_values[0].unit if baseline_values else None)
+    if selected_baseline and selected_rank:
+        if selected_rank == 1 and better_direction == "lower":
+            headline = "低时延表现最优"
+            description = (
+                f"该节点在同类算力节点中历史 {metric_label} 排名第 1 / {len(ranked_nodes)}，"
+                "适合低时延相关策略。"
+            )
+        elif selected_rank == 1:
+            headline = "计算吞吐表现最优"
+            description = (
+                f"该节点在同类算力节点中历史 {metric_label} 排名第 1 / {len(ranked_nodes)}，"
+                "适合计算能力优先或完成时间优先的任务。"
+            )
+        else:
+            headline = "已分配节点能力画像"
+            description = (
+                f"该节点在同类算力节点中历史 {metric_label} 排名第 {selected_rank} / {len(ranked_nodes)}，"
+                "下表展示候选节点基线表现，便于核对当前策略下的分配结果。"
+            )
+    elif selected_node:
+        headline = "已分配计算节点，等待基线数据"
+        description = "当前节点已完成分配，但暂未找到该任务类型的历史基线，请先在业务测评页完成基线测试。"
+    else:
+        headline = "等待计算节点分配"
+        description = "完成节点分配后，这里会根据本系统历史基线展示算力节点匹配结果。"
+
+    candidate_rows = []
+    for node, baseline in ranked_nodes:
+        candidate_rows.append({
+            "node_id": node.id,
+            "node_name": _node_display_name(node),
+            "hostname": node.hostname,
+            "topology_node_id": node.topology_node_id or node.hostname,
+            "baseline": _baseline_summary(baseline),
+            "rank": rank_by_node_id.get(node.id),
+            "selected": bool(selected_node and node.id == selected_node.id),
+            "gpu_count": node.gpu_count,
+            "gpu_model": node.gpu_model,
+        })
+
+    return {
+        "title": "算力节点能力画像",
+        "task_type": task_type,
+        "metric_key": metric_key,
+        "metric_label": metric_label,
+        "unit": unit,
+        "better_direction": better_direction,
+        "selected_node": _node_identity(selected_node) if selected_node else None,
+        "selected_baseline": _baseline_summary(selected_baseline),
+        "selected_rank": selected_rank,
+        "candidate_count": len(ranked_nodes),
+        "headline": headline,
+        "description": description,
+        "candidate_rows": candidate_rows,
+        "missing_baseline_count": max(len(compute_nodes) - len(ranked_nodes), 0),
+    }
+
+
 def _placement_topology_key(value: dict[str, Any]) -> str | None:
     raw = value.get("topology_node_id") or value.get("hostname")
     return str(raw) if raw else None
@@ -768,6 +928,12 @@ async def get_order(
     detail.business_task = business_task if isinstance(business_task, dict) else None
     detail.routing_result = routing_result if isinstance(routing_result, dict) else None
     detail.routing_decision = await _build_routing_decision_summary(
+        db,
+        order,
+        detail.routing_result,
+        detail.business_task,
+    )
+    detail.node_capability_profile = await _build_node_capability_profile(
         db,
         order,
         detail.routing_result,

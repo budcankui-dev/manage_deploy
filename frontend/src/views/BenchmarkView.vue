@@ -186,14 +186,6 @@
         </div>
         <p>{{ routeModeDescription }}</p>
       </div>
-      <div class="execution-control-row">
-        <span class="control-label">批次执行设置</span>
-        <span>每批最多任务数</span>
-        <el-input-number v-model="executionForm.max_parallel" :min="1" :max="10" controls-position="right" />
-        <span>同一GPU并发数</span>
-        <el-input-number v-model="executionForm.per_compute_slot_limit" :min="1" :max="4" controls-position="right" />
-        <span class="muted">GPU 任务默认每个工单使用 1 张 GPU；同一 GPU 并发数来自系统设置，验收建议保持 1。</span>
-      </div>
       <div class="status-grid">
         <div class="status-cell waiting">
           <div class="status-num">{{ executionStats.waitingRoute }}</div>
@@ -216,7 +208,7 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会按每批最多任务数分批启动，并避免多个 GPU 任务同时争用同一张 GPU。</p>
+      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会自动分批执行，GPU 任务默认每个工单使用 1 张 GPU。</p>
       <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
     </el-card>
 

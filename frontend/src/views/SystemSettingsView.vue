@@ -62,24 +62,6 @@
             <h3>业务测评执行</h3>
             <div class="execution-defaults">
               <label>
-                <span>默认任务数</span>
-                <el-input-number
-                  v-model="form.benchmark_execution_defaults.default_task_count"
-                  :min="1"
-                  :max="30"
-                  controls-position="right"
-                />
-              </label>
-              <label>
-                <span>每批最多任务数</span>
-                <el-input-number
-                  v-model="form.benchmark_execution_defaults.max_parallel"
-                  :min="1"
-                  :max="10"
-                  controls-position="right"
-                />
-              </label>
-              <label>
                 <span>同一GPU并发数</span>
                 <el-input-number
                   v-model="form.benchmark_execution_defaults.per_compute_slot_limit"
@@ -90,7 +72,7 @@
               </label>
             </div>
             <p class="form-hint">
-              验收口径默认创建 30 个测评工单；GPU 任务每个工单默认使用 1 张 GPU，建议同一 GPU 并发数保持 1，避免并发争用影响基线判定。
+              GPU 任务每个工单默认使用 1 张 GPU，建议同一 GPU 并发数保持 1，避免并发争用影响基线判定。测评工单数量和分批执行策略由系统按验收口径自动处理。
             </p>
           </el-card>
 

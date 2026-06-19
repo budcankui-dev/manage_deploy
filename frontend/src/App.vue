@@ -140,6 +140,7 @@ body::-webkit-scrollbar-thumb:hover {
   display: flex;
   height: 100vh;
   background: var(--bg-primary);
+  isolation: isolate;
 }
 
 .app-container.plain-container {
@@ -149,11 +150,14 @@ body::-webkit-scrollbar-thumb:hover {
 
 .sidebar {
   width: 220px;
+  flex: 0 0 220px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   padding: 24px 16px;
+  position: relative;
+  z-index: 20;
 }
 
 .logo {
@@ -191,6 +195,10 @@ body::-webkit-scrollbar-thumb:hover {
   font-size: 14px;
   font-weight: 500;
   transition: all 0.2s ease;
+  position: relative;
+  z-index: 1;
+  cursor: pointer;
+  user-select: none;
 }
 
 .nav-item:hover {
@@ -243,6 +251,8 @@ body::-webkit-scrollbar-thumb:hover {
   min-width: 0;
   overflow-y: auto;
   padding: 32px;
+  position: relative;
+  z-index: 1;
 }
 
 .plain-container .main-content {
