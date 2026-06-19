@@ -141,13 +141,13 @@
                 <span>{{ row.dst_host || '-' }}</span>
                 <code v-if="row.dst_ip && row.dst_port">{{ formatHostPort(row.dst_ip, row.dst_port) }}</code>
                 <code v-else-if="row.dst_ip">{{ formatHost(row.dst_ip) }}</code>
-                <code v-else-if="row.dst_callback_url">{{ row.dst_callback_url }}</code>
-                <span v-else class="muted">{{ row.dst_external ? '外部端点未提供回调地址' : '等待端口分配' }}</span>
+                <code v-else-if="row.dst_access_url">{{ row.dst_access_url }}</code>
+                <span v-else class="muted">{{ row.dst_external ? '外部端点未提供接收地址' : '等待端口分配' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="接入/回调地址" min-width="280">
+            <el-table-column label="接入地址" min-width="280">
               <template #default="{ row }">
-                <el-tag v-if="row.dst_callback_url" type="warning" size="small" effect="plain">回调</el-tag>
+                <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部接收</el-tag>
                 <code v-if="row.dst_access_url">{{ row.dst_access_url }}</code>
                 <span v-else class="muted">-</span>
               </template>
@@ -566,8 +566,8 @@ const userAccessHints = computed(() => {
       hints.push(`源端向计算服务提交业务输入：${base}/data（按任务参数提交）`)
       hints.push(`任务完成后可查看计算服务结果：${base}/result`)
     }
-    if (row.dst_external && row.dst_callback_url) {
-      hints.push(`业务完成后会把结果回调到目的端：${row.dst_callback_url}`)
+    if (row.dst_external && row.dst_access_url) {
+      hints.push(`业务完成后可打开目的端容器页面查看结果：${row.dst_access_url}`)
     }
   })
   if (isComputeOnlyDeployment.value) {

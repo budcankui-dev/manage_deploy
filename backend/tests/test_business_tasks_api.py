@@ -1726,7 +1726,7 @@ async def test_compute_only_external_sink_binding_uses_callback_url(client, db_s
     assert sink_binding["dst_external"] is True
     assert sink_binding["dst_host"] == "user-sink"
     assert sink_binding["dst_callback_url"] == callback_url
-    assert sink_binding["dst_access_url"] == callback_url
+    assert sink_binding["dst_access_url"] == "https://user.example.test/result-callback"
 
 
 @pytest.mark.asyncio

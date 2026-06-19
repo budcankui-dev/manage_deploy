@@ -800,7 +800,7 @@ routing_resource_events(
 
 `topology_node_id` 建议填写平台 `nodes.hostname` 中的业务别名（如 `h1`、`compute-1`）。平台也会兼容 `nodes.topology_node_id` 和节点 UUID，但对接时请固定一种口径，避免日志排查混乱。如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
 
-用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把 `callback_url=http://[<sink-business-ipv6>]:9000` 注入 compute；浏览器打开该地址即可查看 receiver 页面，receiver 也会在根路径接收 compute 推送结果。`/callback` 仅作为旧脚本兼容路径保留。路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
+用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把内部回调地址 `callback_url=http://[<sink-business-ipv6>]:9000/callback` 注入 compute；用户界面和 `network_bindings.dst_access_url` 展示的是容器首页地址 `http://[<sink-business-ipv6>]:9000`，浏览器打开即可查看 receiver 页面。路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
 
 ### 8.2 `source -> sink`
 
@@ -919,7 +919,7 @@ Content-Type: application/json
 | `src_host` / `dst_host` | 平台节点别名，对应 `nodes.hostname`。 |
 | `src_ip` / `dst_ip` | 数据面 IP，受平台 `PREFER_BUSINESS_IPV6` 配置影响。 |
 | `dst_port` / `dst_named_ports` | 目的端实际监听端口。平台部署的容器端口由平台动态分配；用户外部 sink 端口来自用户登记的 `business_port`。 |
-| `dst_access_url` | 平台建议的访问地址；如果用户提供 `callback_url`，这里会等于该回调地址。 |
+| `dst_access_url` | 用户可访问的服务地址；外部目的端场景下展示容器首页地址，不包含内部 `/callback` 路径。 |
 | `src_external` / `dst_external` | `true` 表示该端点不是本次平台部署的容器，而是用户或外部端点。 |
 
 路由系统拿到 `network_bindings` 后，应按其中的源/目的 IP、目的端口下发真实网络规则；如需差异化 QoS，可结合工单模态、`priority`、`routing_strategy` 和路由系统自身策略处理。策略字典见本文档第 2 节冻结约定，避免把“低时延转发模态”和“低时延转发策略”混为一个字段。

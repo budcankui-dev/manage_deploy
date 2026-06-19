@@ -90,24 +90,6 @@ def test_receiver_accepts_callback_and_serves_order_result(tmp_path):
     assert (tmp_path / "order-123.json").exists()
 
 
-def test_receiver_accepts_root_post_for_display_url(tmp_path):
-    port = _free_port()
-    ReceiverHandler.task_type = "high_throughput_matmul"
-    ReceiverHandler.store = ReceiverStore(tmp_path)
-    start_server(port, ReceiverHandler)
-
-    payload = {
-        "order_id": "order-root-post",
-        "task_type": "high_throughput_matmul",
-        "result": {"effective_gflops": 88.8},
-    }
-    status, posted = _request_json("POST", port, "/", payload)
-
-    assert status == 200
-    assert posted["status"] == "ok"
-    assert posted["order_id"] == "order-root-post"
-
-
 def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     port = _free_port()
     ReceiverHandler.task_type = "low_latency_video_pipeline"

@@ -143,7 +143,7 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self) -> None:
-        if self.path not in ("/", "/callback"):
+        if self.path != "/callback":
             self._send_json(404, {"error": "not found"})
             return
         content_length = int(self.headers.get("Content-Length", 0))

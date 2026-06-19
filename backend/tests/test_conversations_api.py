@@ -65,9 +65,9 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert sink_node["topology_node_id"] == "worker-c"
     assert sink_node["business_ip"] == "10.0.1.3"
     assert sink_node["business_port"] == 9000
-    assert sink_node["callback_url"] == "http://10.0.1.3:9000"
+    assert sink_node["callback_url"] == "http://10.0.1.3:9000/callback"
     assert order.runtime_config["platform_deployment"]["external_endpoints"]["sink"]["business_port"] == 9000
-    assert order.runtime_config["business_task"]["callback_url"] == "http://10.0.1.3:9000"
+    assert order.runtime_config["business_task"]["callback_url"] == "http://10.0.1.3:9000/callback"
 
     claim_response = await client.patch(f"/api/routing-orders/{conversation_id}/claim")
     assert claim_response.status_code == 200
@@ -284,13 +284,13 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
     assert draft["destination_name"] == "h3"
     assert draft["source_endpoint"]["business_ip"] == "10.112.126.124"
     assert draft["destination_endpoint"]["business_ip"] == "10.112.20.40"
-    assert draft["callback_url"] == "http://10.112.20.40:9000"
+    assert draft["callback_url"] == "http://10.112.20.40:9000/callback"
 
     refetch_response = await client.get(f"/api/conversations/{conversation_id}", headers=headers)
     assert refetch_response.status_code == 200
     refetched_draft = refetch_response.json()["latest_draft"]
     assert refetched_draft["runtime_plan"]["destination_port"] == 9000
-    assert refetched_draft["callback_url"] == "http://10.112.20.40:9000"
+    assert refetched_draft["callback_url"] == "http://10.112.20.40:9000/callback"
 
     confirm_response = await client.post(
         f"/api/conversations/{conversation_id}/confirm-intent",
@@ -314,7 +314,7 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
     assert sink_node["topology_alias"] == "h3"
     assert sink_node["business_ip"] == "10.112.20.40"
     assert sink_node["business_port"] == 9000
-    assert sink_node["callback_url"] == "http://10.112.20.40:9000"
+    assert sink_node["callback_url"] == "http://10.112.20.40:9000/callback"
 
 
 @pytest.mark.asyncio
@@ -389,7 +389,7 @@ async def test_confirm_intent_prefers_business_ipv6_for_callback_when_enabled(cl
     )
     assert patch_response.status_code == 200
     draft = patch_response.json()["latest_draft"]
-    assert draft["callback_url"] == "http://[2001:db8:215:6a01::12]:9000"
+    assert draft["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
 
     confirm_response = await client.post(
         f"/api/conversations/{conversation_id}/confirm-intent",
@@ -402,8 +402,8 @@ async def test_confirm_intent_prefers_business_ipv6_for_callback_when_enabled(cl
     sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
     assert sink_node["business_ip"] == "10.112.253.42"
     assert sink_node["business_ipv6"] == "2001:db8:215:6a01::12"
-    assert sink_node["callback_url"] == "http://[2001:db8:215:6a01::12]:9000"
-    assert order.runtime_config["business_task"]["callback_url"] == "http://[2001:db8:215:6a01::12]:9000"
+    assert sink_node["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
+    assert order.runtime_config["business_task"]["callback_url"] == "http://[2001:db8:215:6a01::12]:9000/callback"
 
 
 @pytest.mark.asyncio
@@ -454,7 +454,7 @@ async def test_update_draft_can_clear_destination_port_and_generated_callback(cl
         headers=headers,
     )
     assert set_response.status_code == 200
-    assert set_response.json()["latest_draft"]["callback_url"] == "http://10.112.220.40:9000"
+    assert set_response.json()["latest_draft"]["callback_url"] == "http://10.112.220.40:9000/callback"
 
     clear_response = await client.patch(
         f"/api/conversations/{conversation_id}/draft",
@@ -558,7 +558,7 @@ async def test_update_draft_rejects_invalid_callback_url(client, db_session, mon
     )
 
     assert patch_response.status_code == 400
-    assert "回调地址必须" in patch_response.json()["detail"]
+    assert "目的端接收地址必须" in patch_response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -715,7 +715,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     ).scalar_one()
     sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
     assert sink_node["business_port"] == 9100
-    assert sink_node["callback_url"] == "http://10.0.1.3:9100"
+    assert sink_node["callback_url"] == "http://10.0.1.3:9100/callback"
 
 
 @pytest.mark.asyncio

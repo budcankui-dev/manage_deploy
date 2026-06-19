@@ -106,7 +106,9 @@ def _normalize_callback_url(value: str | None) -> str | None:
         return None
     parsed = urlparse(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="回调地址必须是 http:// 或 https:// 开头的完整 URL")
+        raise HTTPException(status_code=400, detail="目的端接收地址必须是 http:// 或 https:// 开头的完整 URL")
+    if parsed.path in {"", "/"}:
+        return text.rstrip("/") + "/callback"
     return text
 
 
@@ -173,7 +175,7 @@ def _callback_url_for_destination(endpoint: ResolvedEndpoint, port: int) -> str:
         raise EndpointResolutionError("Destination endpoint has no data-plane IP")
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{port}"
+    return f"http://{host}:{port}/callback"
 
 
 async def _resolve_endpoint_from_plan(

@@ -194,6 +194,15 @@ def _external_callback_url(order: TaskOrder, role: str, dag_nodes: dict[str, dic
     return str(value) if value else None
 
 
+def _display_url_from_callback_url(callback_url: str | None) -> str | None:
+    if not callback_url:
+        return None
+    text = str(callback_url).strip()
+    if text.endswith("/callback"):
+        return text[: -len("/callback")]
+    return text.rstrip("/")
+
+
 def _binding_for_roles(
     *,
     order: TaskOrder,
@@ -251,7 +260,7 @@ def _binding_for_roles(
     src_callback_url = _external_callback_url(order, src_role, dag_nodes) if src_node is None else None
     dst_callback_url = _external_callback_url(order, dst_role, dag_nodes) if dst_node is None else None
     dst_access_url = (
-        dst_callback_url
+        _display_url_from_callback_url(dst_callback_url)
         or (format_service_url(dst_ip, primary_port) if dst_ip and primary_port else None)
     )
 
