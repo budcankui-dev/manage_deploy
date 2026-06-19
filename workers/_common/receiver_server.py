@@ -143,7 +143,7 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self) -> None:
-        if self.path != "/callback":
+        if self.path not in ("/", "/callback"):
             self._send_json(404, {"error": "not found"})
             return
         content_length = int(self.headers.get("Content-Length", 0))
@@ -576,7 +576,7 @@ def _render_receiver_info(config: ReceiverConfig, callback_url: str, order_id: s
         <div class="metric"><span>数据面 IPv6</span><strong>{escape(config.business_ipv6 or "未注入")}</strong></div>
         <div class="metric"><span>数据面 IPv4</span><strong>{escape(config.business_ip or "未注入")}</strong></div>
         <div class="metric"><span>监听端口</span><strong>{escape(str(config.port))}</strong></div>
-        <div class="metric"><span>回调地址</span><strong>{escape(callback_url)}</strong></div>
+        <div class="metric"><span>结果接收地址</span><strong>{escape(callback_url)}</strong></div>
         <div class="metric"><span>当前工单查询接口</span><strong>/orders/{order_id}</strong></div>
       </div>
     """
@@ -910,7 +910,7 @@ def _callback_url(config: ReceiverConfig) -> str:
         return f"本机监听端口 {config.port}，未注入数据面地址"
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{config.port}/callback"
+    return f"http://{host}:{config.port}"
 
 
 def _is_safe_raster_data_url(value: str) -> bool:

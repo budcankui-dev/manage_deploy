@@ -137,14 +137,15 @@ export function describeDataProfile(taskType, profile) {
     ])
   }
   if (taskType === 'low_latency_video_pipeline') {
+    const videoSpec = [profile.resolution, profile.fps != null ? `${profile.fps}fps` : null].filter(Boolean).join(' / ')
     return compactRows([
-      { label: '分辨率', value: profile.resolution || '-' },
-      { label: '总帧数', value: String(profile.frame_count ?? '-') },
+      { label: '输入视频规格', value: videoSpec || '-' },
+      { label: '本次抽检帧数', value: profile.frame_count != null ? `${profile.frame_count} 帧` : '-' },
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
       { label: '预热帧数', value: String(profile.warmup_frames ?? '-') },
       { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
-      { label: '推理模型', value: profile.model_name || 'yolov5n' },
-      { label: '测试视频', value: profile.video_asset || '-' },
+      { label: '固定测试视频', value: profile.video_asset || 'bottle-detection.mp4' },
+      { label: '检测模型', value: profile.model_name || 'yolov5n' },
     ])
   }
   return Object.entries(profile).map(([key, value]) => ({
@@ -301,8 +302,6 @@ export function buildMatmulVerdict(evaluation) {
 export function buildVideoInputRows(dataProfile) {
   const rows = describeDataProfile('low_latency_video_pipeline', dataProfile || {})
   const profile = dataProfile || {}
-  if (profile.video_asset) rows.push({ label: '固定测试视频', value: profile.video_asset })
-  if (profile.model_name) rows.push({ label: '检测模型', value: profile.model_name })
   if (profile.inference_mode) rows.push({ label: '推理模式', value: profile.inference_mode })
   return rows
 }

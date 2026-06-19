@@ -800,7 +800,7 @@ routing_resource_events(
 
 `topology_node_id` 建议填写平台 `nodes.hostname` 中的业务别名（如 `h1`、`compute-1`）。平台也会兼容 `nodes.topology_node_id` 和节点 UUID，但对接时请固定一种口径，避免日志排查混乱。如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
 
-用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把 `callback_url=http://[<sink-business-ipv6>]:9000/callback` 注入 compute；路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
+用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把 `callback_url=http://[<sink-business-ipv6>]:9000` 注入 compute；浏览器打开该地址即可查看 receiver 页面，receiver 也会在根路径接收 compute 推送结果。`/callback` 仅作为旧脚本兼容路径保留。路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
 
 ### 8.2 `source -> sink`
 

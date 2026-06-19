@@ -271,7 +271,7 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 
 脚本会创建对话工单、确认 `user_access_demo` + `deployable_roles=["compute"]`、模拟仅 compute 的路由回写，并断言 `network_bindings` 含 `src_external=true` 与 `dst_access_url`。
 
-如需演示外部目的端回调，用户端对话页会按任务类型固定目的端接收端口：矩阵计算 `9000`，视频推理 `9100`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
+如需演示外部目的端回调，用户端对话页会按任务类型固定目的端接收端口：矩阵计算 `9000`，视频推理 `9100`。确认意图和路由回写后，工单详情应展示 `compute -> sink` 链路的 `dst_callback_url`，默认形式为 `http://<目的端数据面IP>:<端口>`，浏览器直接打开该地址即可查看 receiver 页面。compute 容器环境变量中应包含 `CALLBACK_URL` / `SINK_CALLBACK_URL`。compute-only 容器默认注入 `PEER_WAIT_TIMEOUT_SEC=3600`，允许外部用户端在工单启动后稍晚提交输入；无受控 sink 时，compute 会先上报平台指标，再短超时 best-effort POST 外部回调。
 
 目的端 receiver 冒烟可在本机或终端节点上运行：
 
@@ -294,7 +294,7 @@ PYTHONPATH=workers python3 workers/low-latency-video/src/receiver_main.py --port
 矩阵 receiver 另开终端发送回调：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:9000/callback \
+curl -sS -X POST http://127.0.0.1:9000/ \
   -H 'Content-Type: application/json' \
   -d '{"order_id":"demo-order","metric_key":"effective_gflops","result":{"effective_gflops":123.4}}'
 curl -sS http://127.0.0.1:9000/latest | python3 -m json.tool
@@ -303,13 +303,13 @@ curl -sS http://127.0.0.1:9000/latest | python3 -m json.tool
 视频 receiver 另开终端发送回调：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:9100/callback \
+curl -sS -X POST http://127.0.0.1:9100/ \
   -H 'Content-Type: application/json' \
   -d '{"order_id":"demo-video-order","metric_key":"frame_latency_p90_ms","result":{"frame_latency_p90_ms":12.3}}'
 curl -sS http://127.0.0.1:9100/latest | python3 -m json.tool
 ```
 
-期望：`POST /callback` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID、节点别名、拓扑节点 ID、数据面 IPv6/IPv4、监听端口和指标值；视频回调如果包含 `annotated_frame_data_url` / `preview_frames` / `samples` / `detections`，首页会展示带框预览图、原始测试视频、抽帧检测证据、推理时延趋势和检测目标列表。同一固定端口接收多个工单时，首页默认展示最近结果，页面顶部“切换已接收工单”下拉可切换历史结果；脚本排查使用 `/latest` 或 `/orders/{order_id}`。
+期望：`POST /` 返回 `status=ok`。浏览器打开矩阵 receiver 的 `http://127.0.0.1:9000/` 或视频 receiver 的 `http://127.0.0.1:9100/`，能看到“用户端结果接收器”、工单 ID、节点别名、拓扑节点 ID、数据面 IPv6/IPv4、监听端口和指标值；视频回调如果包含 `annotated_frame_data_url` / `preview_frames` / `samples` / `detections`，首页会展示带框预览图、原始测试视频、抽帧检测证据、推理时延趋势和检测目标列表。同一固定端口接收多个工单时，首页默认展示最近结果，页面顶部“切换已接收工单”下拉可切换历史结果；脚本排查使用 `/latest` 或 `/orders/{order_id}`。为兼容旧脚本，receiver 仍接受 `POST /callback`。
 
 视频 compute-only 用户演示模式支持 `event_type=progress` 实时进度回调和 `event_type=final` 最终回调。receiver 页面可以用 progress 展示运行中增长的样本，但平台业务目标成功率、工单最终指标和验收结论只以 final 结果为准。
 

@@ -167,9 +167,30 @@
               {{ row.created_at ? formatTime(row.created_at) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="80" fixed="right">
+          <el-table-column label="操作" width="190" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" @click.stop="openOrderDetail(row)">详情</el-button>
+              <div class="order-row-actions">
+                <el-button size="small" @click.stop="openOrderDetail(row)">详情</el-button>
+                <el-button
+                  v-if="canCancelOrder(row)"
+                  size="small"
+                  type="warning"
+                  plain
+                  :loading="orderActionLoading === `cancel:${row.order_id || row.id}`"
+                  @click.stop="cancelSelectedOrder(row)"
+                >
+                  取消工单
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="orderActionLoading === `delete:${row.order_id || row.id}`"
+                  @click.stop="deleteSelectedOrder(row)"
+                >
+                  删除
+                </el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -246,7 +267,7 @@
                 <p v-if="draft?.business_start_time"><span class="param-label">时间：</span>{{ formatTime(draft.business_start_time) }}{{ draft.business_end_time ? ' ~ ' + formatTime(draft.business_end_time) : '' }}</p>
                 <p v-for="row in draftDataProfileRows" :key="row.label"><span class="param-label">{{ row.label }}：</span>{{ row.value }}</p>
                 <p v-if="destinationReceiverText"><span class="param-label">结果接收：</span>{{ destinationReceiverText }}</p>
-                <p v-if="effectiveCallbackUrl"><span class="param-label">回调地址：</span>{{ effectiveCallbackUrl }}</p>
+                <p v-if="effectiveCallbackUrl"><span class="param-label">目的端接收地址：</span>{{ effectiveCallbackUrl }}</p>
               </div>
               <el-collapse class="submit-options-collapse">
                 <el-collapse-item title="高级提交选项" name="submit-options">
@@ -278,7 +299,7 @@
                           </el-form-item>
                         </el-col>
                         <el-col :span="14">
-                          <el-form-item label="目的端回调地址">
+                          <el-form-item label="目的端接收地址">
                             <el-input
                               v-model="endpointForm.callback_url"
                               placeholder="默认按目的端 IP 和端口生成"
@@ -405,27 +426,6 @@
             <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small">
               {{ formatOrderStatus(selectedOrderDetail.status) }}
             </el-tag>
-          </div>
-          <div v-if="selectedOrderDetail" class="drawer-actions">
-            <el-button
-              v-if="canCancelSelectedOrder"
-              type="warning"
-              plain
-              size="small"
-              :loading="orderActionLoading === 'cancel'"
-              @click.stop="cancelSelectedOrder"
-            >
-              取消工单
-            </el-button>
-            <el-button
-              type="danger"
-              plain
-              size="small"
-              :loading="orderActionLoading === 'delete'"
-              @click.stop="deleteSelectedOrder"
-            >
-              删除工单
-            </el-button>
           </div>
         </div>
       </template>
@@ -595,7 +595,7 @@ const supportedTaskHints = [
   {
     type: 'low_latency_video_pipeline',
     label: taskTypeLabel('low_latency_video_pipeline'),
-    hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、分辨率、帧数和帧率。',
+    hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、固定视频规格、抽检帧数和帧率。',
   },
 ]
 
@@ -640,13 +640,15 @@ const destinationReceiverText = computed(() => {
   return `${name}（${destinationHost.value}:${destinationPort.value}）`
 })
 const effectiveCallbackUrl = computed(() => {
+  let url = ''
   if (endpointForm.value.callback_url_customized && endpointForm.value.callback_url) {
-    return endpointForm.value.callback_url
+    url = endpointForm.value.callback_url
+  } else if (destinationHost.value && destinationPort.value) {
+    url = `http://${formatCallbackHost(destinationHost.value)}:${destinationPort.value}`
+  } else {
+    url = draft.value?.callback_url || draft.value?.runtime_plan?.callback_url || ''
   }
-  if (destinationHost.value && destinationPort.value) {
-    return `http://${formatCallbackHost(destinationHost.value)}:${destinationPort.value}/callback`
-  }
-  return draft.value?.callback_url || draft.value?.runtime_plan?.callback_url || ''
+  return normalizeReceiverHomeUrl(url)
 })
 const sourceExecutionHint = computed(() => formatExecutionHint('源端', draft.value?.source_name, draft.value?.source_endpoint))
 const destinationExecutionHint = computed(() => formatExecutionHint('目的端', draft.value?.destination_name, draft.value?.destination_endpoint))
@@ -717,7 +719,6 @@ const conversationInputLockMessage = computed(() =>
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
-const canCancelSelectedOrder = computed(() => selectedOrderDetail.value?.status === 'pending')
 const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13'))
 const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
 
@@ -772,7 +773,9 @@ function syncEndpointFormFromDraft(currentDraft) {
   const runtimePlan = currentDraft?.runtime_plan || {}
   const savedCallbackUrl = currentDraft?.callback_url || runtimePlan.callback_url || ''
   const defaultCallbackUrl = buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan)
-  const callbackCustomized = Boolean(savedCallbackUrl && savedCallbackUrl !== defaultCallbackUrl)
+  const callbackCustomized = Boolean(
+    savedCallbackUrl && normalizeReceiverHomeUrl(savedCallbackUrl) !== normalizeReceiverHomeUrl(defaultCallbackUrl)
+  )
   endpointForm.value = {
     source_endpoint_input: runtimePlan.source_endpoint_input || currentDraft?.source_name || '',
     destination_endpoint_input: runtimePlan.destination_endpoint_input || currentDraft?.destination_name || '',
@@ -885,7 +888,7 @@ function getDraftValidationErrors(currentDraft) {
     if (numericPort === null || numericPort < 1 || numericPort > 65535) add('目的端口需要是 1-65535 之间的整数')
   }
   const callbackUrl = runtimePlan.callback_url || currentDraft.callback_url
-  if (callbackUrl && !isHttpUrl(callbackUrl)) add('目的端回调地址需要是 http:// 或 https:// 开头的完整地址')
+  if (callbackUrl && !isHttpUrl(callbackUrl)) add('目的端接收地址需要是 http:// 或 https:// 开头的完整地址')
   if (isBlankValue(currentDraft.business_start_time)) add('开始时间不能为空')
   if (isBlankValue(currentDraft.business_end_time)) add('结束时间不能为空')
   if (!isBlankValue(currentDraft.business_start_time) && !isBlankValue(currentDraft.business_end_time)) {
@@ -912,11 +915,26 @@ function formatCallbackHost(host) {
   return text.includes(':') && !text.startsWith('[') ? `[${text}]` : text
 }
 
+function normalizeReceiverHomeUrl(value) {
+  if (!value) return ''
+  try {
+    const parsed = new URL(String(value))
+    if (parsed.pathname === '/callback') {
+      parsed.pathname = '/'
+      parsed.search = ''
+      parsed.hash = ''
+    }
+    return parsed.toString().replace(/\/$/, '')
+  } catch {
+    return value
+  }
+}
+
 function buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan = {}) {
   const endpoint = currentDraft?.destination_endpoint || {}
   const host = endpoint.business_ipv6 || endpoint.business_ip || currentDraft?.destination_name
   const port = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type]
-  return host && port ? `http://${formatCallbackHost(host)}:${port}/callback` : ''
+  return host && port ? `http://${formatCallbackHost(host)}:${port}` : ''
 }
 
 function formatEndpoint(endpoint, fallback) {
@@ -1006,10 +1024,22 @@ function combinedStatusLabel(row) {
 
 function isRouteOnlyWaitingOrder(order) {
   const deployment = order?.runtime_config?.platform_deployment
-  return order?.status === 'pending'
+  return getOrderStatus(order) === 'pending'
     && order?.routing_status === 'completed'
     && deployment?.mode === 'route_only'
     && order?.materialized_instance_id == null
+}
+
+function getOrderStatus(order) {
+  return order?.status || order?.order_status || ''
+}
+
+function getOrderId(order) {
+  return order?.id || order?.order_id || ''
+}
+
+function canCancelOrder(order) {
+  return getOrderStatus(order) === 'pending'
 }
 
 function formatTaskStatus(status) {
@@ -1179,8 +1209,9 @@ async function refreshSelectedOrderDetail() {
   await openOrderDetail({ id: selectedOrderId.value })
 }
 
-async function cancelSelectedOrder() {
-  if (!selectedOrderId.value || orderActionLoading.value) return
+async function cancelSelectedOrder(order = null) {
+  const targetOrderId = getOrderId(order) || selectedOrderId.value
+  if (!targetOrderId || orderActionLoading.value) return
   try {
     await ElMessageBox.confirm('确定取消此工单？取消后不会继续分配或启动计算节点。', '确认取消工单', {
       confirmButtonText: '取消工单',
@@ -1191,13 +1222,15 @@ async function cancelSelectedOrder() {
     return
   }
 
-  orderActionLoading.value = 'cancel'
+  orderActionLoading.value = `cancel:${targetOrderId}`
   try {
-    await ordersApi.cancel(selectedOrderId.value)
+    await ordersApi.cancel(targetOrderId)
     ElMessage.success('工单已取消')
     await loadOrders()
-    await refreshSelectedOrderDetail()
-    if (conversation.value?.materialized_order_id === selectedOrderId.value) {
+    if (selectedOrderId.value === targetOrderId) {
+      await refreshSelectedOrderDetail()
+    }
+    if (conversation.value?.materialized_order_id === targetOrderId) {
       await loadConversation(conversation.value.id)
     }
   } catch (err) {
@@ -1207,9 +1240,10 @@ async function cancelSelectedOrder() {
   }
 }
 
-async function deleteSelectedOrder() {
-  if (!selectedOrderId.value || orderActionLoading.value) return
-  const deletingOrderId = selectedOrderId.value
+async function deleteSelectedOrder(order = null) {
+  if (orderActionLoading.value) return
+  const deletingOrderId = getOrderId(order) || selectedOrderId.value
+  if (!deletingOrderId) return
   try {
     await ElMessageBox.confirm(
       '删除工单前会先停止并清理该工单关联的部署实例；如果容器清理失败，工单不会被删除。继续吗？',
@@ -1225,14 +1259,16 @@ async function deleteSelectedOrder() {
     return
   }
 
-  orderActionLoading.value = 'delete'
+  orderActionLoading.value = `delete:${deletingOrderId}`
   try {
     await ordersApi.delete(deletingOrderId)
     ElMessage.success('工单已删除')
-    orderDrawerVisible.value = false
-    selectedOrderId.value = null
-    selectedOrderDetail.value = null
-    orderResultObjects.value = []
+    if (selectedOrderId.value === deletingOrderId) {
+      orderDrawerVisible.value = false
+      selectedOrderId.value = null
+      selectedOrderDetail.value = null
+      orderResultObjects.value = []
+    }
     await loadOrders()
     if (conversation.value?.materialized_order_id === deletingOrderId) {
       await loadConversation(conversation.value.id)
@@ -1858,6 +1894,17 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+.order-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.order-row-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
 .orders-detail-content {
   display: flex;
   flex-direction: column;
@@ -2079,6 +2126,9 @@ onBeforeUnmount(() => {
   flex: 1 1 220px;
   min-width: 0;
 }
+.confirm-text > strong {
+  color: #0f172a;
+}
 .confirm-text p {
   margin: 4px 0 0;
   font-size: 13px;
@@ -2297,8 +2347,7 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.drawer-title-row,
-.drawer-actions {
+.drawer-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2309,10 +2358,6 @@ onBeforeUnmount(() => {
   min-width: 0;
   font-weight: 700;
   color: #111827;
-}
-
-.drawer-actions {
-  flex-shrink: 0;
 }
 
 :global(.node-popover) {

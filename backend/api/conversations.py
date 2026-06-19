@@ -173,7 +173,7 @@ def _callback_url_for_destination(endpoint: ResolvedEndpoint, port: int) -> str:
         raise EndpointResolutionError("Destination endpoint has no data-plane IP")
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{port}/callback"
+    return f"http://{host}:{port}"
 
 
 async def _resolve_endpoint_from_plan(
