@@ -344,6 +344,7 @@ VALID_ROUTING_STRATEGIES = {
 def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
     """Validate LLM output fields. Invalid fields are set to None (won't overwrite existing draft)."""
     cleaned = dict(raw)
+    validation_errors: list[str] = []
 
     allowed_task_types = {
         None,
@@ -363,11 +364,13 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
     # source_name: must be in valid_nodes (if provided and nodes list is non-empty)
     src = cleaned.get("source_name")
     if src and valid_nodes and src not in valid_nodes:
+        validation_errors.append(f"源节点不存在：{src}")
         cleaned["source_name"] = None
 
     # destination_name: same
     dst = cleaned.get("destination_name")
     if dst and valid_nodes and dst not in valid_nodes:
+        validation_errors.append(f"目的节点不存在：{dst}")
         cleaned["destination_name"] = None
 
     # start_time: must be "now" or valid ISO datetime string
@@ -429,6 +432,9 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
                 cleaned["end_time"] = None
         except Exception:
             pass
+
+    if validation_errors:
+        cleaned["_validation_errors"] = validation_errors
 
     return cleaned
 
@@ -585,8 +591,13 @@ def _raw_to_parse_result(
         "data_profile": result.data_profile,
         "runtime_plan": result.runtime_plan,
     }
-    result.validation_errors = validate_draft_fields(draft_dict)
+    result.validation_errors = [
+        *raw.get("_validation_errors", []),
+        *validate_draft_fields(draft_dict),
+    ]
     result.parse_status = "valid" if not result.validation_errors else "incomplete"
+    if result.validation_errors:
+        result.assistant_message = "已识别部分参数，请补充：" + "；".join(result.validation_errors)
     return result
 
 

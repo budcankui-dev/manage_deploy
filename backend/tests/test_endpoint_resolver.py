@@ -13,6 +13,7 @@ async def _add_node(
     business_ip: str,
     business_ipv6: str | None = None,
     is_routable: bool = True,
+    node_kind: str = "terminal",
 ):
     node = Node(
         hostname=hostname,
@@ -22,7 +23,7 @@ async def _add_node(
         business_ip=business_ip,
         business_ipv6=business_ipv6,
         topology_node_id=topology_node_id,
-        node_kind="terminal",
+        node_kind=node_kind,
         is_schedulable=True,
         is_routable=is_routable,
     )
@@ -140,3 +141,19 @@ async def test_resolve_endpoint_rejects_node_without_business_address(db_session
 
     with pytest.raises(EndpointResolutionError):
         await resolve_user_endpoint(db_session, "h7")
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_rejects_compute_node_as_user_endpoint(db_session):
+    await _add_node(
+        db_session,
+        hostname="compute-1",
+        topology_node_id="compute-1",
+        management_ip="172.16.1.21",
+        business_ip="10.112.38.25",
+        business_ipv6="2001:db8::21",
+        node_kind="worker",
+    )
+
+    with pytest.raises(EndpointResolutionError, match="源/目的端点只支持运营商节点"):
+        await resolve_user_endpoint(db_session, "compute-1")

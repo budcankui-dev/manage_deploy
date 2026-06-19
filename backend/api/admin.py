@@ -50,6 +50,7 @@ from services.intent_online_eval import (
     start_online_evaluation,
 )
 from services.intent_workflow import run_intent_workflow
+from services.endpoint_resolver import is_user_endpoint_node
 from services.routing_payload_builder import build_routing_payload
 from services.system_settings import (
     get_runtime_settings,
@@ -431,9 +432,9 @@ async def parse_one(
     expected = payload.get("expected")
     runtime_settings = await get_runtime_settings(db)
     nodes_result = await db.execute(
-        select(Node.hostname).where(Node.deleted_at.is_(None))
+        select(Node).where(Node.deleted_at.is_(None)).order_by(Node.hostname.asc())
     )
-    valid_nodes = [row[0] for row in nodes_result.fetchall()]
+    valid_nodes = [node.hostname for node in nodes_result.scalars().all() if is_user_endpoint_node(node)]
     result, trace = await run_intent_workflow(
         utterance,
         context,

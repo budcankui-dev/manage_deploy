@@ -21,6 +21,25 @@ async function loginByApi(request) {
   return login.json()
 }
 
+async function forceRuleParser(request) {
+  const auth = await loginByApi(request)
+  const current = await request.get('/api/admin/system-settings', {
+    headers: { Authorization: `Bearer ${auth.access_token}` },
+  })
+  expect(current.ok()).toBeTruthy()
+  const settings = await current.json()
+  const updated = await request.put('/api/admin/system-settings', {
+    headers: { Authorization: `Bearer ${auth.access_token}` },
+    data: {
+      ...settings,
+      intent_parser_mode: 'rule',
+      intent_rule_fallback_enabled: true,
+      benchmark_routing_mode: 'external',
+    },
+  })
+  expect(updated.ok()).toBeTruthy()
+}
+
 async function loginUserByApi(request, suffix = Date.now().toString(36)) {
   const user = process.env.E2E_USER_USERNAME || `intent-user-${suffix}`
   const userPassword = process.env.E2E_USER_PASSWORD || '123456'
@@ -41,14 +60,14 @@ async function loginUserByApi(request, suffix = Date.now().toString(36)) {
   return { ...(await login.json()), username: user }
 }
 
-async function createNode(request, suffix, index) {
+async function createNode(request, suffix, index, nodeKind) {
   const response = await request.post('/api/nodes', {
     data: {
       hostname: `intent-${suffix}-${index}`,
       agent_address: `http://127.0.0.1:81${index}`,
       management_ip: `10.20.${index}.1`,
       business_ip: `10.21.${index}.1`,
-      node_kind: 'both',
+      node_kind: nodeKind,
       is_schedulable: true,
       is_routable: true,
     },
@@ -60,9 +79,9 @@ async function createNode(request, suffix, index) {
 async function prepareMatmulCatalog(request) {
   const suffix = Date.now().toString(36)
   const nodes = [
-    await createNode(request, suffix, 1),
-    await createNode(request, suffix, 2),
-    await createNode(request, suffix, 3),
+    await createNode(request, suffix, 1, 'terminal'),
+    await createNode(request, suffix, 2, 'worker'),
+    await createNode(request, suffix, 3, 'terminal'),
   ]
 
   const templateResponse = await request.post('/api/templates', {
@@ -143,6 +162,7 @@ async function createConversation(request, token) {
 }
 
 test('intent chat parses matrix task and submits order', async ({ page, request }, testInfo) => {
+  await forceRuleParser(request)
   const auth = await loginUserByApi(request)
   const { source, destination } = await prepareMatmulCatalog(request)
   const conversation = await createConversation(request, auth.access_token)
@@ -191,8 +211,9 @@ test('intent chat parses matrix task and submits order', async ({ page, request 
   })
 })
 
-test('intent chat parses video task and demo-routes deployment', async ({ page, request }, testInfo) => {
-  const auth = await loginByApi(request)
+test('intent chat parses video task and submits order', async ({ page, request }, testInfo) => {
+  await forceRuleParser(request)
+  const auth = await loginUserByApi(request)
   const { source, destination } = await prepareMatmulCatalog(request)
   const conversation = await createConversation(request, auth.access_token)
 
@@ -220,22 +241,20 @@ test('intent chat parses video task and demo-routes deployment', async ({ page, 
   await expect(panel.locator('.intent-summary-row', { hasText: '任务类型' }).getByText('视频AI推理任务')).toBeVisible()
   await expect(panel.locator('.intent-summary-row', { hasText: '所属模态' }).getByText('低时延转发模态')).toBeVisible()
   await expect(panel.locator('.intent-summary-row', { hasText: '分辨率' }).getByText('720p')).toBeVisible()
-  await expect(panel.locator('.intent-summary-row', { hasText: '视频帧数' }).getByText('100')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '总帧数' }).getByText('100')).toBeVisible()
 
   await page.getByRole('button', { name: '确认提交任务' }).first().click()
   await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByRole('button', { name: '执行部署流程' }).first()).toBeVisible()
-
-  await page.getByRole('button', { name: '执行部署流程' }).first().click()
-  await expect(page.locator('.confirm-card').getByText('已部署')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.confirm-card').getByText('待分配')).toBeVisible()
 
   await page.screenshot({
-    path: testInfo.outputPath('intent-chat-video-demo-routed.png'),
+    path: testInfo.outputPath('intent-chat-video-submitted.png'),
     fullPage: true,
   })
 })
 
 test('intent chat keeps incomplete video draft unsubmitted and compactly shows node help', async ({ page, request }, testInfo) => {
+  await forceRuleParser(request)
   const auth = await loginUserByApi(request)
   const conversation = await createConversation(request, auth.access_token)
 
@@ -254,19 +273,20 @@ test('intent chat keeps incomplete video draft unsubmitted and compactly shows n
   await page.goto('/intent-chat')
   await expect(page.getByPlaceholder(/描述您的计算任务需求/)).toBeVisible()
   await expect(page.getByRole('button', { name: /可用节点/ })).toBeVisible()
-  await expect(page.getByText('终端节点：h1-h13')).toBeHidden()
+  await expect(page.getByText(/运营商节点：/)).toBeHidden()
 
   await page.getByRole('button', { name: /可用节点/ }).click()
-  await expect(page.getByText('终端节点：h1-h13')).toBeVisible()
-  await expect(page.getByText('计算节点：compute-1、compute-2、compute-3')).toBeVisible()
+  await expect(page.getByText(/运营商节点：/)).toBeVisible()
+  await expect(page.getByText(/计算节点：/)).toBeVisible()
+  await expect(page.getByText(/不作为源\/目的输入/)).toBeVisible()
 
   await page.getByPlaceholder(/描述您的计算任务需求/).fill('视频AI推理任务，从 h3 到 h4，720p视频，100帧，现在开始跑2小时，低时延策略')
   await page.getByRole('button', { name: '发送' }).click()
 
   await expect(page.getByText('参数待补充')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText('补全后系统才会允许提交任务')).toBeVisible()
   await expect(page.getByText('帧率不能为空（例如：30fps）').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '确认提交任务' })).toHaveCount(0)
-  await expect(page.getByText('请先补全参数')).toBeVisible()
 
   await page.screenshot({
     path: testInfo.outputPath('intent-chat-incomplete-video.png'),

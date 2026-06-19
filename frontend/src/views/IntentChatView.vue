@@ -321,7 +321,7 @@
           type="textarea"
           :autosize="{ minRows: 2, maxRows: 4 }"
           :disabled="isStreaming || conversationInputLocked"
-          :placeholder="conversationInputLocked ? '当前对话已生成工单，请新建对话继续提交新任务' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 compute-1 做视频推理...'"
+          :placeholder="conversationInputLocked ? '当前对话已生成工单，请新建对话继续提交新任务' : '描述您的计算任务需求，例如：从 h1 到 h2 运行矩阵计算，或从 h3 到 h4 做视频推理...'"
           @keydown.ctrl.enter="sendMessage"
         />
         <div class="composer-actions">
@@ -336,10 +336,10 @@
               </template>
               <div class="node-popover-body">
                 <strong>可用拓扑节点</strong>
-                <p>源节点和目的节点请使用已登记的别名、拓扑节点 ID 或业务面 IP，系统会按数据库校验。</p>
+                <p>源节点和目的节点请使用已登记的运营商节点别名、拓扑节点 ID 或业务面 IP，系统会按数据库校验。</p>
                 <div class="node-popover-tags">
-                  <span>终端节点：{{ terminalNodeHint }}</span>
-                  <span>计算节点：{{ computeNodeHint }}</span>
+                  <span>运营商节点：{{ operatorNodeHint }}</span>
+                  <span>计算节点：{{ computeNodeHint }}（由系统或路由模块选择，不作为源/目的输入）</span>
                 </div>
               </div>
             </el-popover>
@@ -532,7 +532,7 @@ function toggleOrders() { showOrders.value = !showOrders.value }
 const exampleChips = [
   '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
   '视频AI推理任务，从 h3 到 h4，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
-  '从 h5 到 compute-1 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
+  '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
   '从 h6 到 h7 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
@@ -654,7 +654,7 @@ const canCancelOrder = computed(() => {
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
-const terminalNodeHint = computed(() => nodeHintByKinds(['terminal', 'both'], 'h1-h13'))
+const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13'))
 const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
 
 watch(draft, syncEndpointFormFromDraft, { immediate: true })

@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Node
 
+USER_ENDPOINT_NODE_KINDS = {"terminal"}
+
 
 class EndpointResolutionError(ValueError):
     """Raised when a user endpoint is not registered as a routable data-plane node."""
@@ -34,6 +36,20 @@ class ResolvedEndpoint:
 
 def _clean(value: str | None) -> str:
     return str(value or "").strip()
+
+
+def _node_kind(node: Node) -> str:
+    return str(node.node_kind or "").strip().lower()
+
+
+def is_user_endpoint_node(node: Node) -> bool:
+    """Return whether a topology node may be selected as user source/sink."""
+
+    return (
+        node.deleted_at is None
+        and bool(node.is_routable)
+        and _node_kind(node) in USER_ENDPOINT_NODE_KINDS
+    )
 
 
 def _identity_for(node: Node, raw_value: str) -> ResolvedEndpoint:
@@ -75,6 +91,11 @@ async def resolve_user_endpoint(db: AsyncSession, value: str) -> ResolvedEndpoin
     node = row.scalar_one_or_none()
     if node is None:
         raise EndpointResolutionError(f"端点未登记为业务面拓扑节点：{text}")
+    if _node_kind(node) not in USER_ENDPOINT_NODE_KINDS:
+        raise EndpointResolutionError(
+            f"源/目的端点只支持运营商节点（如 h1-h13），{node.hostname} 是计算节点或非用户端点，"
+            "计算节点由系统或路由模块选择"
+        )
     if not node.is_routable:
         raise EndpointResolutionError(f"端点未启用业务面路由：{text}")
     if not (_clean(node.business_ip) or _clean(node.business_ipv6)):

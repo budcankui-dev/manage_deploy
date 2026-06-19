@@ -821,7 +821,7 @@ routing_resource_events(
 
 ### 8.3 `source -> compute`
 
-源节点是终端，目的侧承担计算角色。目的节点可以是物理计算节点。若平台只部署 compute 容器，则 `platform_deployment.deployable_roles=["compute"]`；路由系统只需要回写 compute：
+源节点是终端，目的侧承担计算角色。当前用户对话入口仍要求用户输入的源/目的端点来自 `h1-h13` 运营商节点或已登记业务面 IP；`compute-1~3` 作为算力节点由路由结果的 `compute` placement 表达，不作为用户源/目的槽位。若平台只部署 compute 容器，则 `platform_deployment.deployable_roles=["compute"]`；路由系统只需要回写 compute：
 
 ```json
 {

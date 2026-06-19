@@ -120,6 +120,33 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
 
 
 @pytest.mark.asyncio
+async def test_conversation_rejects_compute_node_as_source_or_destination_slot(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "intent_parser_engine", "rule")
+    await _set_runtime_settings(db_session, intent_parser_mode="rule")
+    headers, _user = await _auth_headers(client, db_session, username="compute-slot-user")
+    _node_ids, _template_id = await _seed_business_fixture(client)
+
+    create_response = await client.post("/api/conversations", json={"title": "错误端点"}, headers=headers)
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["id"]
+
+    message_response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "矩阵乘法任务，从 worker-a 到 worker-b，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        headers=headers,
+    )
+
+    assert message_response.status_code == 200
+    body = message_response.json()
+    draft = body["latest_draft"]
+    assert draft["parse_status"] == "incomplete"
+    assert draft["source_name"] == "worker-a"
+    assert draft["destination_name"] is None
+    assert "目的节点不存在：worker-b" in draft["validation_errors"]
+    assert "目的节点不存在：worker-b" in body["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_confirm_intent_preserves_explicit_callback_url(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "intent_parser_engine", "rule")
     headers, _user = await _auth_headers(client, db_session, username="callback-url-user")

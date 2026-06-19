@@ -27,7 +27,7 @@ from schemas import (
 )
 from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
-from services.endpoint_resolver import EndpointResolutionError, ResolvedEndpoint, resolve_user_endpoint
+from services.endpoint_resolver import EndpointResolutionError, ResolvedEndpoint, is_user_endpoint_node, resolve_user_endpoint
 from services.routing_payload_builder import build_routing_payload
 from services.system_settings import (
     get_runtime_settings,
@@ -82,6 +82,11 @@ async def _endpoint_map_for_names(db: AsyncSession, names: list[str | None]) -> 
         return {}
     rows = await db.execute(select(Node).where(Node.hostname.in_(clean_names), Node.deleted_at.is_(None)))
     return {node.hostname: _node_endpoint_payload(node) for node in rows.scalars().all()}
+
+
+async def _valid_user_endpoint_names(db: AsyncSession) -> list[str]:
+    rows = await db.execute(select(Node).where(Node.deleted_at.is_(None)).order_by(Node.hostname.asc()))
+    return [node.hostname for node in rows.scalars().all() if is_user_endpoint_node(node)]
 
 
 def _callback_url_from_runtime_plan(runtime_plan: dict | None) -> str | None:
@@ -277,11 +282,8 @@ async def send_message(
     latest_draft = await _get_latest_draft(db, conversation.id)
     existing = _draft_to_dict(latest_draft) if latest_draft else None
 
-    # Query available node names for validation
-    nodes_result = await db.execute(
-        select(Node.hostname).where(Node.deleted_at.is_(None))
-    )
-    valid_nodes = [row[0] for row in nodes_result.fetchall()]
+    # Source/destination slots only accept operator-managed endpoint nodes.
+    valid_nodes = await _valid_user_endpoint_names(db)
 
     runtime_settings = await get_runtime_settings(db)
     parsed, _trace = await run_intent_workflow(
@@ -372,11 +374,8 @@ async def send_message_stream(
     existing = _draft_to_dict(latest_draft) if latest_draft else None
     next_version = (latest_draft.version + 1) if latest_draft else 1
 
-    # Query available node names for validation
-    nodes_result = await db.execute(
-        select(Node.hostname).where(Node.deleted_at.is_(None))
-    )
-    valid_nodes = [row[0] for row in nodes_result.fetchall()]
+    # Source/destination slots only accept operator-managed endpoint nodes.
+    valid_nodes = await _valid_user_endpoint_names(db)
 
     # Structured parse happens before streaming so the user-visible response is
     # derived from validated parameters, not from a free-form LLM guess.

@@ -65,11 +65,11 @@
 
 ```json
 {
-  "utterance": "我要做一个矩阵计算任务，从 compute-1 到 compute-3，现在开始跑2小时，矩阵规模1024，10批，资源保障策略",
+  "utterance": "我要做一个矩阵计算任务，从 h1 到 h2，现在开始跑2小时，矩阵规模1024，10批，资源保障策略",
   "expected": {
     "task_type": "high_throughput_matmul",
-    "source_name": "compute-1",
-    "destination_name": "compute-3",
+    "source_name": "h1",
+    "destination_name": "h2",
     "start_time": "now",
     "end_time": "+2h",
     "matrix_size": 1024,
