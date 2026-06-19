@@ -109,7 +109,7 @@
         <el-table-column label="工单" min-width="240" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="order-cell">
-              <strong>{{ row.name || row.order_id?.slice(0, 8) }}</strong>
+              <strong>{{ taskTypeLabel(row.task_type) || '业务工单' }}</strong>
               <span>工单ID：{{ row.order_id?.slice(0, 8) }}</span>
             </div>
           </template>
@@ -1044,8 +1044,9 @@ async function submitSample() {
 }
 
 .order-cell span {
-  color: var(--text-muted);
+  color: #3f4b5f;
   font-size: 12px;
+  font-weight: 600;
 }
 
 .modality-cell {

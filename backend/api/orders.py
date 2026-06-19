@@ -235,6 +235,16 @@ def _node_can_host_endpoint_container(node: NodeModel) -> bool:
     )
 
 
+def _node_can_host_benchmark_endpoint(node: NodeModel) -> bool:
+    """Batch business evaluation deploys source/sink on terminal-side nodes only."""
+    return (
+        bool(node.is_schedulable)
+        and bool(node.is_routable)
+        and node.deleted_at is None
+        and _normal_node_kind(node) == "terminal"
+    )
+
+
 def _node_can_host_compute(node: NodeModel) -> bool:
     """Compute placement must stay on compute-capable topology nodes."""
     return (
@@ -260,7 +270,7 @@ async def _deployable_endpoint_nodes(db: AsyncSession) -> list[NodeModel]:
         )
         .order_by(NodeModel.hostname.asc())
     )
-    return [node for node in rows.scalars().all() if _node_can_host_endpoint_container(node)]
+    return [node for node in rows.scalars().all() if _node_can_host_benchmark_endpoint(node)]
 
 
 def _pick_endpoint_pair(endpoint_nodes: list[NodeModel], index: int) -> tuple[NodeModel, NodeModel]:
@@ -2378,8 +2388,13 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
         stable_compute = _prefer_gpu_nodes(stable_compute)
 
     terminal_nodes = [
-        node for node in schedulable if _node_can_host_endpoint_container(node)
-    ] or [node for node in schedulable if node.deleted_at is None]
+        node for node in schedulable if _node_can_host_benchmark_endpoint(node)
+    ]
+    if not terminal_nodes:
+        raise HTTPException(
+            status_code=400,
+            detail="No terminal endpoint nodes available for benchmark source/sink containers",
+        )
     return {
         "terminal": terminal_nodes,
         "compute": stable_compute,

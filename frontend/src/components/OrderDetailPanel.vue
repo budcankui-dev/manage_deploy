@@ -5,7 +5,7 @@
       <section class="overview-card">
         <div>
           <p class="eyebrow">工单详情</p>
-          <h2>{{ detail.name || shortId(detail.id) }}</h2>
+          <h2>{{ displayTitle }}</h2>
           <p class="summary">{{ taskSummary }}</p>
         </div>
         <div class="overview-tags">
@@ -25,7 +25,7 @@
         <el-tab-pane label="业务" name="business">
           <el-descriptions :column="2" border class="detail-desc">
             <el-descriptions-item label="工单 ID"><code>{{ detail.id }}</code></el-descriptions-item>
-            <el-descriptions-item label="外部任务 ID">{{ detail.external_task_id || '-' }}</el-descriptions-item>
+            <el-descriptions-item v-if="detail.external_task_id" label="外部任务 ID">{{ detail.external_task_id }}</el-descriptions-item>
             <el-descriptions-item label="任务类型">{{ taskTypeLabel(taskType) }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="业务优先级">{{ businessPriorityText }}</el-descriptions-item>
@@ -297,7 +297,7 @@
               <div class="video-preview">
                 <template v-if="videoPreview">
                   <div class="video-proof-frame">
-                    <img :src="videoPreview" alt="视频推理分类画框结果" />
+                    <img :src="videoPreview" alt="视频推理分类画框结果" :title="activeVideoFrame?.title || ''" />
                     <div v-if="videoNeedsOverlay" class="video-proof-overlay">
                       <div v-if="videoEvidenceRows.length" class="video-proof-badge">
                         <span v-for="row in videoEvidenceRows" :key="row">{{ row }}</span>
@@ -311,6 +311,24 @@
                         <span>{{ row.label_zh || row.display_label || row.label }}</span>
                       </div>
                     </div>
+                  </div>
+                  <div v-if="videoPreviewFrames.length > 1" class="video-frame-strip">
+                    <button
+                      v-for="frame in videoPreviewFrames"
+                      :key="`${frame.frame_index}-${frame.latency_ms}`"
+                      class="video-frame-thumb"
+                      :class="{ active: frameKey(frame) === frameKey(activeVideoFrame) }"
+                      type="button"
+                      :title="frame.title"
+                      @mouseenter="selectedVideoFrameKey = frameKey(frame)"
+                      @focus="selectedVideoFrameKey = frameKey(frame)"
+                    >
+                      <img :src="frame.data_url" alt="视频抽帧推理结果" />
+                      <span>
+                        第 {{ frame.frame_index }} 帧
+                        <small v-if="frame.latency_ms != null">{{ frame.latency_ms.toFixed(2) }} ms</small>
+                      </span>
+                    </button>
                   </div>
                 </template>
                 <el-empty
@@ -401,7 +419,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   MATMUL_PIPELINE_STEPS,
   VIDEO_PIPELINE_STEPS,
@@ -425,6 +443,7 @@ import {
   videoInputVideoUrl,
   videoPreviewDataUrl,
   videoPreviewEvidenceRows,
+  videoPreviewFrames as buildVideoPreviewFrames,
   videoPreviewNeedsOverlay,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
@@ -456,6 +475,7 @@ const deployableRoles = computed(() => {
 const evaluation = computed(() => detail.value?.evaluation || null)
 const resultMetadata = computed(() => evaluation.value?.result_metadata || null)
 const taskType = computed(() => businessTask.value?.task_type || detail.value?.task_type || '')
+const displayTitle = computed(() => taskTypeLabel(taskType.value))
 const isMatmulTask = computed(() => taskType.value === 'high_throughput_matmul')
 const isVideoTask = computed(() => taskType.value === 'low_latency_video_pipeline')
 const taskSummary = computed(() => taskTypeSummary(taskType.value))
@@ -625,7 +645,15 @@ const verdict = computed(() => {
   }
 })
 
-const videoPreview = computed(() => videoPreviewDataUrl(resultMetadata.value))
+const videoPreviewFrames = computed(() => buildVideoPreviewFrames(resultMetadata.value))
+const selectedVideoFrameKey = ref('')
+const activeVideoFrame = computed(() => {
+  const frames = videoPreviewFrames.value
+  if (!frames.length) return null
+  const selected = frames.find(item => frameKey(item) === selectedVideoFrameKey.value)
+  return selected || frames[0]
+})
+const videoPreview = computed(() => activeVideoFrame.value?.data_url || videoPreviewDataUrl(resultMetadata.value))
 const videoDetectionRows = computed(() => videoDetections(resultMetadata.value))
 const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(resultMetadata.value))
 const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(resultMetadata.value))
@@ -766,6 +794,10 @@ function formatCandidateScore(row) {
 
 function videoBoxStyle(row) {
   return videoDetectionBoxStyle(row, resultMetadata.value)
+}
+
+function frameKey(frame) {
+  return `${frame?.frame_index ?? ''}-${frame?.latency_ms ?? ''}`
 }
 
 function shortId(value) {
@@ -1118,6 +1150,52 @@ function nodeStatusLabel(value) {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.video-frame-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border-subtle, #e5e7eb);
+  background: #f8fafc;
+}
+
+.video-frame-thumb {
+  display: grid;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #d8e1ea;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2937;
+  cursor: pointer;
+  text-align: left;
+}
+
+.video-frame-thumb.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.video-frame-thumb img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 7px;
+  background: #0f172a;
+}
+
+.video-frame-thumb span {
+  display: grid;
+  gap: 1px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.video-frame-thumb small {
+  color: #334155;
+  font-weight: 600;
 }
 
 .video-proof-overlay {

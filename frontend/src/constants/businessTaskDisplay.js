@@ -385,6 +385,51 @@ export function videoPreviewDataUrl(resultMetadata) {
   return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
 }
 
+export function videoPreviewFrames(resultMetadata) {
+  const meta = resultMetadata || {}
+  const frames = Array.isArray(meta.preview_frames) ? meta.preview_frames : []
+  const normalized = frames
+    .filter(item => typeof item?.data_url === 'string' && item.data_url.startsWith('data:image/'))
+    .slice(0, 8)
+    .map((item, index) => {
+      const latency = item.latency_ms != null ? Number(item.latency_ms) : null
+      const label = item.top_label_zh || item.label_zh || VIDEO_LABEL_ZH[item.top_label] || item.top_label || item.label || '检测帧'
+      const confidence = item.top_confidence ?? item.confidence
+      const frameIndex = item.frame_index ?? meta.annotated_frame_index ?? index
+      const parts = [`第 ${frameIndex} 帧`]
+      if (Number.isFinite(latency)) parts.push(`单帧推理 ${latency.toFixed(2)} ms`)
+      if (meta.frame_latency_p90_ms != null) parts.push(`本次 P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
+      if (label) parts.push(`识别目标：${label}`)
+      if (confidence != null && Number.isFinite(Number(confidence))) parts.push(`置信度 ${Number(confidence).toFixed(2)}`)
+      return {
+        frame_index: frameIndex,
+        data_url: item.data_url,
+        label,
+        latency_ms: Number.isFinite(latency) ? latency : null,
+        confidence,
+        title: parts.join('；'),
+      }
+    })
+  if (normalized.length) return normalized
+  const fallback = videoPreviewDataUrl(meta)
+  if (!fallback) return []
+  const latency = previewFrameLatency(meta)
+  const label = meta.top_label_zh || VIDEO_LABEL_ZH[meta.top_label] || meta.top_label || '检测帧'
+  const frameIndex = meta.annotated_frame_index ?? '-'
+  const parts = [`第 ${frameIndex} 帧`]
+  if (latency != null && Number.isFinite(latency)) parts.push(`单帧推理 ${latency.toFixed(2)} ms`)
+  if (meta.frame_latency_p90_ms != null) parts.push(`本次 P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
+  if (label) parts.push(`识别目标：${label}`)
+  return [{
+    frame_index: frameIndex,
+    data_url: fallback,
+    label,
+    latency_ms: latency,
+    confidence: meta.top_confidence,
+    title: parts.join('；'),
+  }]
+}
+
 function previewFrameLatency(resultMetadata) {
   const meta = resultMetadata || {}
   if (meta.annotated_frame_latency_ms != null) return Number(meta.annotated_frame_latency_ms)

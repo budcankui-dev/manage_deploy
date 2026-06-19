@@ -270,6 +270,17 @@ def _render_receiver_page(
     callback_url = _callback_url(config)
     receiver_info = _render_receiver_info(config, callback_url, order_id)
     evidence_html = _render_video_evidence(task_type, result)
+    preview_gallery_html = (
+        f"""
+          <div class="inline-evidence">
+            <h3>抽帧检测证据</h3>
+            <div class="muted">下方展示本次任务抽样推理的多帧结果；鼠标悬停可查看帧序号、单帧时延和识别目标。</div>
+            {_render_preview_frame_gallery(result)}
+          </div>
+        """
+        if task_type == "low_latency_video_pipeline"
+        else ""
+    )
     auto_refresh = "" if latest.get("status") == "completed" else '<meta http-equiv="refresh" content="2" />'
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -283,7 +294,7 @@ def _render_receiver_page(
       --bg: #f3f7fb;
       --card: #ffffff;
       --ink: #142033;
-      --subtle: #334155;
+      --subtle: #1f2f46;
       --line: #d8e2ef;
       --blue: #1d4ed8;
       --blue-soft: #eaf2ff;
@@ -318,6 +329,7 @@ def _render_receiver_page(
     h1 {{ margin: 0 0 10px; font-size: 30px; letter-spacing: -0.02em; }}
     h2 {{ margin: 0 0 14px; font-size: 21px; }}
     .muted {{ color: var(--subtle); line-height: 1.7; }}
+    h3 {{ margin: 18px 0 8px; font-size: 17px; }}
     .pill {{
       display: inline-flex;
       align-items: center;
@@ -390,8 +402,9 @@ def _render_receiver_page(
     .thumb-meta {{
       padding: 10px 12px;
       line-height: 1.6;
-      color: var(--subtle);
+      color: #142033;
       font-size: 13px;
+      font-weight: 600;
     }}
     .latency-chart {{
       width: 100%;
@@ -410,8 +423,13 @@ def _render_receiver_page(
       border-radius: 12px;
       padding: 10px 12px;
       background: #fff;
-      color: var(--subtle);
+      color: #142033;
       line-height: 1.7;
+    }}
+    .inline-evidence {{
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
     }}
     .order-list {{
       display: grid;
@@ -478,6 +496,7 @@ def _render_receiver_page(
         <section class="card">
           <h2>结果预览</h2>
           {image_html or '<div class="muted">暂无图片预览。矩阵计算任务会展示结果数字；视频推理任务回调后会展示带中文标签和检测框的预览图。</div>'}
+          {preview_gallery_html}
           <div class="grid">{result_cards}</div>
         </section>
         {evidence_html}
@@ -625,10 +644,6 @@ def _render_video_evidence(task_type: str, result: dict[str, Any]) -> str:
           <section class="card">
             <h2>推理时延趋势</h2>
             {_render_latency_chart(result.get("samples"))}
-          </section>
-          <section class="card">
-            <h2>抽帧检测证据</h2>
-            {_render_preview_frame_gallery(result)}
           </section>
           <section class="card">
             <h2>检测目标列表</h2>

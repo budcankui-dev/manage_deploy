@@ -595,7 +595,7 @@ const excludedNodeRows = computed(() =>
 
 const defaultEndpointPair = computed(() => {
   const endpoints = nodes.value
-    .filter(n => n.is_schedulable !== false && ['terminal', 'worker', 'both'].includes(String(n.node_kind || 'worker').toLowerCase()))
+    .filter(n => n.is_schedulable !== false && String(n.node_kind || '').toLowerCase() === 'terminal')
     .map(n => n.hostname)
   return {
     source_name: endpoints.includes('h1') ? 'h1' : '',

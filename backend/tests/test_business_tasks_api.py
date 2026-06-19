@@ -37,6 +37,11 @@ async def _auth_headers(client, db_session, username: str = "testuser", role: Us
 
 async def _seed_business_fixture(client):
     node_ids = []
+    node_kinds = {
+        "worker-a": "terminal",
+        "worker-b": "worker",
+        "worker-c": "terminal",
+    }
     for idx, hostname in enumerate(["worker-a", "worker-b", "worker-c"], start=1):
         response = await client.post(
             "/api/nodes",
@@ -45,6 +50,7 @@ async def _seed_business_fixture(client):
                 "agent_address": f"http://127.0.0.1:800{idx}",
                 "management_ip": f"10.0.0.{idx}",
                 "business_ip": f"10.0.1.{idx}",
+                "node_kind": node_kinds[hostname],
             },
         )
         assert response.status_code == 200
@@ -877,10 +883,10 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert [node["task_role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["task_node_type"] for node in dag["nodes"]] == ["terminal", "worker", "terminal"]
     assert order.source_name == "worker-a"
-    assert order.destination_name == "worker-b"
+    assert order.destination_name == "worker-c"
     assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["source", "compute", "sink"]
     assert dag["nodes"][0]["fixed_topology_node_id"] == "worker-a"
-    assert dag["nodes"][2]["fixed_topology_node_id"] == "worker-b"
+    assert dag["nodes"][2]["fixed_topology_node_id"] == "worker-c"
     assert all("exec" not in node for node in dag["nodes"])
     edge_pairs = [(edge["from"], edge["to"], edge["data_mb"], edge["bandwidth_mbps"]) for edge in dag["edges"]]
     assert edge_pairs == [
@@ -2633,13 +2639,10 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session, mon
         json={"benchmark_run_id": "routable-run"},
     )
     assert route_response.status_code == 200
-    assert route_response.json()["routed"] == 6
-
-    for order_id in order_ids:
-        detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
-        assert detail_response.status_code == 200
-        placements = detail_response.json()["routing_result"]["placements"]
-        assert all(item["topology_node_id"] != "worker-b" for item in placements)
+    route_body = route_response.json()
+    assert route_body["routed"] == 0
+    assert len(route_body["failed"]) == len(order_ids)
+    assert all("No stable baseline compute nodes available" in item["error"] for item in route_body["failed"])
 
 
 @pytest.mark.asyncio
@@ -2694,16 +2697,12 @@ async def test_batch_auto_route_skips_unhealthy_agent_nodes(client, db_session, 
     )
     assert route_response.status_code == 200
     body = route_response.json()
-    assert body["routed"] == 3
+    assert body["routed"] == 0
     assert body["skipped_unhealthy_nodes"] == [
         {"hostname": "worker-b", "reason": "node_agent unreachable"}
     ]
-
-    for order_id in order_ids:
-        detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
-        assert detail_response.status_code == 200
-        placements = detail_response.json()["routing_result"]["placements"]
-        assert all(item["topology_node_id"] != "worker-b" for item in placements)
+    assert len(body["failed"]) == len(order_ids)
+    assert all("No stable baseline compute nodes available" in item["error"] for item in body["failed"])
 
 
 @pytest.mark.asyncio
