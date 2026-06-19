@@ -37,16 +37,28 @@
       <div v-else v-loading="detailLoading" class="detail-shell">
         <div class="detail-toolbar">
           <span class="detail-toolbar-title">任务工单详情</span>
-          <el-button
-            v-if="detail?.status === 'pending'"
-            type="danger"
-            plain
-            size="small"
-            :loading="cancelLoading"
-            @click="cancelOrder"
-          >
-            取消工单
-          </el-button>
+          <div class="detail-actions">
+            <el-button
+              v-if="detail?.status === 'pending'"
+              type="warning"
+              plain
+              size="small"
+              :loading="cancelLoading"
+              @click="cancelOrder"
+            >
+              取消工单
+            </el-button>
+            <el-button
+              v-if="detail"
+              type="danger"
+              plain
+              size="small"
+              :loading="deleteLoading"
+              @click="deleteOrder"
+            >
+              删除工单
+            </el-button>
+          </div>
         </div>
         <OrderDetailPanel
           v-model:active-tab="detailTab"
@@ -73,6 +85,7 @@ const resultObjects = ref([])
 const listLoading = ref(false)
 const detailLoading = ref(false)
 const cancelLoading = ref(false)
+const deleteLoading = ref(false)
 const detailTab = ref('business')
 
 function orderId(order) {
@@ -144,6 +157,38 @@ async function cancelOrder() {
     ElMessage.error('取消失败')
   } finally {
     cancelLoading.value = false
+  }
+}
+
+async function deleteOrder() {
+  if (!selectedOrderId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '删除工单前会先停止并清理该工单关联的部署实例；如果容器清理失败，工单不会被删除。继续吗？',
+      '确认删除工单',
+      {
+        confirmButtonText: '删除工单',
+        cancelButtonText: '返回',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  deleteLoading.value = true
+  try {
+    await ordersApi.delete(selectedOrderId.value)
+    ElMessage.success('工单已删除')
+    selectedOrderId.value = ''
+    detail.value = null
+    resultObjects.value = []
+    await loadOrders()
+  } catch {
+    ElMessage.error('删除失败')
+  } finally {
+    deleteLoading.value = false
   }
 }
 
@@ -309,7 +354,16 @@ onMounted(loadOrders)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .detail-toolbar-title {

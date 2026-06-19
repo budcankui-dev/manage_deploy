@@ -170,6 +170,15 @@ def _apply_order_visibility(query, current_user: User):
     return query
 
 
+def _is_admin_user(current_user: User) -> bool:
+    return current_user.role == UserRole.ADMIN or current_user.role == UserRole.ADMIN.value
+
+
+def _ensure_order_owner_or_admin(order: TaskOrder, current_user: User) -> None:
+    if not _is_admin_user(current_user) and order.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权操作该工单")
+
+
 async def _resolve_batch_orders(
     db: AsyncSession,
     request: BatchOperationRequest,
@@ -1030,22 +1039,90 @@ async def get_order(
 
 
 @router.delete("/{order_id}")
-async def delete_order(order_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order or order.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Order not found")
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _ensure_order_owner_or_admin(order, current_user)
+    task_scheduler = TaskScheduler()
+    if order.materialized_instance_id:
+        instance_row = await db.execute(
+            select(TaskInstance)
+            .options(selectinload(TaskInstance.nodes))
+            .where(TaskInstance.id == order.materialized_instance_id)
+        )
+        instance = instance_row.scalar_one_or_none()
+        if instance:
+            await task_scheduler.cancel_all_schedules(instance.id)
+            cleanup_warnings = await cleanup_instance_runtime(db, instance)
+            if cleanup_warnings:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"容器清理失败，工单未删除：{'；'.join(cleanup_warnings)}",
+                )
     await emit_release_events_for_order(
         db,
         order,
         reason="delete_order",
         metadata={"instance_id": order.materialized_instance_id},
     )
+    if order.conversation_id:
+        conversation_row = await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
+        conversation = conversation_row.scalar_one_or_none()
+        if conversation and conversation.materialized_order_id == order.id:
+            conversation.status = ConversationStatus.CANCELLED
     await purge_order_instances_by_source_order(db, order.id)
     await purge_order_instance_artifacts(db, order.materialized_instance_id)
     await db.delete(order)
     await db.commit()
-    return {"message": "Order deleted"}
+    return {"message": "工单已删除"}
+
+
+@router.post("/{order_id}/cancel")
+async def cancel_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _ensure_order_owner_or_admin(order, current_user)
+
+    if order.status == OrderStatus.CANCELLED:
+        return {"message": "工单已取消", "status": OrderStatus.CANCELLED.value}
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(status_code=400, detail="当前状态不可取消，请在工单详情中查看运行状态或删除废弃工单")
+
+    order.status = OrderStatus.CANCELLED
+    order.routing_status = RoutingStatus.CANCELLED.value
+    await emit_release_events_for_order(
+        db,
+        order,
+        reason="cancel_order",
+        metadata={"instance_id": order.materialized_instance_id},
+    )
+
+    if order.conversation_id:
+        conversation_row = await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
+        conversation = conversation_row.scalar_one_or_none()
+        if conversation and conversation.materialized_order_id == order.id:
+            conversation.status = ConversationStatus.CANCELLED
+
+    if order.routing_request_id:
+        routing_row = await db.execute(select(RoutingRequest).where(RoutingRequest.id == order.routing_request_id))
+        routing = routing_row.scalar_one_or_none()
+        if routing:
+            routing.status = RoutingRequestStatus.CANCELLED
+
+    await db.commit()
+    return {"message": "工单已取消", "status": OrderStatus.CANCELLED.value}
 
 
 @router.post("/batch/delete", response_model=BatchOperationResponse)

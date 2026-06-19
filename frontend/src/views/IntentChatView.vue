@@ -303,7 +303,6 @@
               <p>{{ conversationStatusLabel }}</p>
             </div>
             <el-button v-if="canDemoRoute" type="primary" plain size="small" :loading="isDemoRouting" @click="demoRoute">启动计算节点</el-button>
-            <el-button v-if="canCancelOrder" type="danger" plain size="small" @click="cancelOrder">取消任务</el-button>
           </div>
         </div>
       </section>
@@ -343,6 +342,24 @@
                 </div>
               </div>
             </el-popover>
+            <el-popover placement="top-start" width="360" trigger="click" popper-class="node-popover">
+              <template #reference>
+                <el-button size="small" plain>
+                  <el-icon><CircleCheck /></el-icon>
+                  支持任务
+                </el-button>
+              </template>
+              <div class="node-popover-body">
+                <strong>当前支持的业务任务</strong>
+                <p>提交前请在对话中说明任务类型、源节点、目的节点和关键参数；系统会追问缺失项并校验节点是否合法。</p>
+                <div class="task-popover-list">
+                  <div v-for="item in supportedTaskHints" :key="item.type" class="task-popover-item">
+                    <strong>{{ item.label }}</strong>
+                    <span>{{ item.hint }}</span>
+                  </div>
+                </div>
+              </div>
+            </el-popover>
           </div>
           <div class="composer-btns">
             <el-button v-if="isStreaming" type="danger" @click="stopStreaming">
@@ -374,19 +391,43 @@
       class="order-detail-drawer"
     >
       <template #header>
-        <span>任务工单详情</span>
-        <el-tag
-          v-if="selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type"
-          size="small"
-          type="info"
-          effect="plain"
-          style="margin-left: 8px"
-        >
-          {{ taskTypeLabel(selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type) }}
-        </el-tag>
-        <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small" style="margin-left: 8px">
-          {{ formatOrderStatus(selectedOrderDetail.status) }}
-        </el-tag>
+        <div class="drawer-header">
+          <div class="drawer-title-row">
+            <span>任务工单详情</span>
+            <el-tag
+              v-if="selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type"
+              size="small"
+              type="info"
+              effect="plain"
+            >
+              {{ taskTypeLabel(selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type) }}
+            </el-tag>
+            <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small">
+              {{ formatOrderStatus(selectedOrderDetail.status) }}
+            </el-tag>
+          </div>
+          <div v-if="selectedOrderDetail" class="drawer-actions">
+            <el-button
+              v-if="canCancelSelectedOrder"
+              type="warning"
+              plain
+              size="small"
+              :loading="orderActionLoading === 'cancel'"
+              @click.stop="cancelSelectedOrder"
+            >
+              取消工单
+            </el-button>
+            <el-button
+              type="danger"
+              plain
+              size="small"
+              :loading="orderActionLoading === 'delete'"
+              @click.stop="deleteSelectedOrder"
+            >
+              删除工单
+            </el-button>
+          </div>
+        </div>
       </template>
       <div v-if="orderDetailLoading" class="orders-loading">
         <el-icon class="is-loading"><Loading /></el-icon>
@@ -498,6 +539,7 @@ const orderDrawerVisible = ref(false)
 const selectedOrderId = ref(null)
 const selectedOrderDetail = ref(null)
 const orderDetailLoading = ref(false)
+const orderActionLoading = ref('')
 const orderStatusFilter = ref('')
 const orderDetailTab = ref('business')
 const orderResultObjects = ref([])
@@ -543,6 +585,18 @@ const exampleChips = [
   '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
   '从 h6 到 h7 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
+]
+const supportedTaskHints = [
+  {
+    type: 'high_throughput_matmul',
+    label: taskTypeLabel('high_throughput_matmul'),
+    hint: '适合表达为“矩阵乘法、矩阵计算、高通量计算”，需给出源节点、目的节点、矩阵规模和批次数。',
+  },
+  {
+    type: 'low_latency_video_pipeline',
+    label: taskTypeLabel('low_latency_video_pipeline'),
+    hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、分辨率、帧数和帧率。',
+  },
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
@@ -660,13 +714,10 @@ const conversationInputLockMessage = computed(() =>
     ? '为了避免一个对话重复提交多个任务，请点击“新建对话”继续输入新的业务需求。'
     : '系统正在处理该任务，请稍后在“我的工单”查看进度，或新建对话提交其他任务。'
 )
-const canCancelOrder = computed(() => {
-  const s = conversation.value?.status
-  return s === 'awaiting_routing' || s === 'ready_to_submit'
-})
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
+const canCancelSelectedOrder = computed(() => selectedOrderDetail.value?.status === 'pending')
 const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13'))
 const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
 
@@ -1099,6 +1150,7 @@ watch(showOrders, (val) => {
 
 async function openOrderDetail(order) {
   const id = order.order_id || order.id
+  if (!id) return
   selectedOrderId.value = id
   selectedOrderDetail.value = null
   orderDetailTab.value = 'business'
@@ -1119,6 +1171,76 @@ async function openOrderDetail(order) {
     // keep null
   } finally {
     orderDetailLoading.value = false
+  }
+}
+
+async function refreshSelectedOrderDetail() {
+  if (!selectedOrderId.value) return
+  await openOrderDetail({ id: selectedOrderId.value })
+}
+
+async function cancelSelectedOrder() {
+  if (!selectedOrderId.value || orderActionLoading.value) return
+  try {
+    await ElMessageBox.confirm('确定取消此工单？取消后不会继续分配或启动计算节点。', '确认取消工单', {
+      confirmButtonText: '取消工单',
+      cancelButtonText: '返回',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  orderActionLoading.value = 'cancel'
+  try {
+    await ordersApi.cancel(selectedOrderId.value)
+    ElMessage.success('工单已取消')
+    await loadOrders()
+    await refreshSelectedOrderDetail()
+    if (conversation.value?.materialized_order_id === selectedOrderId.value) {
+      await loadConversation(conversation.value.id)
+    }
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '取消失败'))
+  } finally {
+    orderActionLoading.value = ''
+  }
+}
+
+async function deleteSelectedOrder() {
+  if (!selectedOrderId.value || orderActionLoading.value) return
+  const deletingOrderId = selectedOrderId.value
+  try {
+    await ElMessageBox.confirm(
+      '删除工单前会先停止并清理该工单关联的部署实例；如果容器清理失败，工单不会被删除。继续吗？',
+      '确认删除工单',
+      {
+        confirmButtonText: '删除工单',
+        cancelButtonText: '返回',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  orderActionLoading.value = 'delete'
+  try {
+    await ordersApi.delete(deletingOrderId)
+    ElMessage.success('工单已删除')
+    orderDrawerVisible.value = false
+    selectedOrderId.value = null
+    selectedOrderDetail.value = null
+    orderResultObjects.value = []
+    await loadOrders()
+    if (conversation.value?.materialized_order_id === deletingOrderId) {
+      await loadConversation(conversation.value.id)
+    }
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '删除失败'))
+  } finally {
+    orderActionLoading.value = ''
   }
 }
 
@@ -1338,21 +1460,6 @@ async function syncEndpointDraftBeforeConfirm() {
     throw { response: { data: { detail: { validation_errors: errors } } } }
   }
   return data
-}
-
-async function cancelOrder() {
-  try {
-    await ElMessageBox.confirm('确认取消该任务？取消后不可恢复。', '取消任务', { type: 'warning' })
-  } catch { return }
-  try {
-    const { data } = await conversationApi.cancel(conversation.value.id)
-    conversation.value = data
-    ElMessage.success('任务已取消')
-    await refreshList()
-    if (showOrders.value) loadOrders()
-  } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '取消失败'))
-  }
 }
 
 async function demoRoute() {
@@ -2182,6 +2289,32 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.drawer-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer-title-row,
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.drawer-title-row {
+  min-width: 0;
+  font-weight: 700;
+  color: #111827;
+}
+
+.drawer-actions {
+  flex-shrink: 0;
+}
+
 :global(.node-popover) {
   color: #1f2937;
 }
@@ -2217,6 +2350,32 @@ onBeforeUnmount(() => {
   color: #1d4ed8;
   font-size: 12px;
   font-weight: 600;
+}
+
+:global(.node-popover .task-popover-list) {
+  display: grid;
+  gap: 8px;
+}
+
+:global(.node-popover .task-popover-item) {
+  padding: 9px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+:global(.node-popover .task-popover-item strong) {
+  display: block;
+  margin-bottom: 3px;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+:global(.node-popover .task-popover-item span) {
+  display: block;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* ── Right panel ── */
