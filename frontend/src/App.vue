@@ -13,38 +13,17 @@
         <span>任务编排</span>
       </div>
       <nav class="nav-menu">
-        <router-link to="/business-tasks" class="nav-item">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>业务任务中心</span>
-        </router-link>
-        <router-link to="/benchmark" class="nav-item">
-          <el-icon><TrendCharts /></el-icon>
-          <span>业务测评</span>
-        </router-link>
-        <router-link to="/intent-evaluation" class="nav-item">
-          <el-icon><DataLine /></el-icon>
-          <span>意图评测</span>
-        </router-link>
-        <router-link to="/nodes" class="nav-item">
-          <el-icon><Monitor /></el-icon>
-          <span>拓扑节点</span>
-        </router-link>
-        <router-link to="/templates" class="nav-item">
-          <el-icon><Document /></el-icon>
-          <span>任务模板</span>
-        </router-link>
-        <router-link to="/dev/instances" class="nav-item">
-          <el-icon><List /></el-icon>
-          <span>运维 / 手动部署</span>
-        </router-link>
-        <router-link to="/users" class="nav-item">
-          <el-icon><UserFilled /></el-icon>
-          <span>用户管理</span>
-        </router-link>
-        <router-link to="/settings" class="nav-item">
-          <el-icon><Setting /></el-icon>
-          <span>系统设置</span>
-        </router-link>
+        <button
+          v-for="item in adminMenuItems"
+          :key="item.path"
+          class="nav-item"
+          :class="{ active: isActivePath(item.path) }"
+          type="button"
+          @click="goAdminPage(item.path)"
+        >
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="account-row">
@@ -72,12 +51,48 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { ElMessage } from 'element-plus'
+import {
+  DataAnalysis,
+  DataLine,
+  Document,
+  List,
+  Monitor,
+  Setting,
+  TrendCharts,
+  UserFilled,
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
 const showAdminShell = computed(() => auth.isAuthenticated && auth.isAdmin && !route.meta.public)
+const adminMenuItems = [
+  { path: '/business-tasks', label: '业务任务中心', icon: DataAnalysis },
+  { path: '/benchmark', label: '业务测评', icon: TrendCharts },
+  { path: '/intent-evaluation', label: '意图评测', icon: DataLine },
+  { path: '/nodes', label: '拓扑节点', icon: Monitor },
+  { path: '/templates', label: '任务模板', icon: Document },
+  { path: '/dev/instances', label: '运维 / 手动部署', icon: List },
+  { path: '/users', label: '用户管理', icon: UserFilled },
+  { path: '/settings', label: '系统设置', icon: Setting },
+]
+
+function isActivePath(path) {
+  return route.path === path || (path !== '/' && route.path.startsWith(`${path}/`))
+}
+
+async function goAdminPage(path) {
+  if (route.path === path) return
+  try {
+    await router.push(path)
+  } catch (err) {
+    if (err?.name !== 'NavigationDuplicated') {
+      ElMessage.warning('页面跳转失败，请刷新后重试')
+    }
+  }
+}
 
 function logout() {
   auth.logout()
@@ -188,12 +203,17 @@ body::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   padding: 12px 16px;
   border-radius: 10px;
+  border: 0;
+  background: transparent;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
+  font-family: inherit;
+  text-align: left;
   transition: all 0.2s ease;
   position: relative;
   z-index: 1;
@@ -206,7 +226,7 @@ body::-webkit-scrollbar-thumb:hover {
   color: var(--text-primary);
 }
 
-.nav-item.router-link-active {
+.nav-item.active {
   background: var(--accent-primary);
   color: white;
   box-shadow: 0 4px 20px var(--accent-glow);
