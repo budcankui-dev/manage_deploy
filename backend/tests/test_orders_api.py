@@ -47,6 +47,68 @@ async def test_delete_order_requires_login(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_create_order_requires_login(client, db_session):
+    template = TaskTemplate(id="tpl-create-requires-login", name="tpl-create-requires-login")
+    db_session.add(template)
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders",
+        json={"template_id": template.id, "name": "未登录创建工单"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_order_binds_current_user(client, db_session):
+    headers, owner = await _auth_headers(client, db_session, username="order-create-owner")
+    template = TaskTemplate(id="tpl-create-bind-owner", name="tpl-create-bind-owner")
+    db_session.add(template)
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders",
+        headers=headers,
+        json={"template_id": template.id, "name": "绑定当前用户工单"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["owner_user_id"] == owner.id
+    row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == response.json()["id"]))
+    assert row.scalar_one().user_id == owner.id
+
+
+@pytest.mark.asyncio
+async def test_materialize_order_requires_login(client, db_session):
+    await _create_order(db_session, "materialize-requires-login", owner=None)
+
+    response = await client.post("/api/orders/materialize-requires-login/materialize")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_materialize_other_users_order(client, db_session):
+    _owner_headers, owner = await _auth_headers(client, db_session, username="materialize-owner")
+    other_headers, _other = await _auth_headers(client, db_session, username="materialize-other")
+    await _create_order(db_session, "materialize-other-user-order", owner=owner)
+
+    response = await client.post("/api/orders/materialize-other-user-order/materialize", headers=other_headers)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_materialize_pending_requires_admin(client, db_session):
+    user_headers, _user = await _auth_headers(client, db_session, username="materialize-pending-user")
+
+    response = await client.post("/api/orders/materialize/pending", headers=user_headers)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_user_cannot_delete_other_users_order(client, db_session):
     _owner_headers, owner = await _auth_headers(client, db_session, username="order-delete-owner")
     other_headers, _other = await _auth_headers(client, db_session, username="order-delete-other")
@@ -168,8 +230,12 @@ async def test_user_delete_materialized_order_keeps_record_when_runtime_cleanup_
     async def fake_cancel_all_schedules(self, _instance_id):
         return None
 
+    async def fake_emit_release(*_args, **_kwargs):
+        raise AssertionError("cleanup 失败时不应释放路由资源")
+
     monkeypatch.setattr("api.orders.cleanup_instance_runtime", fake_cleanup)
     monkeypatch.setattr("api.orders.TaskScheduler.cancel_all_schedules", fake_cancel_all_schedules)
+    monkeypatch.setattr("api.orders.emit_release_events_for_order", fake_emit_release)
 
     response = await client.delete("/api/orders/delete-cleanup-fails-order", headers=headers)
 
@@ -177,6 +243,129 @@ async def test_user_delete_materialized_order_keeps_record_when_runtime_cleanup_
     assert "容器清理失败" in response.json()["detail"]
     order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
     assert order_row.scalar_one_or_none() is not None
+    instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
+    assert instance_row.scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_batch_delete_materialized_order_cleans_instance_before_deleting(client, db_session, monkeypatch):
+    _owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-owner")
+    admin_headers, _admin = await _auth_headers(client, db_session, username="batch-delete-admin", role=UserRole.ADMIN)
+    order = await _create_order(db_session, "batch-delete-materialized-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    instance = TaskInstance(
+        id="batch-delete-materialized-instance",
+        template_id=order.template_id,
+        name="batch-delete-materialized-instance",
+        status=TaskStatus.RUNNING,
+        source_order_id=order.id,
+    )
+    order.materialized_instance_id = instance.id
+    db_session.add(instance)
+    await db_session.commit()
+    calls = []
+
+    async def fake_cleanup(_db, cleaned_instance):
+        calls.append(cleaned_instance.id)
+        return []
+
+    async def fake_cancel_all_schedules(self, instance_id):
+        calls.append(f"schedule:{instance_id}")
+
+    monkeypatch.setattr("api.orders.cleanup_instance_runtime", fake_cleanup)
+    monkeypatch.setattr("api.orders.TaskScheduler.cancel_all_schedules", fake_cancel_all_schedules)
+
+    response = await client.post(
+        "/api/orders/batch/delete",
+        headers=admin_headers,
+        json={"order_ids": [order.id]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == [order.id]
+    assert response.json()["failed"] == {}
+    assert calls == ["schedule:batch-delete-materialized-instance", "batch-delete-materialized-instance"]
+    order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    assert order_row.scalar_one_or_none() is None
+    instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
+    assert instance_row.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_admin_batch_delete_keeps_order_when_runtime_cleanup_fails(client, db_session, monkeypatch):
+    _owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-fail-owner")
+    admin_headers, _admin = await _auth_headers(client, db_session, username="batch-delete-fail-admin", role=UserRole.ADMIN)
+    order = await _create_order(db_session, "batch-delete-cleanup-fails-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    instance = TaskInstance(
+        id="batch-delete-cleanup-fails-instance",
+        template_id=order.template_id,
+        name="batch-delete-cleanup-fails-instance",
+        status=TaskStatus.RUNNING,
+        source_order_id=order.id,
+    )
+    order.materialized_instance_id = instance.id
+    db_session.add(instance)
+    await db_session.commit()
+
+    async def fake_cleanup(_db, _instance):
+        return ["compute: 删除容器失败"]
+
+    async def fake_cancel_all_schedules(self, _instance_id):
+        return None
+
+    monkeypatch.setattr("api.orders.cleanup_instance_runtime", fake_cleanup)
+    monkeypatch.setattr("api.orders.TaskScheduler.cancel_all_schedules", fake_cancel_all_schedules)
+
+    response = await client.post(
+        "/api/orders/batch/delete",
+        headers=admin_headers,
+        json={"order_ids": [order.id]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == []
+    assert "容器清理失败" in response.json()["failed"][order.id]
+    order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    assert order_row.scalar_one_or_none() is not None
+    instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
+    assert instance_row.scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_batch_cleanup_reports_runtime_cleanup_warnings_as_failure(client, db_session, monkeypatch):
+    _owner_headers, owner = await _auth_headers(client, db_session, username="batch-cleanup-warning-owner")
+    admin_headers, _admin = await _auth_headers(client, db_session, username="batch-cleanup-warning-admin", role=UserRole.ADMIN)
+    order = await _create_order(db_session, "batch-cleanup-warning-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    instance = TaskInstance(
+        id="batch-cleanup-warning-instance",
+        template_id=order.template_id,
+        name="batch-cleanup-warning-instance",
+        status=TaskStatus.RUNNING,
+        source_order_id=order.id,
+    )
+    order.materialized_instance_id = instance.id
+    db_session.add(instance)
+    await db_session.commit()
+
+    async def fake_cleanup(_db, _instance):
+        return ["compute: 删除容器失败"]
+
+    async def fake_cancel_all_schedules(self, _instance_id):
+        return None
+
+    monkeypatch.setattr("api.orders.cleanup_instance_runtime", fake_cleanup)
+    monkeypatch.setattr("api.orders.TaskScheduler.cancel_all_schedules", fake_cancel_all_schedules)
+
+    response = await client.post(
+        "/api/orders/batch/cleanup-instances",
+        headers=admin_headers,
+        json={"order_ids": [order.id]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == []
+    assert "容器清理失败" in response.json()["failed"][order.id]
+    order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    assert order_row.scalar_one().status == OrderStatus.MATERIALIZED.value
     instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
     assert instance_row.scalar_one_or_none() is not None
 

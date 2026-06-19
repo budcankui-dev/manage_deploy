@@ -2413,7 +2413,7 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
     )
     assert result_response.status_code == 200, result_response.text
 
-    delete_response = await client.delete(f"/api/orders/{order_id}")
+    delete_response = await client.delete(f"/api/orders/{order_id}", headers=headers)
     assert delete_response.status_code == 200
 
     events_response = await client.get(
@@ -2477,7 +2477,7 @@ async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu
     )
     assert result_response.status_code == 200, result_response.text
 
-    delete_response = await client.delete(f"/api/orders/{order_id}")
+    delete_response = await client.delete(f"/api/orders/{order_id}", headers=headers)
     assert delete_response.status_code == 200
 
     events_response = await client.get(
@@ -2976,7 +2976,7 @@ async def test_cleanup_order_instance_preserves_business_evidence(client, db_ses
     assert detail_response.json()["instance"] is None
     assert detail_response.json()["evaluation"]["business_success"] is True
 
-    delete_response = await client.delete(f"/api/orders/{order_id}")
+    delete_response = await client.delete(f"/api/orders/{order_id}", headers=headers)
     assert delete_response.status_code == 200
     eval_after_delete_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
     assert eval_after_delete_response.status_code == 404

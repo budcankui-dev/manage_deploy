@@ -179,6 +179,29 @@ def _ensure_order_owner_or_admin(order: TaskOrder, current_user: User) -> None:
         raise HTTPException(status_code=403, detail="无权操作该工单")
 
 
+async def _cleanup_materialized_order_instance(
+    db: AsyncSession,
+    order: TaskOrder,
+    task_scheduler: TaskScheduler,
+) -> TaskInstance | None:
+    """Stop and purge runtime containers for an order before deleting/cleaning records."""
+    if not order.materialized_instance_id:
+        return None
+    instance_row = await db.execute(
+        select(TaskInstance)
+        .options(selectinload(TaskInstance.nodes))
+        .where(TaskInstance.id == order.materialized_instance_id)
+    )
+    instance = instance_row.scalar_one_or_none()
+    if not instance:
+        return None
+    await task_scheduler.cancel_all_schedules(instance.id)
+    cleanup_warnings = await cleanup_instance_runtime(db, instance)
+    if cleanup_warnings:
+        raise RuntimeError(f"容器清理失败：{'；'.join(cleanup_warnings)}")
+    return instance
+
+
 async def _resolve_batch_orders(
     db: AsyncSession,
     request: BatchOperationRequest,
@@ -822,7 +845,11 @@ async def _instance_exists(db: AsyncSession, instance_id: str | None) -> bool | 
 
 
 @router.post("", response_model=TaskOrderResponse)
-async def create_order(payload: TaskOrderCreate, db: AsyncSession = Depends(get_db)):
+async def create_order(
+    payload: TaskOrderCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if payload.external_task_id:
         exists = await db.execute(
             select(TaskOrder).where(TaskOrder.external_task_id == payload.external_task_id)
@@ -834,6 +861,7 @@ async def create_order(payload: TaskOrderCreate, db: AsyncSession = Depends(get_
     order = TaskOrder(
         external_task_id=payload.external_task_id,
         template_id=payload.template_id,
+        user_id=current_user.id,
         name=payload.name,
         description=payload.description,
         deployment_mode=payload.deployment_mode,
@@ -1050,21 +1078,10 @@ async def delete_order(
         raise HTTPException(status_code=404, detail="工单不存在")
     _ensure_order_owner_or_admin(order, current_user)
     task_scheduler = TaskScheduler()
-    if order.materialized_instance_id:
-        instance_row = await db.execute(
-            select(TaskInstance)
-            .options(selectinload(TaskInstance.nodes))
-            .where(TaskInstance.id == order.materialized_instance_id)
-        )
-        instance = instance_row.scalar_one_or_none()
-        if instance:
-            await task_scheduler.cancel_all_schedules(instance.id)
-            cleanup_warnings = await cleanup_instance_runtime(db, instance)
-            if cleanup_warnings:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"容器清理失败，工单未删除：{'；'.join(cleanup_warnings)}",
-                )
+    try:
+        await _cleanup_materialized_order_instance(db, order, task_scheduler)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=f"{exc}，工单未删除") from exc
     await emit_release_events_for_order(
         db,
         order,
@@ -1139,8 +1156,10 @@ async def batch_delete_orders(
         raise HTTPException(status_code=403, detail="Admin role required")
     succeeded: list[str] = []
     orders, failed = await _resolve_batch_orders(db, request)
+    task_scheduler = TaskScheduler()
     for order in orders:
         try:
+            await _cleanup_materialized_order_instance(db, order, task_scheduler)
             await emit_release_events_for_order(
                 db,
                 order,
@@ -1151,6 +1170,8 @@ async def batch_delete_orders(
             await purge_order_instance_artifacts(db, order.materialized_instance_id)
             await db.delete(order)
             succeeded.append(order.id)
+        except RuntimeError as exc:
+            failed[order.id] = str(exc)
         except Exception as exc:
             failed[order.id] = str(exc)
     await db.commit()
@@ -1187,13 +1208,15 @@ async def batch_cleanup_order_instances(
                 continue
 
             await task_scheduler.cancel_all_schedules(instance.id)
+            cleanup_warnings = await cleanup_instance_runtime(db, instance)
+            if cleanup_warnings:
+                raise RuntimeError(f"容器清理失败：{'；'.join(cleanup_warnings)}")
             await emit_release_events_for_order(
                 db,
                 order,
                 reason="cleanup_instance",
                 metadata={"instance_id": instance.id, "preserve_order": True},
             )
-            await cleanup_instance_runtime(db, instance)
             await purge_instance_artifacts_preserve_evidence(db, instance.id)
             if order.status == OrderStatus.MATERIALIZED:
                 order.status = OrderStatus.COMPLETED
@@ -1206,11 +1229,16 @@ async def batch_cleanup_order_instances(
 
 
 @router.post("/{order_id}/materialize", response_model=dict)
-async def materialize_order(order_id: str, db: AsyncSession = Depends(get_db)):
+async def materialize_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _ensure_order_owner_or_admin(order, current_user)
     if order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="Order is cancelled")
 
@@ -1239,7 +1267,12 @@ async def materialize_order(order_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/materialize/pending", response_model=dict)
-async def materialize_pending_orders(db: AsyncSession = Depends(get_db)):
+async def materialize_pending_orders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
     rows = await db.execute(
         select(TaskOrder).where(TaskOrder.status == OrderStatus.PENDING).order_by(TaskOrder.created_at.asc())
     )

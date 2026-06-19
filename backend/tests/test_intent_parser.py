@@ -82,6 +82,17 @@ def test_parse_matmul_extracts_required_fields():
     assert result.runtime_plan["routing_strategy"] == "fastest_completion"
 
 
+def test_parse_matmul_accepts_batch_count_after_chinese_label():
+    result = parse_intent(
+        "从 h1 到 h2 跑矩阵计算，规模1024，批次10，运行1小时",
+        valid_nodes=["h1", "h2"],
+    )
+
+    assert result.parse_status == "valid"
+    assert result.data_profile["matrix_size"] == 1024
+    assert result.data_profile["batch_count"] == 10
+
+
 def test_parse_half_hour_duration():
     result = parse_intent(
         "矩阵乘法任务，从 compute-1 到 compute-2，512阶矩阵，20批，立即执行半小时，希望成本更低",

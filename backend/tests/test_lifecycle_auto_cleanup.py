@@ -18,10 +18,10 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from enums import DeploymentMode, OrderStatus, TaskStatus
-from models import Node, TaskInstance, TaskOrder, TaskTemplate, TaskTemplateNode
+from enums import DeploymentMode, NodeStatus, OrderStatus, TaskStatus
+from models import Node, TaskInstance, TaskInstanceNode, TaskOrder, TaskTemplate, TaskTemplateNode
 from schemas import TaskInstanceCreate, TaskOrderCreate
-from services.instance_lifecycle import auto_cleanup_instance
+from services.instance_lifecycle import auto_cleanup_instance, cleanup_instance_runtime
 from services.order_sync import mark_orders_completed_for_instance
 from services.scheduler import TaskScheduler, restore_pending_jobs, scheduler as ap_scheduler
 
@@ -195,6 +195,78 @@ async def test_auto_cleanup_instance_deletes_instance(db_session, seeded_instanc
 
     # warnings 不应该挂掉（节点表无对应 worker container，所以 remove_node 应该顺利 noop）
     assert isinstance(warnings, list)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_instance_runtime_skips_nodes_that_never_created_container(db_session, seeded_instance, monkeypatch):
+    instance_id, _order_id = seeded_instance
+    instance = (
+        await db_session.execute(
+            select(TaskInstance)
+            .options(selectinload(TaskInstance.nodes))
+            .where(TaskInstance.id == instance_id)
+        )
+    ).scalar_one()
+    machine = (await db_session.execute(select(Node).where(Node.hostname == "worker-l"))).scalar_one()
+    pending_node = TaskInstanceNode(
+        instance_id=instance.id,
+        template_node_id="template-node-pending-cleanup-test",
+        name="pending-source",
+        image="busybox:latest",
+        node_id=machine.id,
+        status=NodeStatus.PENDING,
+        container_id=None,
+        container_name=None,
+    )
+    db_session.add(pending_node)
+    await db_session.commit()
+    await db_session.refresh(instance, attribute_names=["nodes"])
+
+    async def fail_if_called(self, node):
+        raise AssertionError(f"未创建容器的节点不应调用远端删除: {node.name}")
+
+    monkeypatch.setattr("services.instance_lifecycle.DAGExecutor.remove_node", fail_if_called)
+
+    warnings = await cleanup_instance_runtime(db_session, instance)
+
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_instance_runtime_removes_nodes_with_container(db_session, seeded_instance, monkeypatch):
+    instance_id, _order_id = seeded_instance
+    instance = (
+        await db_session.execute(
+            select(TaskInstance)
+            .options(selectinload(TaskInstance.nodes))
+            .where(TaskInstance.id == instance_id)
+        )
+    ).scalar_one()
+    machine = (await db_session.execute(select(Node).where(Node.hostname == "worker-l"))).scalar_one()
+    node = TaskInstanceNode(
+        instance_id=instance.id,
+        template_node_id="template-node-cleanup-test",
+        name="compute",
+        image="busybox:latest",
+        node_id=machine.id,
+        status=NodeStatus.RUNNING,
+        container_name="container-for-cleanup-test",
+    )
+    db_session.add(node)
+    await db_session.commit()
+    await db_session.refresh(instance, attribute_names=["nodes"])
+    calls = []
+
+    async def fake_remove(self, removed_node):
+        calls.append(removed_node.id)
+        return True, None
+
+    monkeypatch.setattr("services.instance_lifecycle.DAGExecutor.remove_node", fake_remove)
+
+    warnings = await cleanup_instance_runtime(db_session, instance)
+
+    assert warnings == []
+    assert calls == [node.id]
 
 
 # ---------- scheduler.restore_pending_jobs ----------

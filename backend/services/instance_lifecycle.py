@@ -14,6 +14,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import TaskEvent, TaskInstance
+from enums import NodeStatus
 from services.dag_executor import DAGExecutor
 from services.order_sync import purge_order_instance_artifacts
 from services.routing_resource_events import emit_release_events_for_instance
@@ -26,6 +27,15 @@ async def cleanup_instance_runtime(db: AsyncSession, instance: TaskInstance) -> 
     executor = DAGExecutor(db)
     errors: list[str] = []
     for node in instance.nodes:
+        has_container = bool(node.container_id or node.container_name)
+        may_have_runtime = node.status in {
+            NodeStatus.STARTING,
+            NodeStatus.RUNNING,
+            NodeStatus.READY,
+            NodeStatus.STOPPING,
+        }
+        if not has_container and not may_have_runtime:
+            continue
         success, error = await executor.remove_node(node)
         if not success:
             errors.append(f"{node.name}: {error or 'Unknown error'}")

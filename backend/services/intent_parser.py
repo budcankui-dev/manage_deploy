@@ -174,6 +174,7 @@ def _extract_batch_count(text: str) -> int | None:
     patterns = [
         r"(\d{1,4})\s*(?:批|批次|个批次)",
         r"(\d{1,4})\s*个小批次",
+        r"批次\s*[:：]?\s*(\d{1,4})",
         r"批次数\s*[:：]?\s*(\d{1,4})",
         r"batch\s+(\d{1,4})",
         r"batch(?:_count)?\s*[:=]\s*(\d{1,4})",
