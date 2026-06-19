@@ -106,11 +106,10 @@
         @selection-change="handleOrderSelectionChange"
       >
         <el-table-column type="selection" width="44" fixed="left" />
-        <el-table-column label="工单" min-width="240" fixed="left" show-overflow-tooltip>
+        <el-table-column label="工单" min-width="180" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="order-cell">
-              <strong>{{ taskTypeLabel(row.task_type) || '业务工单' }}</strong>
-              <span>工单ID：{{ row.order_id?.slice(0, 8) }}</span>
+              <strong>工单ID：{{ row.order_id?.slice(0, 8) || '-' }}</strong>
             </div>
           </template>
         </el-table-column>

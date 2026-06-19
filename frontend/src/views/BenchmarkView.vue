@@ -265,11 +265,10 @@
         @row-dblclick="openOrderDetail"
       >
         <el-table-column type="selection" width="44" fixed="left" />
-        <el-table-column label="工单" min-width="260" fixed="left" show-overflow-tooltip>
+        <el-table-column label="工单" min-width="180" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="order-cell">
-              <strong>{{ taskTypeLabel(row.task_type) || currentTaskConfig.label }}</strong>
-              <span>工单ID：{{ shortId(row.id) }}</span>
+              <strong>工单ID：{{ shortId(row.id) }}</strong>
             </div>
           </template>
         </el-table-column>
