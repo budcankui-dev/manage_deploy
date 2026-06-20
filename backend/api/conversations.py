@@ -30,11 +30,13 @@ from services.intent_parser import validate_draft_fields
 from services.intent_workflow import run_intent_workflow
 from services.endpoint_resolver import EndpointResolutionError, ResolvedEndpoint, is_user_endpoint_node, resolve_user_endpoint
 from services.routing_payload_builder import build_routing_payload
+from services.routing_policy import normalize_routing_policy
 from services.system_settings import (
     get_runtime_settings,
     modality_priority_map_from_settings,
     routing_resource_options_from_settings,
 )
+from services.time_utils import business_now
 from services.topology_catalog import COMPUTE_NODE_ALIASES
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -739,7 +741,7 @@ async def confirm_intent(
         conversation_id=conversation.id,
         order_id=order.id,
         intent_draft_id=draft.id,
-        strategy=(draft.runtime_plan or {}).get("routing_strategy") or "resource_guarantee",
+        strategy=normalize_routing_policy((draft.runtime_plan or {}).get("routing_strategy"), "resource_guarantee"),
         status=RoutingRequestStatus.PENDING,
         source_name=draft.source_name,
         destination_name=draft.destination_name,
@@ -828,7 +830,7 @@ async def _apply_platform_managed_route(
     """Apply the built-in compute placement for user-access demo orders."""
     if order.materialized_instance_id:
         conversation.status = ConversationStatus.SUBMITTED
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = business_now()
         return
 
     nodes = (
@@ -853,6 +855,13 @@ async def _apply_platform_managed_route(
     from api.orders import receive_routing_result as receive_order_routing_result
 
     runtime_config = order.runtime_config if isinstance(order.runtime_config, dict) else {}
+    business_task = runtime_config.get("business_task") if isinstance(runtime_config.get("business_task"), dict) else {}
+    runtime_plan = business_task.get("runtime_plan") if isinstance(business_task.get("runtime_plan"), dict) else {}
+    routing_strategy = (
+        normalize_routing_policy(runtime_plan.get("routing_strategy"))
+        or normalize_routing_policy(business_task.get("routing_strategy"))
+        or "resource_guarantee"
+    )
     platform_deployment = runtime_config.get("platform_deployment") if isinstance(runtime_config.get("platform_deployment"), dict) else {}
     if start_deployment and platform_deployment.get("mode") == "route_only":
         platform_deployment = {
@@ -873,8 +882,7 @@ async def _apply_platform_managed_route(
             await receive_order_routing_result(
                 order_id=order.id,
                 payload=RoutingResultPayload(
-                    strategy="platform_managed",
-                    selected_strategy="系统自动分配",
+                    strategy=routing_strategy,
                     external_routing_id=f"platform-route-{conversation.id[:8]}",
                     placements=[
                         RoutingPlacement(
@@ -885,6 +893,8 @@ async def _apply_platform_managed_route(
                     ],
                     metadata={
                         "mode": "platform_managed_route",
+                        "route_source": "platform_managed",
+                        "route_source_label": "系统自动分配",
                         "description": "平台按当前可调度节点完成一次部署流程。",
                         "selected_compute": compute_node.hostname,
                     },

@@ -77,7 +77,7 @@
 | `fastest_completion` | `TIME_CONSTRAINED` | 完成时间优先 | 优先选择预计完成更快的节点。 |
 | `load_balance` | `LOAD_BALANCE` | 资源负载均衡 | 优先把任务分散到负载较低的节点。 |
 
-平台只会为上表中的有效 `routing_strategy` 生成对应 `policy_type`。如果用户没有表达特殊偏好，新建工单默认使用 `resource_guarantee / RESOURCE_GUARANTEE`。平台内部会把少量旧别名规范化到上表，例如 `completion_time_first` 会输出为 `fastest_completion`；路由系统只需要消费上表中的冻结键。旧版本历史数据不作为兼容目标；联调前应清理旧工单，并按当前策略字典重新创建。
+平台只会为上表中的有效 `routing_strategy` 生成对应 `policy_type`。如果用户没有表达特殊偏好，新建工单默认使用 `resource_guarantee / RESOURCE_GUARANTEE`。路由系统只需要消费上表中的冻结键；旧版本历史策略名不作为兼容目标，联调前应清理旧工单，并按当前策略字典重新创建。
 
 业务模态与默认优先级字典如下。`1` 表示最高业务流优先级，`8` 表示最低；平台系统设置可以调整该映射。
 
@@ -182,7 +182,8 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 | 字段 | 说明 |
 |------|------|
 | `placements` | 路由结果列表。每项只接受 `task_node_id`、`topology_node_id`、`gpu_device`。 |
-| `strategy` / `selected_strategy` | 可选，路由策略和算法侧具体策略名。 |
+| `strategy` | 可选，必须是第 2 节冻结的五个路由策略之一。 |
+| `selected_strategy` | 可选，路由算法内部策略名或展示说明，不参与平台侧 `routing_strategy` 判定。 |
 | `external_routing_id` | 可选，路由系统自己的结果 ID。 |
 | `metadata` | 可选，算法版本、路径、成本、解释、候选评分等扩展字典。 |
 | `estimated_metric` / `result_payload` | 可选，算法侧估计值和原始结果。 |
@@ -1279,7 +1280,7 @@ DAG 中的 `source`、`compute`、`sink` 是业务逻辑角色。平台可能有
 | 外部路由系统 | 平台只创建 pending 工单，等待外部路由回写。该模式用于与路由服务联调。 |
 | 系统自动路由 | 平台内置的节点放置流程，可通过系统设置页切换，用于快速验证部署闭环。 |
 
-系统自动路由不是外部路由算法，不用于验证路由策略效果；与路由同学联调时请使用“外部路由系统”配置。
+系统自动路由不是外部路由算法，不用于验证路由策略效果；与路由同学联调时请使用“外部路由系统”配置。系统自动分配只允许作为 `metadata.route_source_label` 一类的路由来源展示，不能写入 `routing_strategy`、`strategy` 或 `policy_type`。
 
 ## 17. 业务目标成功率和路由的关系
 

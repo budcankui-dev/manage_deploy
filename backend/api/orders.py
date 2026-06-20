@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -15,7 +15,7 @@ from typing import Any, Optional
 from agents.agent_client import AgentClient
 from api.auth import get_current_user
 from config import settings
-from database import get_db
+from database import async_session_maker, get_db
 from enums import (
     ConversationStatus,
     DeploymentMode,
@@ -65,6 +65,7 @@ from services.order_sync import (
 from services.port_plan import format_service_url, get_business_address
 from services.routing_resource_events import emit_release_events_for_order
 from services.routing_payload_builder import build_routing_payload
+from services.routing_policy import normalize_routing_policy, require_routing_policy
 from services.routing_network import (
     build_network_bindings,
     mark_network_binding_ready,
@@ -156,6 +157,34 @@ def _benchmark_run_id(order: TaskOrder) -> str | None:
     return None
 
 
+ACTIVE_INSTANCE_STATUSES = {
+    TaskStatus.STARTING,
+    TaskStatus.RUNNING,
+    TaskStatus.STOPPING,
+}
+
+
+def _status_value(status: Any) -> str:
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _reject_active_instance_for_cleanup(instance: TaskInstance) -> None:
+    if instance.status in ACTIVE_INSTANCE_STATUSES:
+        raise RuntimeError(
+            f"实例正在启动中/运行中/停止中（当前状态：{_status_value(instance.status)}），请等待完成或先停止任务后再清理"
+        )
+
+
+async def _background_benchmark_start(instance_id: str) -> None:
+    async with async_session_maker() as session:
+        executor = DAGExecutor(session)
+        await executor.execute_dag_start(instance_id, claimed_start=True)
+
+
+def _schedule_background_benchmark_start(instance_id: str) -> None:
+    asyncio.create_task(_background_benchmark_start(instance_id))
+
+
 def _benchmark_task_type(order: TaskOrder) -> str | None:
     config = order.runtime_config or {}
     business_task = config.get("business_task")
@@ -196,6 +225,7 @@ async def _cleanup_materialized_order_instance(
     instance = instance_row.scalar_one_or_none()
     if not instance:
         return None
+    _reject_active_instance_for_cleanup(instance)
     await task_scheduler.cancel_all_schedules(instance.id)
     cleanup_warnings = await cleanup_instance_runtime(db, instance)
     if cleanup_warnings:
@@ -755,6 +785,7 @@ def _order_to_response(
     bt = rc.get("business_task") or {}
     rp = bt.get("runtime_plan") or {}
     routing_result = rc.get("routing_result") if isinstance(rc.get("routing_result"), dict) else {}
+    routing_metadata = routing_result.get("metadata") if isinstance(routing_result.get("metadata"), dict) else {}
     routing_dag = order.routing_input_dag if isinstance(order.routing_input_dag, dict) else {}
     raw_priority = routing_dag.get("priority") or bt.get("priority")
     try:
@@ -767,12 +798,13 @@ def _order_to_response(
         "owner_username": owner.username if owner else None,
         "task_type": bt.get("task_type"),
         "routing_policy": (
-            routing_result.get("strategy")
-            or routing_result.get("selected_strategy")
-            or routing_result.get("routing_policy")
-            or bt.get("routing_policy")
-            or rp.get("routing_strategy")
+            normalize_routing_policy(routing_result.get("strategy"))
+            or normalize_routing_policy(routing_result.get("routing_policy"))
+            or normalize_routing_policy(bt.get("routing_policy"))
+            or normalize_routing_policy(rp.get("routing_strategy"))
+            or normalize_routing_policy(bt.get("routing_strategy"))
         ),
+        "route_source_label": routing_metadata.get("route_source_label"),
         "business_priority": business_priority,
     }
     if instance_exists is not None:
@@ -1244,6 +1276,7 @@ async def batch_cleanup_order_instances(
                 succeeded.append(order.id)
                 continue
 
+            _reject_active_instance_for_cleanup(instance)
             await task_scheduler.cancel_all_schedules(instance.id)
             cleanup_warnings = await cleanup_instance_runtime(db, instance)
             if cleanup_warnings:
@@ -1360,6 +1393,12 @@ class RoutingResultPayload(BaseModel):
     estimated_metric: dict[str, Any] = Field(default_factory=dict)
     result_payload: dict[str, Any] = Field(default_factory=dict)
     require_network_ready: bool = True
+
+    @model_validator(mode="after")
+    def _validate_strategy(self):
+        if self.strategy is not None:
+            self.strategy = require_routing_policy(self.strategy, field_name="strategy")
+        return self
 
 
 def _placement_role(placement: RoutingPlacement | dict[str, Any]) -> str:
@@ -1702,7 +1741,7 @@ async def _sync_conversation_after_order_routing(
         result_payload["network_ready_required"] = require_network_ready
         routing.result_payload = result_payload
         routing.error_message = None
-        routing.completed_at = datetime.utcnow()
+        routing.completed_at = business_now()
 
     conversation: Conversation | None = None
     if order.conversation_id:
@@ -1725,7 +1764,7 @@ async def _sync_conversation_after_order_routing(
                 if require_network_ready
                 else ConversationStatus.SUBMITTED
             )
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = business_now()
 
 
 def _order_compute_gpu_slots(order: TaskOrder) -> set[tuple[str, str]]:
@@ -2051,6 +2090,14 @@ class BatchBenchmarkRequest(BaseModel):
     source_name: Optional[str] = None
     destination_name: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _validate_routing_strategy(self):
+        self.routing_strategy = require_routing_policy(
+            self.routing_strategy,
+            field_name="routing_strategy",
+        )
+        return self
+
 
 @router.post("/batch-benchmark")
 async def create_batch_benchmark(
@@ -2163,6 +2210,7 @@ class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
     max_parallel: int = Field(default=2, ge=1, le=10)
     per_compute_slot_limit: int = Field(default=1, ge=1, le=4)
     cleanup_evaluated: bool = True
+    retry_failed: bool = False
     wait_seconds: int = Field(default=0, ge=0, le=30)
 
 
@@ -2275,13 +2323,12 @@ async def start_all_routed_benchmark_orders(
             skipped.append(instance_id)
             continue
 
-        if instance.status not in (
-            TaskStatus.PENDING,
-            TaskStatus.SCHEDULED,
-            TaskStatus.STOPPED,
-            TaskStatus.FAILED,
-        ):
-            failed[order.id] = f"Cannot start instance in status: {instance.status}"
+        startable_statuses = {TaskStatus.PENDING, TaskStatus.SCHEDULED, TaskStatus.STOPPED}
+        if payload.retry_failed:
+            startable_statuses.add(TaskStatus.FAILED)
+        if instance.status not in startable_statuses:
+            status_value = instance.status.value if hasattr(instance.status, "value") else str(instance.status)
+            failed[order.id] = f"Cannot start instance in status: {status_value}"
             continue
 
         try:
@@ -2397,6 +2444,8 @@ async def _cleanup_evaluated_benchmark_instance(
 async def _reevaluate_orders_from_latest_metrics(
     db: AsyncSession,
     orders: list[TaskOrder],
+    *,
+    missing_metric_is_failure: bool = True,
 ) -> tuple[list[str], dict[str, str]]:
     """Rebuild missing/stale business evaluations from reported task_metrics."""
     from api.business_tasks import evaluate_and_store_business_metric
@@ -2426,7 +2475,8 @@ async def _reevaluate_orders_from_latest_metrics(
             )
         ).scalars().first()
         if not metric:
-            failed[order.id] = f"No reported metric found for {metric_key}"
+            if missing_metric_is_failure:
+                failed[order.id] = f"No reported metric found for {metric_key}"
             continue
 
         row = await evaluate_and_store_business_metric(
@@ -2475,7 +2525,11 @@ async def start_controlled_routed_benchmark_orders(
     """
     payload = payload or ControlledBenchmarkStartRequest()
     orders = await _controlled_benchmark_orders(db, payload, current_user)
-    recalc_succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(db, orders)
+    recalc_succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(
+        db,
+        orders,
+        missing_metric_is_failure=False,
+    )
     if recalc_succeeded:
         await db.flush()
     instance_map = await _instances_for_orders(db, orders)
@@ -2515,8 +2569,8 @@ async def start_controlled_routed_benchmark_orders(
             active_orders += 1
 
     started: list[str] = []
+    background_start_ids: list[str] = []
     skipped_busy: list[str] = []
-    executor = DAGExecutor(db)
     for order in orders:
         if len(started) >= payload.max_parallel:
             break
@@ -2529,13 +2583,12 @@ async def start_controlled_routed_benchmark_orders(
             continue
         if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
             continue
-        if instance.status not in (
-            TaskStatus.PENDING,
-            TaskStatus.SCHEDULED,
-            TaskStatus.STOPPED,
-            TaskStatus.FAILED,
-        ):
-            failed[order.id] = f"Cannot start instance in status: {instance.status}"
+        startable_statuses = {TaskStatus.PENDING, TaskStatus.SCHEDULED, TaskStatus.STOPPED}
+        if payload.retry_failed:
+            startable_statuses.add(TaskStatus.FAILED)
+        if instance.status not in startable_statuses:
+            status_value = instance.status.value if hasattr(instance.status, "value") else str(instance.status)
+            failed[order.id] = f"Cannot start instance in status: {status_value}"
             continue
 
         slot = _benchmark_compute_slot(order)
@@ -2554,15 +2607,23 @@ async def start_controlled_routed_benchmark_orders(
                 messages = "; ".join(issue.message for issue in preflight.conflicts)
                 failed[order.id] = f"启动前预检查失败: {messages}"
                 continue
-            success, error = await executor.execute_dag_start(instance_id)
-            if success:
-                started.append(instance_id)
-                active_by_slot[slot] += 1
-                active_orders += 1
-            else:
-                failed[order.id] = error or "Unknown error"
+            instance.status = TaskStatus.STARTING
+            instance.error_message = None
+            await db.flush()
+            started.append(instance_id)
+            background_start_ids.append(instance_id)
+            active_by_slot[slot] += 1
+            active_orders += 1
         except Exception as exc:
             failed[order.id] = str(exc)
+
+    if background_start_ids:
+        # Commit the claimed STARTING state before handing work to an
+        # independent session. Otherwise the request session could overwrite a
+        # fast background completion back to STARTING.
+        await db.commit()
+        for instance_id in background_start_ids:
+            _schedule_background_benchmark_start(instance_id)
 
     if payload.wait_seconds:
         await asyncio.sleep(payload.wait_seconds)
@@ -2642,9 +2703,20 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
         business_task["resource_requirement"] = resource_requirement
         rc["business_task"] = business_task
     runtime_plan = business_task.get("runtime_plan") or {}
+    task_strategy = (
+        normalize_routing_policy(runtime_plan.get("routing_strategy"))
+        or normalize_routing_policy(business_task.get("routing_strategy"))
+        or "resource_guarantee"
+    )
     rc["routing_result"] = {
-        "strategy": runtime_plan.get("routing_strategy") or business_task.get("routing_strategy"),
+        "strategy": task_strategy,
         "placements": placements,
+        "metadata": {
+            "mode": "benchmark_auto_route",
+            "route_source": "platform_managed",
+            "route_source_label": "系统自动分配",
+            "description": "平台按当前可用终端节点和计算节点完成本轮测评分配。",
+        },
     }
     order.runtime_config = rc
     flag_modified(order, "runtime_config")
@@ -2655,7 +2727,9 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     instance_create = TaskInstanceCreate(
         template_id=catalog.template_id if catalog else order.template_id,
         name=order.name,
-        deployment_mode=DeploymentMode.SCHEDULED,
+        # Batch benchmark orders are advanced by /start-controlled-routed so
+        # the selected compute/GPU slot is never over-subscribed accidentally.
+        deployment_mode=DeploymentMode.IMMEDIATE if order.is_benchmark else DeploymentMode.SCHEDULED,
         scheduled_start_time=start_time,
         scheduled_end_time=end_time,
         auto_start=False,
@@ -2671,11 +2745,12 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
 
     network_bindings = await build_network_bindings(db, order, instance)
     mark_network_binding_ready(order, network_bindings, require_ready=False)
-    ts = TaskScheduler()
-    if order.business_start_time:
-        await ts.schedule_task_start(instance.id, order.business_start_time)
-    if order.business_end_time:
-        await ts.schedule_task_end(instance.id, order.business_end_time)
+    if not order.is_benchmark:
+        ts = TaskScheduler()
+        if order.business_start_time:
+            await ts.schedule_task_start(instance.id, order.business_start_time)
+        if order.business_end_time:
+            await ts.schedule_task_end(instance.id, order.business_end_time)
 
     flag_modified(order, "runtime_config")
     order.materialized_instance_id = instance.id

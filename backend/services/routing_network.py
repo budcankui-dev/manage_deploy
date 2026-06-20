@@ -7,7 +7,6 @@ task instance has been materialized, so this module keeps that handoff explicit.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -17,6 +16,7 @@ from config import settings
 from enums import RoutingStatus
 from models import Node as NodeModel, TaskInstance, TaskInstanceEdge, TaskInstanceNode, TaskOrder
 from services.port_plan import extract_host_ports, format_service_url, get_business_address
+from services.time_utils import business_now
 
 
 def routing_result(order: TaskOrder) -> dict[str, Any]:
@@ -408,7 +408,7 @@ def mark_network_binding_ready(order: TaskOrder, bindings: list[dict[str, Any]],
     result = dict(config.get("routing_result") or {})
     result["network_bindings"] = bindings
     result["network_binding_status"] = "ready"
-    result["network_bindings_ready_at"] = datetime.utcnow().isoformat()
+    result["network_bindings_ready_at"] = business_now().isoformat()
     result["network_ready_required"] = bool(require_ready)
     result["network_ready"] = not require_ready
     config["routing_result"] = result
@@ -419,7 +419,7 @@ def mark_network_ready(order: TaskOrder, metadata: dict[str, Any] | None = None)
     config = dict(order.runtime_config or {})
     result = dict(config.get("routing_result") or {})
     result["network_ready"] = True
-    result["network_ready_at"] = datetime.utcnow().isoformat()
+    result["network_ready_at"] = business_now().isoformat()
     if metadata:
         result["network_ready_metadata"] = metadata
     config["routing_result"] = result

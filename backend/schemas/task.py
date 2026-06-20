@@ -1,9 +1,10 @@
 from typing import Optional, Any
 
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from datetime import datetime, timedelta, UTC
 from enums import TaskStatus, NodeStatus, HealthCheckType, DeploymentMode, OrderStatus, UserRole
 from schemas.runtime import MacroDefSpec, PortDefSpec
+from services.routing_policy import require_routing_policy
 
 
 def _apply_scheduled_defaults(values: dict) -> dict:
@@ -419,7 +420,6 @@ class BusinessPlacement(BaseModel):
 class RoutingResult(BaseModel):
     strategy: str = Field(
         default="resource_guarantee",
-        validation_alias=AliasChoices("strategy", "routing_policy"),
     )
     placements: list[BusinessPlacement]
     estimated_metric: Optional[dict[str, Any]] = None
@@ -429,6 +429,11 @@ class RoutingResult(BaseModel):
     @property
     def routing_policy(self) -> str:
         return self.strategy
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def _validate_strategy(cls, value):
+        return require_routing_policy(value, field_name="routing_result.strategy")
 
 
 class BusinessTaskCreate(BaseModel):

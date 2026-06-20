@@ -85,6 +85,7 @@ const adminMenuItems = [
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
     cleanupStaleElementOverlays()
+    setTimeout(cleanupStaleElementOverlays, 300)
   }
 }
 
@@ -98,7 +99,10 @@ onUnmounted(() => {
 
 watch(
   () => route.fullPath,
-  () => setTimeout(cleanupStaleElementOverlays, 0)
+  () => {
+    setTimeout(cleanupStaleElementOverlays, 0)
+    setTimeout(cleanupStaleElementOverlays, 300)
+  }
 )
 
 function isActivePath(path) {

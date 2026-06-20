@@ -10,21 +10,9 @@ export const ROUTING_POLICY_LABELS = Object.fromEntries(
   ROUTING_POLICY_OPTIONS.map((item) => [item.value, item.label])
 )
 
-export const ROUTING_POLICY_ALIASES = {
-  platform_managed: 'platform_managed',
-  completion_time_first: 'fastest_completion',
-  completion_time: 'fastest_completion',
-  resource_guaranteed: 'resource_guarantee',
-  latency_constrained: 'low_latency_forwarding',
-  cost_constrained: 'cost_priority',
-  load_balancing: 'load_balance',
-}
-
 export function routingPolicyLabel(policy) {
   if (!policy) return '-'
-  const normalized = ROUTING_POLICY_ALIASES[policy] || policy
-  if (normalized === 'platform_managed') return '系统自动分配'
-  return ROUTING_POLICY_LABELS[normalized] || policy
+  return ROUTING_POLICY_LABELS[policy] || policy
 }
 
 export const ORDER_STATUS_LABELS = {

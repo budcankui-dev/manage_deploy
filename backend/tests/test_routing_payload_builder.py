@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from services.routing_payload_builder import build_routing_payload
 
 
@@ -115,44 +117,40 @@ def test_routing_payload_normalizes_legacy_modality_alias_for_router():
     assert payload["policy_type"] == "LATENCY_CONSTRAINED"
 
 
-def test_routing_payload_unknown_strategy_falls_back_to_resource_guarantee():
+def test_routing_payload_rejects_unknown_strategy():
     now = datetime(2026, 6, 16, 10, 0, 0)
 
-    payload = build_routing_payload(
-        order_id="order-unknown-strategy",
-        order_name="未知策略兜底测试",
-        task_type="low_latency_video_pipeline",
-        modality="低时延转发模态",
-        source_name="h1",
-        destination_name="h2",
-        business_start_time=now,
-        business_end_time=now + timedelta(hours=1),
-        data_profile={"frame_count": 90, "resolution": "720p", "fps": 30},
-        routing_strategy="legacy_unknown_strategy",
-    )
-
-    assert payload["routing_strategy"] == "resource_guarantee"
-    assert payload["policy_type"] == "RESOURCE_GUARANTEE"
+    with pytest.raises(ValueError, match="routing_strategy"):
+        build_routing_payload(
+            order_id="order-unknown-strategy",
+            order_name="未知策略拒绝测试",
+            task_type="low_latency_video_pipeline",
+            modality="低时延转发模态",
+            source_name="h1",
+            destination_name="h2",
+            business_start_time=now,
+            business_end_time=now + timedelta(hours=1),
+            data_profile={"frame_count": 90, "resolution": "720p", "fps": 30},
+            routing_strategy="legacy_unknown_strategy",
+        )
 
 
-def test_routing_payload_normalizes_legacy_completion_time_strategy_alias():
+def test_routing_payload_rejects_legacy_strategy_alias():
     now = datetime(2026, 6, 16, 10, 0, 0)
 
-    payload = build_routing_payload(
-        order_id="order-legacy-routing-strategy",
-        order_name="旧策略名兼容测试",
-        task_type="high_throughput_matmul",
-        modality="高通量计算模态",
-        source_name="h1",
-        destination_name="h2",
-        business_start_time=now,
-        business_end_time=now + timedelta(hours=1),
-        data_profile={"matrix_size": 1024, "batch_count": 50},
-        routing_strategy="completion_time_first",
-    )
-
-    assert payload["routing_strategy"] == "fastest_completion"
-    assert payload["policy_type"] == "TIME_CONSTRAINED"
+    with pytest.raises(ValueError, match="routing_strategy"):
+        build_routing_payload(
+            order_id="order-legacy-routing-strategy",
+            order_name="旧策略名拒绝测试",
+            task_type="high_throughput_matmul",
+            modality="高通量计算模态",
+            source_name="h1",
+            destination_name="h2",
+            business_start_time=now,
+            business_end_time=now + timedelta(hours=1),
+            data_profile={"matrix_size": 1024, "batch_count": 50},
+            routing_strategy="completion_time_first",
+        )
 
 
 def test_routing_payload_includes_clean_dynamic_port_requirements():

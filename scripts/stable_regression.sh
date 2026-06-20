@@ -73,7 +73,34 @@ else
 fi
 
 echo
-echo "== 6/6 汇总 =="
+echo "== 6/7 验收达标门禁（可选） =="
+ACCEPTANCE_ARGS=()
+if [ -n "${ACCEPTANCE_INTENT_REPORT:-}" ]; then
+  ACCEPTANCE_ARGS+=(--intent-report "$ACCEPTANCE_INTENT_REPORT")
+fi
+if [ -n "${ACCEPTANCE_BENCHMARK_RUN_ID:-}" ]; then
+  if [ -z "${ACCEPTANCE_TASK_TYPES:-}" ]; then
+    echo "已配置 ACCEPTANCE_BENCHMARK_RUN_ID，但未配置 ACCEPTANCE_TASK_TYPES，跳过业务达标门禁。" | tee "$REPORT_ROOT/acceptance-gate.log"
+  else
+    ACCEPTANCE_ARGS+=(--api-base-url "$API_PROXY_TARGET")
+    ACCEPTANCE_ARGS+=(--benchmark-run-id "$ACCEPTANCE_BENCHMARK_RUN_ID")
+    IFS=',' read -ra ACCEPTANCE_TASK_TYPE_LIST <<< "$ACCEPTANCE_TASK_TYPES"
+    for TASK_TYPE in "${ACCEPTANCE_TASK_TYPE_LIST[@]}"; do
+      if [ -n "$TASK_TYPE" ]; then
+        ACCEPTANCE_ARGS+=(--task-type "$TASK_TYPE")
+      fi
+    done
+  fi
+fi
+if [ "${#ACCEPTANCE_ARGS[@]}" -gt 0 ]; then
+  "$ROOT_DIR/backend/venv/bin/python" "$ROOT_DIR/scripts/acceptance_metrics_gate.py" \
+    "${ACCEPTANCE_ARGS[@]}" 2>&1 | tee "$REPORT_ROOT/acceptance-gate.log"
+else
+  echo "未配置 ACCEPTANCE_INTENT_REPORT 或 ACCEPTANCE_BENCHMARK_RUN_ID，跳过达标门禁。" | tee "$REPORT_ROOT/acceptance-gate.log"
+fi
+
+echo
+echo "== 7/7 汇总 =="
 cat > "$REPORT_ROOT/README.md" <<EOF
 # 稳定版回归报告
 
@@ -84,6 +111,7 @@ cat > "$REPORT_ROOT/README.md" <<EOF
 - 页面截图：\`ui-smoke/\`
 - Playwright 报告：\`playwright-report/index.html\`
 - Playwright 结果：\`playwright-results/\`
+- 验收达标门禁：\`acceptance-gate.log\`
 
 ## 通过标准
 
@@ -92,6 +120,7 @@ cat > "$REPORT_ROOT/README.md" <<EOF
 - UI smoke 不出现页面加载失败、明显横向溢出、中文标签竖排等问题。
 - Playwright 主流程 E2E 成功。
 - 后端关键 API 单测成功，或明确设置 \`SKIP_BACKEND_TESTS=1\` 跳过。
+- 如果配置了 \`ACCEPTANCE_INTENT_REPORT\` 或 \`ACCEPTANCE_BENCHMARK_RUN_ID\`，达标门禁必须成功。
 EOF
 
 echo "稳定版回归通过。报告目录：$REPORT_ROOT"

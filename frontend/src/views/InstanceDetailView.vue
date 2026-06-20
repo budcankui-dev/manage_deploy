@@ -543,17 +543,17 @@ async function fetchLogs(node) {
 }
 
 function parseApiTime(value) {
-  return value ? dayjs.utc(value) : null
+  return value ? dayjs(value) : null
 }
 
 function formatTime(time) {
   const parsed = parseApiTime(time)
-  return parsed ? parsed.local().fromNow() : '-'
+  return parsed ? parsed.fromNow() : '-'
 }
 
 function formatUtc8Time(time) {
   const parsed = parseApiTime(time)
-  return parsed ? `${parsed.utcOffset(8).format('YYYY-MM-DD HH:mm:ss')} (UTC+8)` : '-'
+  return parsed ? `${parsed.format('YYYY-MM-DD HH:mm:ss')} (UTC+8)` : '-'
 }
 
 function getNodeBgColor(status) {

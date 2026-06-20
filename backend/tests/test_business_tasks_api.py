@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
-from enums import OrderStatus, RoutingStatus, UserRole
+from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
 from models import (
     BusinessObjectiveEvaluation,
     Node,
@@ -389,7 +389,7 @@ async def test_business_task_create_and_metric_evaluation(client, db_session):
         },
         "runtime_plan": {"codec": "h264", "preset": "ultrafast"},
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
             "estimated_metric": {
                 "metric_key": "end_to_end_latency_ms",
@@ -467,7 +467,7 @@ async def test_business_task_create_rejects_compute_node_as_sink(client, db_sess
         },
         "runtime_plan": {"codec": "h264"},
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(sink="compute-1"),
         },
     }
@@ -527,7 +527,7 @@ async def test_business_task_summary_success_rate_excludes_unevaluated_orders(cl
                 "unit": "ms",
             },
             "routing_result": {
-                "strategy": "completion_time_first",
+                "strategy": "fastest_completion",
                 "placements": _standard_placements(),
             },
             "auto_start": False,
@@ -553,6 +553,80 @@ async def test_business_task_summary_success_rate_excludes_unevaluated_orders(cl
     assert summary[0]["evaluated_count"] == 1
     assert summary[0]["success_count"] == 1
     assert summary[0]["business_success_rate"] == 1.0
+    assert summary[0]["required_evaluated_count"] == 30
+    assert summary[0]["sample_count_passed"] is False
+    assert summary[0]["acceptance_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_business_task_summary_acceptance_gate_requires_30_samples_and_90_percent(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+
+    def order(instance_id: str) -> TaskOrder:
+        return TaskOrder(
+            template_id=template_id,
+            name=f"验收测评 {instance_id}",
+            status=OrderStatus.COMPLETED,
+            runtime_config={
+                "benchmark": {"run_id": "acceptance-gate"},
+                "business_task": {
+                    "task_type": "high_throughput_matmul",
+                    "business_objective": {"metric_key": "effective_gflops", "operator": ">=", "unit": "GFLOPS"},
+                    "runtime_plan": {"routing_strategy": "resource_guarantee"},
+                },
+            },
+            materialized_instance_id=instance_id,
+            is_benchmark=True,
+        )
+
+    db_session.add_all([order(f"gate-pass-{idx}") for idx in range(27)])
+    db_session.add_all([order(f"gate-fail-{idx}") for idx in range(3)])
+    db_session.add_all(
+        [
+            BusinessObjectiveEvaluation(
+                instance_id=f"gate-pass-{idx}",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=90,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=True,
+            )
+            for idx in range(27)
+        ]
+        + [
+            BusinessObjectiveEvaluation(
+                instance_id=f"gate-fail-{idx}",
+                task_type="high_throughput_matmul",
+                routing_strategy="resource_guarantee",
+                metric_key="effective_gflops",
+                actual_value=70,
+                target_value=80,
+                operator=">=",
+                unit="GFLOPS",
+                business_success=False,
+            )
+            for idx in range(3)
+        ]
+    )
+    await db_session.commit()
+
+    summary_response = await client.get(
+        "/api/business-tasks/summary",
+        params={"is_benchmark": True, "benchmark_run_id": "acceptance-gate"},
+    )
+
+    assert summary_response.status_code == 200
+    row = summary_response.json()[0]
+    assert row["evaluated_count"] == 30
+    assert row["success_count"] == 27
+    assert row["business_success_rate"] == 0.9
+    assert row["required_evaluated_count"] == 30
+    assert row["required_success_rate"] == 0.9
+    assert row["sample_count_passed"] is True
+    assert row["acceptance_passed"] is True
 
 
 @pytest.mark.asyncio
@@ -1120,6 +1194,61 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     order = row.scalar_one()
     assert order.routing_status == RoutingStatus.COMPLETED.value
     assert order.runtime_config["routing_result"]["network_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_order_routing_result_rejects_route_source_as_task_strategy(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="reject-route-source-strategy")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "reject-route-source-strategy-run",
+        },
+    )
+    assert create_response.status_code == 200
+    order_id = create_response.json()["order_ids"][0]
+
+    claim_response = await client.patch(f"/api/routing-orders/{order_id}/claim")
+    assert claim_response.status_code == 200
+    result_response = await client.post(
+        f"/api/routing-orders/{order_id}/result",
+        json={
+            "strategy": "platform_managed",
+            "placements": [
+                {"task_node_id": "source", "topology_node_id": "h1"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "h2"},
+            ],
+        },
+    )
+
+    assert result_response.status_code == 422
+    assert "strategy" in result_response.text
+
+
+@pytest.mark.asyncio
+async def test_batch_benchmark_rejects_route_source_as_routing_strategy(client, db_session):
+    _node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _user = await _auth_headers(client, db_session, username="reject-benchmark-route-source-strategy")
+
+    response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 1,
+            "benchmark_run_id": "reject-benchmark-route-source-strategy-run",
+            "routing_strategy": "系统自动分配",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "routing_strategy" in response.text
 
 
 @pytest.mark.asyncio
@@ -2482,6 +2611,44 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
 
 
 @pytest.mark.asyncio
+async def test_release_event_emission_is_idempotent(db_session):
+    from services.routing_resource_events import emit_release_events_for_order
+
+    order = TaskOrder(
+        id="idempotent-release-order",
+        template_id="template-id",
+        name="idempotent release order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "idempotent-release-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+            "routing_result": {
+                "placements": [
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
+                ]
+            },
+        },
+        is_benchmark=True,
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    first = await emit_release_events_for_order(db_session, order, reason="cleanup_instance")
+    second = await emit_release_events_for_order(db_session, order, reason="cleanup_instance")
+    await db_session.commit()
+
+    rows = (
+        await db_session.execute(
+            select(RoutingResourceEvent).where(RoutingResourceEvent.order_id == order.id)
+        )
+    ).scalars().all()
+    assert first == 1
+    assert second == 0
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
 async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-default-gpu-release-user")
@@ -2598,6 +2765,12 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session, monke
     assert video_order.routing_status == "pending"
     assert video_order.materialized_instance_id is None
 
+    matmul_instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == matmul_order.materialized_instance_id))
+    ).scalar_one()
+    assert matmul_instance.status == "pending"
+    assert matmul_instance.deployment_mode == "immediate"
+
     detail_response = await client.get(f"/api/orders/{matmul_order_id}", headers=headers)
     assert detail_response.status_code == 200
     detail = detail_response.json()
@@ -2607,6 +2780,9 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session, monke
     routing_placements = detail["routing_result"]["placements"]
     compute_route = next(item for item in routing_placements if item["task_node_id"] == "compute")
     assert compute_route["gpu_device"] == "0"
+    assert detail["routing_result"]["strategy"] == "resource_guarantee"
+    assert detail["routing_result"]["metadata"]["route_source"] == "platform_managed"
+    assert detail["routing_result"]["metadata"]["route_source_label"] == "系统自动分配"
 
     inst_nodes = (
         await db_session.execute(
@@ -2622,6 +2798,286 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session, monke
     placements = {item["role"]: item for item in detail_response.json()["node_placements"]}
     assert placements["compute"]["gpu_id"] == "0"
     assert placements["compute"]["gpu_device"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_controlled_benchmark_does_not_retry_failed_instance_by_default(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-failed-retry-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="failed benchmark order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "failed-retry-run"},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "routing_strategy": "resource_guarantee",
+            },
+            "routing_result": {
+                "placements": [
+                    {"task_node_id": "source", "topology_node_id": "h1"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                    {"task_node_id": "sink", "topology_node_id": "h2"},
+                ]
+            },
+        },
+        is_benchmark=True,
+        materialized_instance_id="failed-retry-instance",
+    )
+    instance = TaskInstance(
+        id="failed-retry-instance",
+        template_id=template_id,
+        name="failed benchmark instance",
+        status=TaskStatus.FAILED,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    db_session.add_all([order, instance])
+    await db_session.flush()
+
+    start_calls = []
+
+    class FakeExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_start(self, instance_id):
+            start_calls.append(instance_id)
+            return True, None
+
+    async def ok_preflight(*args, **kwargs):
+        class Result:
+            ok = True
+            conflicts = []
+
+        return Result()
+
+    monkeypatch.setattr(orders_api, "DAGExecutor", FakeExecutor)
+    monkeypatch.setattr(orders_api, "_preflight_instance_plan", ok_preflight)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={"benchmark_run_id": "failed-retry-run", "task_type": "high_throughput_matmul"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] == 0
+    assert body["failed"][order.id] == "Cannot start instance in status: failed"
+    assert start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_business_task_list_ignores_platform_managed_route_source_as_strategy(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="route-source-list-user")
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="自动分配来源不应显示为路由策略",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+                "routing_strategy": "resource_guarantee",
+            },
+            "routing_result": {
+                "strategy": "platform_managed",
+                "selected_strategy": "系统自动分配",
+                "metadata": {
+                    "route_source": "platform_managed",
+                    "route_source_label": "系统自动分配",
+                },
+                "placements": [
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
+                ],
+            },
+        },
+        materialized_instance_id=None,
+    )
+    db_session.add(order)
+    await db_session.commit()
+
+    response = await client.get("/api/business-tasks", headers=headers)
+
+    assert response.status_code == 200
+    item = next(row for row in response.json()["items"] if row["order_id"] == order.id)
+    assert item["routing_policy"] == "resource_guarantee"
+
+    detail_response = await client.get(f"/api/orders/{order.id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["routing_policy"] == "resource_guarantee"
+
+
+@pytest.mark.asyncio
+async def test_business_task_create_rejects_invalid_routing_strategy(client):
+    await _seed_business_fixture(client)
+    payload = {
+        "external_task_id": "invalid-routing-strategy-business-task",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "低时延转发模态",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "frame_latency_p90_ms",
+            "operator": "<=",
+            "target_value": 150,
+            "unit": "ms",
+        },
+        "routing_result": {
+            "strategy": "系统自动分配",
+            "placements": _standard_placements(),
+        },
+        "auto_start": False,
+    }
+
+    response = await client.post("/api/business-tasks", json=payload)
+
+    assert response.status_code == 422
+    assert "routing_result.strategy" in response.text
+
+
+@pytest.mark.asyncio
+async def test_controlled_benchmark_claims_instance_and_dispatches_background_start(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-background-start-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="background benchmark order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "background-start-run"},
+                "business_task": {
+                    "task_type": "high_throughput_matmul",
+                    "business_objective": {
+                        "metric_key": "effective_gflops",
+                        "operator": ">=",
+                        "unit": "GFLOPS",
+                    },
+                    "routing_strategy": "resource_guarantee",
+                    "runtime_plan": {"routing_strategy": "resource_guarantee"},
+                },
+            "routing_result": {
+                "strategy": "resource_guarantee",
+                "placements": [
+                    {"task_node_id": "source", "topology_node_id": "h1"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                    {"task_node_id": "sink", "topology_node_id": "h2"},
+                ],
+            },
+        },
+        is_benchmark=True,
+        materialized_instance_id="background-start-instance",
+    )
+    instance = TaskInstance(
+        id="background-start-instance",
+        template_id=template_id,
+        name="background benchmark instance",
+        status=TaskStatus.PENDING,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    db_session.add_all([order, instance])
+    await db_session.flush()
+
+    async def ok_preflight(*args, **kwargs):
+        class Result:
+            ok = True
+            conflicts = []
+
+        return Result()
+
+    dispatched = []
+
+    def fake_background_start(instance_id):
+        dispatched.append(instance_id)
+
+    class ShouldNotRunInlineExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_start(self, instance_id, **kwargs):
+            raise AssertionError("start-controlled-routed must not run DAG startup inline")
+
+    monkeypatch.setattr(orders_api, "_preflight_instance_plan", ok_preflight)
+    monkeypatch.setattr(orders_api, "_schedule_background_benchmark_start", fake_background_start)
+    monkeypatch.setattr(orders_api, "DAGExecutor", ShouldNotRunInlineExecutor)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={"benchmark_run_id": "background-start-run", "task_type": "high_throughput_matmul"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] == 1
+    assert body["failed"] == {}
+    assert body["instance_ids"] == ["background-start-instance"]
+    assert dispatched == ["background-start-instance"]
+    refreshed = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == "background-start-instance"))
+    ).scalar_one()
+    assert refreshed.status == TaskStatus.STARTING
+
+
+@pytest.mark.asyncio
+async def test_cleanup_order_instances_rejects_active_instance(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, admin = await _auth_headers(client, db_session, username="active-cleanup-admin", role=UserRole.ADMIN)
+    order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="active cleanup protected order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "active-cleanup-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+        materialized_instance_id="active-cleanup-instance",
+    )
+    instance = TaskInstance(
+        id="active-cleanup-instance",
+        template_id=template_id,
+        name="active cleanup instance",
+        status=TaskStatus.STARTING,
+    )
+    db_session.add_all([order, instance])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders/batch/cleanup-instances",
+        json={
+            "benchmark_run_id": "active-cleanup-run",
+            "task_type": "high_throughput_matmul",
+            "is_benchmark": True,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["succeeded"] == []
+    assert "启动中/运行中" in body["failed"][order.id]
+    remaining = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == "active-cleanup-instance"))
+    ).scalar_one_or_none()
+    assert remaining is not None
 
 
 @pytest.mark.asyncio
@@ -2926,7 +3382,7 @@ async def test_delete_order_purges_evaluation(client, db_session):
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
         },
         "auto_start": False,
@@ -2967,7 +3423,7 @@ async def test_cleanup_order_instance_preserves_business_evidence(client, db_ses
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
         },
         "auto_start": False,
@@ -3040,7 +3496,7 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
         },
         "auto_start": False,
@@ -3248,7 +3704,7 @@ async def test_business_task_list_api(client, db_session):
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
         },
         "auto_start": False,
@@ -3266,7 +3722,7 @@ async def test_business_task_list_api(client, db_session):
     assert listed["page"] == 1
     item = next(row for row in listed["items"] if row["order_id"] == order_id)
     assert item["task_type"] == "low_latency_video_pipeline"
-    assert item["routing_policy"] == "completion_time_first"
+    assert item["routing_policy"] == "fastest_completion"
     assert item["instance_id"] == instance_id
     assert item["is_benchmark"] is False
     # Business tasks are always SCHEDULED mode (status = "scheduled")
@@ -3279,7 +3735,7 @@ async def test_business_task_list_api(client, db_session):
 
     filtered = await client.get(
         "/api/business-tasks",
-        params={"task_type": "low_latency_video_pipeline", "routing_policy": "completion_time_first"},
+        params={"task_type": "low_latency_video_pipeline", "routing_policy": "fastest_completion"},
         headers=headers,
     )
     assert filtered.status_code == 200
@@ -3323,7 +3779,7 @@ async def test_business_task_list_api(client, db_session):
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
-    assert detail["routing_result"]["strategy"] == "completion_time_first"
+    assert detail["routing_result"]["strategy"] == "fastest_completion"
     compute_route = next(item for item in detail["routing_result"]["placements"] if item["task_node_id"] == "compute")
     assert compute_route["topology_node_id"] == "compute-1"
     assert detail["instance"]["id"] == instance_id

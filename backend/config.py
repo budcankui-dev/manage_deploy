@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Agent URL is constructed as: http://{management_ip}:{agent_port}
 
     apscheduler_timezone: str = "Asia/Shanghai"
+    database_session_time_zone: str = "+08:00"
     service_api_token: str = "change-me-service-token"
     auth_secret: str = "change-me-auth-secret"
     access_token_expire_hours: int = 24

@@ -23,6 +23,7 @@ from config import settings
 from services.intent_parser import ParseResult, parse_intent
 from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _validate_and_clean
 from services.modality_catalog import TASK_TYPE_NAMES, normalize_modality
+from services.time_utils import business_now
 from services.topology_catalog import TERMINAL_NODE_ALIASES
 
 
@@ -73,7 +74,7 @@ BATCH_STALLED_AFTER = timedelta(hours=2)
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return business_now().isoformat(timespec="seconds")
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -350,7 +351,7 @@ def run_rule_evaluation(repeats: int = 3) -> dict[str, Any]:
     rows = load_dataset()
     results: list[dict[str, Any]] = []
     correct = 0
-    evaluation_id = f"rule-eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    evaluation_id = f"rule-eval-{business_now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
 
     for index, sample in enumerate(rows):
         run_results = []
@@ -547,7 +548,7 @@ def batch_diagnostic(job: dict[str, Any] | None, now: datetime | None = None) ->
     completed = int(counts.get("completed") or 0)
     failed = int(counts.get("failed") or 0)
     created_at = _parse_iso_datetime(job.get("created_at"))
-    now = now or datetime.now()
+    now = now or business_now()
     elapsed_seconds = (now - created_at).total_seconds() if created_at else None
     stalled_zero_progress = (
         status == "in_progress"
@@ -603,7 +604,7 @@ async def submit_llm_batch_evaluation(model: str | None = None) -> dict[str, Any
             "Refresh or cancel it before submitting a new evaluation."
         )
     selected_model = normalize_eval_model(model)
-    job_id = f"intent-eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    job_id = f"intent-eval-{business_now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
     input_path, _rows = build_batch_input(job_id, selected_model)
     client = DashScopeBatchClient()
     upload = await client.upload_file(input_path)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,23 +112,30 @@ async def emit_release_events_for_order(
             )
             if existing.scalar_one_or_none():
                 continue
-            db.add(
-                RoutingResourceEvent(
-                    event_type="release",
-                    order_id=order.id,
-                    job_id=order.id,
-                    external_routing_id=str(external_routing_id) if external_routing_id else None,
-                    benchmark_run_id=_benchmark_run_id(order),
-                    task_type=_task_type(order),
-                    node_hostname=node_hostname,
-                    resource_kind="gpu",
-                    resource_id=gpu_id,
-                    amount=1,
-                    reason=reason,
-                    event_metadata=metadata or {},
-                )
+            event = RoutingResourceEvent(
+                event_type="release",
+                order_id=order.id,
+                job_id=order.id,
+                external_routing_id=str(external_routing_id) if external_routing_id else None,
+                benchmark_run_id=_benchmark_run_id(order),
+                task_type=_task_type(order),
+                node_hostname=node_hostname,
+                resource_kind="gpu",
+                resource_id=gpu_id,
+                amount=1,
+                reason=reason,
+                event_metadata=metadata or {},
             )
-            emitted += 1
+            try:
+                async with db.begin_nested():
+                    db.add(event)
+                    await db.flush()
+                emitted += 1
+            except IntegrityError:
+                # Release events are operational signals. Cleanup/delete/cancel may
+                # be retried, so a duplicate release means the previous signal is
+                # already durable and should not fail the user operation.
+                continue
     return emitted
 
 

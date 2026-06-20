@@ -10,6 +10,7 @@ from typing import Any
 
 from services.modality_catalog import normalize_modality, priority_for_modality
 from services.resource_estimator import estimate_resources, estimate_data_mb, estimate_bandwidth_mbps
+from services.routing_policy import require_routing_policy
 
 ROUTING_STRATEGY_TO_POLICY_TYPE = {
     "resource_guarantee": "RESOURCE_GUARANTEE",
@@ -18,18 +19,6 @@ ROUTING_STRATEGY_TO_POLICY_TYPE = {
     "load_balance": "LOAD_BALANCE",
     "cost_priority": "COST_CONSTRAINED",
 }
-
-ROUTING_STRATEGY_ALIASES = {
-    "completion_time_first": "fastest_completion",
-    "completion_time": "fastest_completion",
-    "time_priority": "fastest_completion",
-    "latency_first": "low_latency_forwarding",
-    "low_latency": "low_latency_forwarding",
-    "cost_first": "cost_priority",
-    "cost_constrained": "cost_priority",
-    "balanced": "load_balance",
-}
-
 
 def build_routing_payload(
     order_id: str,
@@ -114,11 +103,9 @@ def _task_type_to_job_name(task_type: str) -> str:
 
 
 def _normalize_routing_strategy(routing_strategy: str | None) -> str:
-    value = str(routing_strategy or "").strip()
-    value = ROUTING_STRATEGY_ALIASES.get(value, value)
-    if value in ROUTING_STRATEGY_TO_POLICY_TYPE:
-        return value
-    return "resource_guarantee"
+    if routing_strategy is None or not str(routing_strategy).strip():
+        return "resource_guarantee"
+    return require_routing_policy(routing_strategy, field_name="routing_strategy")
 
 
 def _policy_type_for(routing_strategy: str | None) -> str:

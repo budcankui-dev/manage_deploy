@@ -1,5 +1,6 @@
 import pytest
 
+import api.business_tasks as business_tasks_api
 from api.business_tasks import (
     build_instance_create_from_business_task,
     evaluate_business_objective,
@@ -10,7 +11,7 @@ from schemas.task import BusinessPlacement, BusinessObjective, BusinessTaskCreat
 
 
 @pytest.mark.asyncio
-async def test_build_instance_create_maps_routing_and_runtime_env():
+async def test_build_instance_create_maps_routing_and_runtime_env(monkeypatch):
     payload = BusinessTaskCreate(
         external_task_id="intent-001",
         task_type="low_latency_video_pipeline",
@@ -30,7 +31,7 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
             "sink": {"cpu_units": 2, "mem_mb": 512, "disk_mb": 512, "gpu_units": 0},
         },
         routing_result=RoutingResult(
-            strategy="completion_time_first",
+            strategy="fastest_completion",
             placements=[
                 {"task_node_id": "source", "topology_node_id": "node-a"},
                 {"task_node_id": "compute", "topology_node_id": "node-b", "gpu_device": "0"},
@@ -49,14 +50,20 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
         },
     )
 
-    # Use valid UUIDs to bypass hostname resolution in test
-    uuid_a = "11111111-1111-1111-1111-111111111111"
-    uuid_b = "22222222-2222-2222-2222-222222222222"
-    uuid_c = "33333333-3333-3333-3333-333333333333"
+    node_ids = {
+        "h1": "11111111-1111-1111-1111-111111111111",
+        "compute-1": "22222222-2222-2222-2222-222222222222",
+        "h2": "33333333-3333-3333-3333-333333333333",
+    }
+
+    async def fake_resolve_placement_node(_db, _role, node_name):
+        return type("ResolvedNode", (), {"id": node_ids[node_name]})()
+
+    monkeypatch.setattr(business_tasks_api, "_resolve_placement_node", fake_resolve_placement_node)
     payload.routing_result.placements = [
-        BusinessPlacement(task_node_id="source", topology_node_id=uuid_a),
-        BusinessPlacement(task_node_id="compute", topology_node_id=uuid_b, gpu_device="0"),
-        BusinessPlacement(task_node_id="sink", topology_node_id=uuid_c),
+        BusinessPlacement(task_node_id="source", topology_node_id="h1"),
+        BusinessPlacement(task_node_id="compute", topology_node_id="compute-1", gpu_device="0"),
+        BusinessPlacement(task_node_id="sink", topology_node_id="h2"),
     ]
 
     instance = await build_instance_create_from_business_task(
@@ -79,9 +86,9 @@ async def test_build_instance_create_maps_routing_and_runtime_env():
     assert instance.scheduled_end_time is not None
     assert instance.keep_after_stop is False
     overrides = {item.template_node_name: item for item in instance.node_overrides}
-    assert overrides["source"].node_id == uuid_a
-    assert overrides["compute"].node_id == uuid_b
-    assert overrides["sink"].node_id == uuid_c
+    assert overrides["source"].node_id == node_ids["h1"]
+    assert overrides["compute"].node_id == node_ids["compute-1"]
+    assert overrides["sink"].node_id == node_ids["h2"]
     assert overrides["compute"].env["TASK_TYPE"] == "low_latency_video_pipeline"
     assert overrides["compute"].env["TASK_MODALITY"] == "低时延转发模态"
     assert overrides["compute"].env["ROUTING_STRATEGY"] == "low_latency_forwarding"

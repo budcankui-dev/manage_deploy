@@ -262,7 +262,7 @@ async def confirm_routing_order_network_ready(
         ).scalar_one_or_none()
         if conversation is not None:
             conversation.status = ConversationStatus.SUBMITTED
-            conversation.updated_at = datetime.utcnow()
+            conversation.updated_at = business_now()
     flag_modified(order, "runtime_config")
 
     instance: TaskInstance | None = None
@@ -355,7 +355,7 @@ async def ack_routing_resource_events(
             RoutingResourceEvent.router_ack_at.is_(None),
         )
     )
-    now = datetime.utcnow()
+    now = business_now()
     events = result.scalars().all()
     for event in events:
         event.router_ack_at = now

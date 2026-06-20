@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any, Callable, Optional
 
 from sqlalchemy import select
@@ -18,13 +17,10 @@ from enums import TaskStatus, NodeStatus
 from schemas import ContainerStartRequest
 from services.runtime_fields import build_container_start_request
 from services.runtime_composer import compose_container_runtime
+from services.time_utils import business_now
 from agents.agent_client import AgentClient
 
 logger = logging.getLogger(__name__)
-
-
-def func_now() -> datetime:
-    return datetime.utcnow()
 
 
 def _format_agent_error(result: dict) -> str:
@@ -400,7 +396,12 @@ class DAGExecutor:
             node_id=node.id,
         )
 
-    async def execute_dag_start(self, instance_id: str) -> tuple[bool, Optional[str]]:
+    async def execute_dag_start(
+        self,
+        instance_id: str,
+        *,
+        claimed_start: bool = False,
+    ) -> tuple[bool, Optional[str]]:
         from services.routing_network import instance_waiting_for_network_ready
 
         waiting_order = await instance_waiting_for_network_ready(self.db, instance_id)
@@ -414,16 +415,19 @@ class DAGExecutor:
         if not instance:
             return False, "Task instance not found"
 
-        if instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+        if instance.status == TaskStatus.RUNNING or (
+            instance.status == TaskStatus.STARTING and not claimed_start
+        ):
             return True, None
 
-        await self.update_task_status(instance, TaskStatus.STARTING)
+        if instance.status != TaskStatus.STARTING:
+            await self.update_task_status(instance, TaskStatus.STARTING)
         instance.error_message = None
 
         root_nodes = await self.get_root_nodes(instance_id)
         if not root_nodes:
             await self.update_task_status(instance, TaskStatus.RUNNING)
-            instance.start_time = func_now()
+            instance.start_time = business_now()
             await self.db.commit()
             return True, None
 
@@ -514,7 +518,7 @@ class DAGExecutor:
             return False, f"Node(s) failed: {failed_nodes}"
 
         await self.update_task_status(instance, TaskStatus.RUNNING)
-        instance.start_time = func_now()
+        instance.start_time = business_now()
         await self.db.commit()
         return True, None
 
@@ -591,7 +595,7 @@ class DAGExecutor:
             await asyncio.sleep(0.1)
 
         await self.update_task_status(instance, TaskStatus.STOPPED)
-        instance.end_time = func_now()
+        instance.end_time = business_now()
         await self.db.commit()
         return True, None
 

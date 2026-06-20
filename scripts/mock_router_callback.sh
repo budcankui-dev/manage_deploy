@@ -9,9 +9,9 @@ COMPUTE_NODE="${3:-}"
 SINK_NODE="${4:-}"
 
 if [[ -z "${SOURCE_NODE}" ]]; then
-  SOURCE_NODE="compute-1"
-  COMPUTE_NODE="compute-2"
-  SINK_NODE="compute-3"
+  SOURCE_NODE="h1"
+  COMPUTE_NODE="compute-1"
+  SINK_NODE="h2"
 fi
 
 curl -sS -X PATCH "${BASE_URL}/api/routing-orders/${ORDER_ID}/claim" \

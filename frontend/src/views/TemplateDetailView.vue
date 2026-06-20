@@ -233,7 +233,7 @@ async function confirmDelete() {
 }
 
 function formatDate(date) {
-  return date ? dayjs.utc(date).local().fromNow() : '-'
+  return date ? dayjs(date).fromNow() : '-'
 }
 </script>
 

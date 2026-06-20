@@ -88,7 +88,8 @@
         <el-tab-pane label="路由与节点" name="routing">
           <el-descriptions :column="2" border class="detail-desc routing-overview-desc">
             <el-descriptions-item label="分配状态">{{ routingStatusLabel(detail.routing_status) }}</el-descriptions-item>
-            <el-descriptions-item label="任务策略">{{ strategyDisplay(routingResult?.strategy || routingResult?.selected_strategy || detail.routing_policy) }}</el-descriptions-item>
+            <el-descriptions-item label="任务策略">{{ strategyDisplay(taskRoutingPolicy) }}</el-descriptions-item>
+            <el-descriptions-item label="分配方式">{{ routeSourceText }}</el-descriptions-item>
             <el-descriptions-item label="所属模态">{{ modalityLabel(businessTask?.modality) }}</el-descriptions-item>
             <el-descriptions-item label="网络确认">{{ networkReadyText }}</el-descriptions-item>
             <el-descriptions-item label="部署模式">{{ deploymentModeText || '-' }}</el-descriptions-item>
@@ -188,7 +189,7 @@
             <div class="decision-facts">
               <div>
                 <span>策略</span>
-                <strong>{{ strategyDisplay(routingDecision.strategy || routingDecision.selected_strategy || detail.routing_policy) }}</strong>
+                <strong>{{ strategyDisplay(taskRoutingPolicy || routingDecision.strategy) }}</strong>
               </div>
               <div>
                 <span>GPU</span>
@@ -558,6 +559,19 @@ const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
 const routingDecision = computed(() => detail.value?.routing_decision || null)
 const nodeCapabilityProfile = computed(() => detail.value?.node_capability_profile || null)
+const taskRoutingPolicy = computed(() => (
+  detail.value?.routing_policy
+  || businessTask.value?.runtime_plan?.routing_strategy
+  || businessTask.value?.routing_strategy
+  || routingResult.value?.strategy
+  || null
+))
+const routeSourceText = computed(() => (
+  routingResult.value?.metadata?.route_source_label
+  || routingResult.value?.metadata?.route_source
+  || (routingResult.value?.external_routing_id ? '外部路由系统' : null)
+  || (routingResult.value ? '未记录' : '-')
+))
 const platformDeployment = computed(() => detail.value?.runtime_config?.platform_deployment || null)
 const deployableRoles = computed(() => {
   const roles = platformDeployment.value?.deployable_roles
@@ -1011,7 +1025,6 @@ function formatCandidateScore(row) {
 
 function strategyDisplay(value) {
   return {
-    platform_managed: '系统自动分配',
     local_mock: '本地模拟路由',
     external: '外部路由系统',
   }[value] || routingPolicyLabel(value)

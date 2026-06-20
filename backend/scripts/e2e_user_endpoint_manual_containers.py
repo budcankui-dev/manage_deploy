@@ -24,7 +24,7 @@ TASK_CONFIG = {
         "message": "矩阵乘法任务，从 h1 到 h2，256阶矩阵，10批，现在开始跑30分钟，资源保障策略",
         "endpoint_image": "10.112.244.94:5000/scientific-matmul-endpoint:dev",
         "destination_port": 9000,
-        "source_command": "python /app/src/source_main.py",
+        "source_command": "python3 /app/src/source_main.py",
         "metric_key": "effective_gflops",
         "source_env": {
             "SOURCE_LISTEN": "false",
@@ -44,7 +44,7 @@ TASK_CONFIG = {
         "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，30fps，低时延转发策略，现在开始跑30分钟",
         "endpoint_image": "10.112.244.94:5000/low-latency-video-endpoint:dev",
         "destination_port": 9100,
-        "source_command": "python /app/src/source_main.py",
+        "source_command": "python3 /app/src/source_main.py",
         "metric_key": "frame_latency_p90_ms",
         "source_env": {
             "SOURCE_LISTEN": "false",
@@ -352,7 +352,7 @@ def main() -> int:
         task_id=demo_task_id,
         node_id="receiver",
         image=config["endpoint_image"],
-        command=f"python /app/src/receiver_main.py --port {args.destination_port}",
+        command=f"python3 /app/src/receiver_main.py --port {args.destination_port}",
         env=_receiver_env(destination_node, args.destination_port),
     )
     print(f"  receiver={receiver_url}/")

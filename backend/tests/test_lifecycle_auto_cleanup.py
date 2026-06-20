@@ -458,7 +458,7 @@ async def test_business_task_defaults_to_scheduled_with_end_time(client, db_sess
             "unit": "ms",
         },
         "routing_result": {
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": [
                 {"task_node_id": "source", "topology_node_id": "lc-worker-a"},
                 {"task_node_id": "compute", "topology_node_id": "lc-worker-b", "gpu_device": "0"},

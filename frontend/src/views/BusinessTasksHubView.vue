@@ -681,6 +681,21 @@ async function refreshAll() {
   await Promise.all([loadSystemSettings(), loadList(), loadNodes(), loadBenchmarkRunOptions()])
 }
 
+function showBatchOperationResult(data, successText) {
+  const succeeded = data?.succeeded?.length || 0
+  const failed = data?.failed || {}
+  const failedEntries = Array.isArray(failed)
+    ? failed.map((item) => [item.order_id || item.id || '未知工单', item.error || item.detail || '操作失败'])
+    : Object.entries(failed)
+  if (failedEntries.length) {
+    const [firstId, firstReason] = failedEntries[0]
+    ElMessage.warning(`${successText(succeeded)}，${failedEntries.length} 个失败。首个失败：${firstId}：${firstReason}`)
+    return false
+  }
+  ElMessage.success(successText(succeeded))
+  return true
+}
+
 async function loadSystemSettings() {
   settingsLoading.value = true
   try {
@@ -899,8 +914,8 @@ async function cleanupSelectedOrderInstances() {
   batchCleanupLoading.value = true
   try {
     const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
-    ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
-    selectedOrderIds.value = []
+    const allOk = showBatchOperationResult(data, (count) => `已清理 ${count} 个工单实例，工单证据已保留`)
+    if (allOk) selectedOrderIds.value = []
     await refreshAll()
   } finally {
     batchCleanupLoading.value = false
@@ -921,9 +936,11 @@ async function deleteSelectedOrders() {
   batchDeleteLoading.value = true
   try {
     const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
-    ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
-    selectedOrderIds.value = []
-    drawerOpen.value = false
+    const allOk = showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
+    if (allOk) {
+      selectedOrderIds.value = []
+      drawerOpen.value = false
+    }
     await refreshAll()
   } finally {
     batchDeleteLoading.value = false
@@ -954,8 +971,8 @@ async function cleanupCurrentBenchmarkRun() {
   runCleanupLoading.value = true
   try {
     const { data } = await ordersApi.cleanupInstances(payload)
-    ElMessage.success(`本轮已清理 ${data.succeeded?.length || 0} 个工单实例，证据已保留`)
-    selectedOrderIds.value = []
+    const allOk = showBatchOperationResult(data, (count) => `本轮已清理 ${count} 个工单实例，证据已保留`)
+    if (allOk) selectedOrderIds.value = []
     await refreshAll()
   } finally {
     runCleanupLoading.value = false
@@ -978,9 +995,11 @@ async function deleteCurrentBenchmarkRun() {
   runDeleteLoading.value = true
   try {
     const { data } = await ordersApi.batchDelete(payload)
-    ElMessage.success(`本轮已删除 ${data.succeeded?.length || 0} 个工单`)
-    selectedOrderIds.value = []
-    drawerOpen.value = false
+    const allOk = showBatchOperationResult(data, (count) => `本轮已删除 ${count} 个工单`)
+    if (allOk) {
+      selectedOrderIds.value = []
+      drawerOpen.value = false
+    }
     await refreshAll()
   } finally {
     runDeleteLoading.value = false

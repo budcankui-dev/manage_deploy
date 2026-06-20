@@ -7,7 +7,20 @@ from sqlalchemy.orm import declarative_base
 
 from config import settings
 
-engine = create_async_engine(settings.database_url, echo=False)
+
+def _engine_connect_args() -> dict:
+    if "mysql" not in settings.database_url:
+        return {}
+    return {
+        "init_command": f"SET time_zone = '{settings.database_session_time_zone}'",
+    }
+
+
+engine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    connect_args=_engine_connect_args(),
+)
 
 async_session_maker = async_sessionmaker(
     engine,

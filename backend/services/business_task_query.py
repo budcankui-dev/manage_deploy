@@ -10,6 +10,10 @@ from sqlalchemy.orm import selectinload
 from enums import OrderStatus, TaskStatus
 from models import BusinessObjectiveEvaluation, TaskInstance, TaskMetric, TaskOrder, User
 from schemas import BusinessTaskListItem, BusinessTaskListResponse
+from services.routing_policy import VALID_ROUTING_POLICIES, normalize_routing_policy
+
+ACCEPTANCE_REQUIRED_EVALUATED_COUNT = 30
+ACCEPTANCE_REQUIRED_SUCCESS_RATE = 0.9
 
 
 @dataclass
@@ -46,21 +50,31 @@ def _extract_benchmark_run_id(order: TaskOrder) -> str | None:
 
 def _routing_policy_from_order(order: TaskOrder) -> str | None:
     config = order.runtime_config or {}
+    business_task = _extract_business_task(order)
+    runtime_plan = business_task.get("runtime_plan") if isinstance(business_task, dict) else {}
+    task_routing_policy = None
+    if isinstance(runtime_plan, dict):
+        task_routing_policy = normalize_routing_policy(runtime_plan.get("routing_strategy"))
+    if not task_routing_policy and isinstance(business_task, dict):
+        task_routing_policy = normalize_routing_policy(business_task.get("routing_strategy"))
+
     routing = config.get("routing_result")
     if isinstance(routing, dict):
         value = routing.get("strategy") or routing.get("selected_strategy") or routing.get("routing_policy")
-        if value:
-            return value
-    business_task = _extract_business_task(order)
+        if normalized := normalize_routing_policy(value):
+            return normalized
+        if task_routing_policy:
+            return task_routing_policy
     if not business_task:
         return None
     routing = business_task.get("routing_result") or {}
     return (
-        routing.get("strategy")
-        or routing.get("selected_strategy")
-        or routing.get("routing_policy")
-        or (business_task.get("runtime_plan") or {}).get("routing_strategy")
-    )
+        routing.get("strategy") if routing.get("strategy") in VALID_ROUTING_POLICIES else None
+    ) or (
+        routing.get("selected_strategy") if routing.get("selected_strategy") in VALID_ROUTING_POLICIES else None
+    ) or (
+        routing.get("routing_policy") if routing.get("routing_policy") in VALID_ROUTING_POLICIES else None
+    ) or task_routing_policy
 
 
 def _business_priority_from_order(order: TaskOrder, business_task: dict[str, Any] | None = None) -> int | None:
@@ -356,21 +370,31 @@ async def summarize_business_tasks(
             if evaluation.business_success:
                 bucket["success_count"] += 1
 
-    return [
-        {
-            "task_type": task_type,
-            "routing_strategy": routing_strategy,
-            "count": bucket["count"],
-            "evaluated_count": bucket["evaluated_count"],
-            "success_count": bucket["success_count"],
-            "business_success_rate": (
-                bucket["success_count"] / bucket["evaluated_count"]
-                if bucket["evaluated_count"]
-                else None
-            ),
-        }
-        for (task_type, routing_strategy), bucket in sorted(groups.items())
-    ]
+    rows: list[dict[str, Any]] = []
+    for (task_type, routing_strategy), bucket in sorted(groups.items()):
+        evaluated_count = bucket["evaluated_count"]
+        success_rate = bucket["success_count"] / evaluated_count if evaluated_count else None
+        sample_count_passed = evaluated_count >= ACCEPTANCE_REQUIRED_EVALUATED_COUNT
+        success_rate_passed = (
+            success_rate is not None
+            and success_rate >= ACCEPTANCE_REQUIRED_SUCCESS_RATE
+        )
+        rows.append(
+            {
+                "task_type": task_type,
+                "routing_strategy": routing_strategy,
+                "count": bucket["count"],
+                "evaluated_count": evaluated_count,
+                "success_count": bucket["success_count"],
+                "business_success_rate": success_rate,
+                "required_evaluated_count": ACCEPTANCE_REQUIRED_EVALUATED_COUNT,
+                "required_success_rate": ACCEPTANCE_REQUIRED_SUCCESS_RATE,
+                "sample_count_passed": sample_count_passed,
+                "success_rate_passed": success_rate_passed,
+                "acceptance_passed": sample_count_passed and success_rate_passed,
+            }
+        )
+    return rows
 
 
 async def get_order_detail_context(

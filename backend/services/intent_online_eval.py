@@ -29,6 +29,7 @@ from services.intent_batch_eval import (
 )
 from services.intent_parser import parse_intent
 from services.llm_intent_parser import _build_messages, _raw_to_parse_result, _validate_and_clean, call_qwen
+from services.time_utils import business_now, business_timezone
 
 
 ONLINE_REPORT_PATH = REPORTS_DIR / "intent_eval_online.json"
@@ -43,7 +44,7 @@ TARGET_ACCURACY = 0.9
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return business_now().isoformat(timespec="seconds")
 
 
 def read_online_report() -> dict[str, Any] | None:
@@ -128,7 +129,7 @@ def start_online_evaluation(
     if retries < 0:
         raise ValueError("retries must be non-negative")
     selected_model = normalize_eval_model(model)
-    evaluation_id = f"online-eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    evaluation_id = f"online-eval-{business_now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
     started_at = _now_iso()
     if not resume and ONLINE_PROGRESS_PATH.exists():
         ONLINE_PROGRESS_PATH.unlink()
@@ -185,7 +186,10 @@ def _online_dataset_summary() -> dict[str, Any]:
         "path": str(DATASET_PATH),
         "total": len(rows),
         "sha256": hashlib.sha256(dataset_bytes).hexdigest() if dataset_bytes else None,
-        "updated_at": datetime.fromtimestamp(DATASET_PATH.stat().st_mtime).isoformat(sep=" ", timespec="seconds")
+        "updated_at": datetime
+        .fromtimestamp(DATASET_PATH.stat().st_mtime, business_timezone())
+        .replace(tzinfo=None)
+        .isoformat(sep=" ", timespec="seconds")
         if DATASET_PATH.exists()
         else None,
         "case_counts": dict(case_counts),
@@ -400,7 +404,7 @@ async def run_online_evaluation(
         raise ValueError("retries must be non-negative")
 
     selected_model = normalize_eval_model(model)
-    evaluation_id = evaluation_id or f"online-eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    evaluation_id = evaluation_id or f"online-eval-{business_now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
     started_at = started_at or _now_iso()
     completed_by_id = _read_progress(ONLINE_PROGRESS_PATH) if resume else {}
     if not resume and ONLINE_PROGRESS_PATH.exists():

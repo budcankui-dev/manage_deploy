@@ -77,7 +77,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     result_response = await client.post(
         f"/api/routing-orders/{conversation_id}/result",
         json={
-            "strategy": "completion_time_first",
+            "strategy": "fastest_completion",
             "placements": _standard_placements(),
             "estimated_metric": {
                 "metric_key": "end_to_end_latency_ms",
@@ -758,6 +758,10 @@ async def test_confirm_intent_auto_routes_when_internal_auto_enabled(client, db_
     assert order.status == "materialized"
     assert order.routing_status == "completed"
     assert order.materialized_instance_id
+    assert order.runtime_config["business_task"]["runtime_plan"]["routing_strategy"] == "resource_guarantee"
+    assert order.runtime_config["routing_result"]["strategy"] == "resource_guarantee"
+    assert order.runtime_config["routing_result"]["metadata"]["route_source"] == "platform_managed"
+    assert order.runtime_config["routing_result"]["metadata"]["route_source_label"] == "系统自动分配"
     placements = order.runtime_config["routing_result"]["placements"]
     assert placements == [{"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}]
 

@@ -18,4 +18,4 @@ COPY low-latency-video/src/receiver_main.py /app/src/receiver_main.py
 COPY low-latency-video/assets/bottle-detection.mp4 /app/assets/bottle-detection.mp4
 
 ENV PYTHONPATH=/app/src:/app
-CMD ["python", "/app/src/source_main.py"]
+CMD ["python3", "/app/src/source_main.py"]

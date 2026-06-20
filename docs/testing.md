@@ -43,6 +43,8 @@ cd /Users/yanjia/codes/manage_deploy
 
 该入口会串联前端构建、展示逻辑单测、UI 截图巡检、Playwright 主流程 E2E 和后端关键 API 单测，并把截图与日志输出到 `reports/stable-regression/`。小修可以只跑相关测试；准备稳定版、验收演示或迁移真实网络前必须跑全量回归。
 
+验收网络切换或拓扑变更前，还必须按 [验收网络互通检测与 IP 更新流程](deployment/验收网络互通检测与IP更新流程.md) 检查管理面和数据面的两两互通，并确认 `ops/inventory/topology_nodes.json` 与平台 `nodes` 表一致。
+
 ### 脚本运行环境约束
 
 后端服务、评测脚本和报告重评分脚本都依赖后端虚拟环境与仓库相对路径。执行这类脚本时遵守以下约定：

@@ -55,6 +55,7 @@ from services.auto_port_allocator import auto_allocate_ports
 from services.instance_builder import resolve_port_values
 from services.routing_resource_events import emit_release_events_for_instance
 from services.routing_network import instance_waiting_for_network_ready
+from services.time_utils import business_now
 
 logger = logging.getLogger(__name__)
 
@@ -1070,7 +1071,7 @@ async def report_metric(instance_id: str, payload: TaskMetricReport, db: AsyncSe
         metric_value=payload.metric_value,
         unit=payload.unit,
         tags=_trim_metric_tags(payload.tags),
-        reported_at=payload.reported_at or datetime.utcnow(),
+        reported_at=payload.reported_at or business_now(),
     )
     db.add(metric)
     from api.business_tasks import evaluate_and_store_business_metric

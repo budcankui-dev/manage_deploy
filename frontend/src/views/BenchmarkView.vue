@@ -398,11 +398,11 @@
         <div class="result-detail">
           {{ summaryAggregate.success_count }} / {{ summaryAggregate.evaluated_count }} 任务达标
           <span class="target-text" :class="{ pass: isPassing, fail: !isPassing }">
-            目标：≥ 90% 且 ≥ {{ formalEvaluationCount }} 个已评估任务，{{ resultVerdictText }}
+            目标：≥ {{ requiredSuccessRatePercent }}% 且 ≥ {{ requiredEvaluatedCount }} 个已评估任务，{{ resultVerdictText }}
           </span>
         </div>
         <div v-if="!hasEnoughEvaluations" class="sample-warning">
-          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足判定所需 {{ formalEvaluationCount }} 个；请完成本轮测评后再查看最终结果。
+          当前已评估 {{ summaryAggregate.evaluated_count }} 个任务，仍不足判定所需 {{ requiredEvaluatedCount }} 个；请完成本轮测评后再查看最终结果。
         </div>
       </div>
     </el-card>
@@ -576,6 +576,8 @@ const currentTaskConfig = computed(() =>
   taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
 )
 
+const taskTypeValues = Object.keys(taskConfigs)
+
 const baselineHintText = computed(() => {
   if (taskType.value === 'low_latency_video_pipeline') {
     return '基线状态由多次测试样本计算得出：样本差异小显示稳定，差异明显显示波动大。若重测值与历史基线差距明显，优先核对 GPU 推理后端、镜像版本和同 GPU 并发占用情况。'
@@ -721,6 +723,11 @@ const benchmarkRunCompleted = computed(() => {
 
 const benchmarkRunHasActiveWork = computed(() => {
   if (!hasBenchmarkWork.value || benchmarkRunCompleted.value) return false
+  const hasActiveDeployment = orders.value.some((order) => (
+    ['starting', 'running', 'stopping'].includes(String(order.deployment_status || ''))
+    || ['materialized'].includes(String(order.order_status || '')) && order.business_success == null
+  ))
+  if (hasActiveDeployment) return true
   return orderStats.value.running > 0 ||
     orderStats.value.routed > 0 ||
     orderStats.value.waitingRoute > 0
@@ -784,13 +791,25 @@ const successPercent = computed(() =>
 )
 
 const hasEnoughEvaluations = computed(() =>
-  (summaryAggregate.value?.evaluated_count || 0) >= formalEvaluationCount
+  summaryAggregate.value?.sample_count_passed ??
+  ((summaryAggregate.value?.evaluated_count || 0) >= formalEvaluationCount)
 )
 
 const isPassing = computed(() =>
-  summaryAggregate.value?.business_success_rate != null &&
-  summaryAggregate.value.business_success_rate >= 0.9 &&
-  hasEnoughEvaluations.value
+  summaryAggregate.value?.acceptance_passed ??
+  (
+    summaryAggregate.value?.business_success_rate != null &&
+    summaryAggregate.value.business_success_rate >= 0.9 &&
+    hasEnoughEvaluations.value
+  )
+)
+
+const requiredEvaluatedCount = computed(() =>
+  summaryAggregate.value?.required_evaluated_count || formalEvaluationCount
+)
+
+const requiredSuccessRatePercent = computed(() =>
+  ((summaryAggregate.value?.required_success_rate ?? 0.9) * 100).toFixed(0)
 )
 
 const resultProgressStatus = computed(() =>
@@ -1158,6 +1177,25 @@ async function loadOrders() {
   }
 }
 
+async function resolveTaskTypeForBenchmarkRun() {
+  if (!currentBenchmarkRunId.value) return false
+  for (const candidate of taskTypeValues) {
+    if (candidate === taskType.value) continue
+    const { data } = await ordersApi.list({
+      is_benchmark: true,
+      task_type: candidate,
+      benchmark_run_id: currentBenchmarkRunId.value,
+      limit: 1,
+    })
+    const items = Array.isArray(data) ? data : (data.items || [])
+    if (items.length) {
+      taskType.value = candidate
+      return true
+    }
+  }
+  return false
+}
+
 async function loadSummary() {
   const snapshot = buildDataLoadSnapshot()
   const params = { is_benchmark: true, task_type: taskType.value }
@@ -1314,6 +1352,10 @@ function sleep(ms) {
 async function loadAll() {
   await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines()])
   await loadOrders()
+  if (currentBenchmarkRunId.value && !orders.value.length) {
+    const taskTypeChanged = await resolveTaskTypeForBenchmarkRun()
+    if (taskTypeChanged) return
+  }
   if (orders.value.length) {
     await refreshAcceptanceResult({ silent: true })
   } else {
@@ -1471,6 +1513,20 @@ async function openOrderDetail(row) {
   }
 }
 
+function showBatchOperationResult(data, successText) {
+  const succeeded = data?.succeeded?.length || 0
+  const failed = data?.failed || {}
+  const failedEntries = Array.isArray(failed)
+    ? failed.map((item) => [item.order_id || item.id || '未知工单', item.error || item.detail || '操作失败'])
+    : Object.entries(failed)
+  if (failedEntries.length) {
+    const [firstId, firstReason] = failedEntries[0]
+    ElMessage.warning(`${successText(succeeded)}，${failedEntries.length} 个失败。首个失败：${firstId}：${firstReason}`)
+    return
+  }
+  ElMessage.success(successText(succeeded))
+}
+
 async function cleanupSelectedOrderInstances() {
   if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
   cleanupLoading.value = true
@@ -1483,7 +1539,7 @@ async function cleanupSelectedOrderInstances() {
           is_benchmark: true,
         }
     const { data } = await ordersApi.cleanupInstances(payload)
-    ElMessage.success(`已清理 ${data.succeeded?.length || 0} 个工单实例，工单证据已保留`)
+    showBatchOperationResult(data, (count) => `已清理 ${count} 个工单实例，工单证据已保留`)
     await Promise.all([loadOrders(), loadSummary()])
   } finally {
     cleanupLoading.value = false
@@ -1513,8 +1569,8 @@ async function deleteSelectedOrders() {
           is_benchmark: true,
         }
     const { data } = await ordersApi.batchDelete(payload)
-    ElMessage.success(`已删除 ${data.succeeded?.length || 0} 个工单`)
-    selectedOrderIds.value = []
+    showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
+    if (!Object.keys(data.failed || {}).length) selectedOrderIds.value = []
     await Promise.all([loadOrders(), loadSummary()])
   } finally {
     deleteLoading.value = false
@@ -1911,7 +1967,7 @@ onUnmounted(() => {
 }
 
 .muted {
-  color: #c0c4cc;
+  color: #475569;
 }
 
 .excluded-node-note {
