@@ -32,7 +32,7 @@ async def main():
 
         # Intent
         msg = await c.post(f"/api/conversations/{conv_id}/messages", headers=h,
-            json={"content": "高吞吐矩阵乘法，矩阵1024，批次50，从compute-1到compute-2，今天下午3点到5点"})
+            json={"content": "高吞吐矩阵乘法，矩阵1024，批次50，从 h1 到 h2，今天下午3点到5点"})
         draft = msg.json().get("latest_draft", {})
         print(f"parse: {draft.get('parse_status')} matrix={draft.get('data_profile',{}).get('matrix_size')}")
         assert draft.get("parse_status") == "valid"

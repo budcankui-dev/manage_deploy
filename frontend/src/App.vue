@@ -48,10 +48,11 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
+import { cleanupStaleElementOverlays } from '@/utils/staleOverlayCleanup'
 import {
   DataAnalysis,
   DataLine,
@@ -80,6 +81,25 @@ const adminMenuItems = [
   { path: '/users', label: '用户管理', icon: UserFilled },
   { path: '/settings', label: '系统设置', icon: Setting },
 ]
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    cleanupStaleElementOverlays()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
+
+watch(
+  () => route.fullPath,
+  () => setTimeout(cleanupStaleElementOverlays, 0)
+)
 
 function isActivePath(path) {
   return route.path === path || (path !== '/' && route.path.startsWith(`${path}/`))

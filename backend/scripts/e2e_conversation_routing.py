@@ -56,7 +56,7 @@ def main():
 
     # Step 3: 发送消息
     print("\n[3/6] 发送消息（含 source/dest/time）...")
-    msg = "我要做矩阵计算任务，从 compute-1 到 compute-3，现在开始跑2小时，算力目标 500 GFLOPS"
+    msg = "我要做矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"
     r = s.post(f"{base}/api/conversations/{conv_id}/messages", json={"content": msg})
     assert r.status_code == 200, f"Send message failed: {r.text}"
     conv = r.json()
@@ -107,7 +107,7 @@ def main():
         "estimated_metric": {"effective_gflops": 520.0},
         "external_routing_id": "ext-routing-e2e-001",
         "result_payload": {
-            "path": ["compute-1", "compute-2", "compute-3"],
+            "path": ["h1", "compute-2", "h2"],
             "total_cost": 0.5,
             "explanation": "E2E test routing result",
         },

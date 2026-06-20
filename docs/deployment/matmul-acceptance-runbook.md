@@ -190,7 +190,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
   /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_video_template.py"
 ```
 
-视频模板同样要求 `port_defs.auto=true`。compute 子任务默认需要 GPU，路由结果应写回 `gpu_device`；如果启用了仅开发调试的 CPU 路径，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。
+视频模板同样要求 `port_defs.auto=true`。正式验收模板会向路由声明 compute 侧 GPU 资源需求，路由结果应写回 `gpu_device`；如果启用了仅开发调试的 CPU 路径，工单详情会显示 `gpu_assigned=false` 或无 GPU 分配，不建议作为正式达标样本。
 
 ## 4. 业务节点预检
 

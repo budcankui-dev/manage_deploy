@@ -11,6 +11,7 @@ export const ROUTING_POLICY_LABELS = Object.fromEntries(
 )
 
 export const ROUTING_POLICY_ALIASES = {
+  platform_managed: 'platform_managed',
   completion_time_first: 'fastest_completion',
   completion_time: 'fastest_completion',
   resource_guaranteed: 'resource_guarantee',
@@ -22,6 +23,7 @@ export const ROUTING_POLICY_ALIASES = {
 export function routingPolicyLabel(policy) {
   if (!policy) return '-'
   const normalized = ROUTING_POLICY_ALIASES[policy] || policy
+  if (normalized === 'platform_managed') return '系统自动分配'
   return ROUTING_POLICY_LABELS[normalized] || policy
 }
 

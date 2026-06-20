@@ -67,7 +67,7 @@ api.interceptors.response.use(
 )
 
 export const nodesApi = {
-  list: () => api.get('/nodes'),
+  list: (params = {}) => api.get('/nodes', { params }),
   get: (id) => api.get(`/nodes/${id}`),
   create: (data) => api.post('/nodes', data),
   update: (id, data) => api.put(`/nodes/${id}`, data),

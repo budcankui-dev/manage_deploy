@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from enums import OrderStatus, TaskStatus
-from models import BusinessObjectiveEvaluation, TaskInstance, TaskOrder, User
+from models import BusinessObjectiveEvaluation, TaskInstance, TaskMetric, TaskOrder, User
 from schemas import BusinessTaskListItem, BusinessTaskListResponse
 
 
@@ -121,6 +121,7 @@ def _build_list_item(
     evaluation: BusinessObjectiveEvaluation | None,
     instance_exists: bool | None,
     owner: User | None = None,
+    metric: TaskMetric | None = None,
 ) -> BusinessTaskListItem:
     objective = business_task.get("business_objective") or {}
     return BusinessTaskListItem(
@@ -144,8 +145,8 @@ def _build_list_item(
         keep_after_stop=bool(instance.keep_after_stop) if instance else bool(order.keep_after_stop),
         metric_key=evaluation.metric_key if evaluation else objective.get("metric_key"),
         target_value=evaluation.target_value if evaluation else objective.get("target_value"),
-        actual_value=evaluation.actual_value if evaluation else None,
-        unit=evaluation.unit if evaluation else objective.get("unit"),
+        actual_value=evaluation.actual_value if evaluation else (metric.metric_value if metric else None),
+        unit=evaluation.unit if evaluation else (metric.unit if metric and metric.unit else objective.get("unit")),
         business_success=evaluation.business_success if evaluation else None,
         created_at=order.created_at,
         updated_at=order.updated_at or (instance.updated_at if instance else None),
@@ -167,6 +168,40 @@ async def _latest_evaluations(
     )
     result: dict[str, BusinessObjectiveEvaluation] = {}
     for row in rows.scalars():
+        if row.instance_id not in result:
+            result[row.instance_id] = row
+    return result
+
+
+async def _latest_metrics(
+    db: AsyncSession,
+    instance_ids: list[str],
+    business_task_by_instance: dict[str, dict[str, Any]],
+) -> dict[str, TaskMetric]:
+    if not instance_ids:
+        return {}
+    metric_keys = {
+        objective.get("metric_key")
+        for task in business_task_by_instance.values()
+        if isinstance((objective := task.get("business_objective") or {}), dict)
+        and objective.get("metric_key")
+    }
+    if not metric_keys:
+        return {}
+    rows = await db.execute(
+        select(TaskMetric)
+        .where(
+            TaskMetric.instance_id.in_(instance_ids),
+            TaskMetric.metric_key.in_(metric_keys),
+        )
+        .order_by(TaskMetric.instance_id.asc(), TaskMetric.reported_at.desc(), TaskMetric.id.desc())
+    )
+    result: dict[str, TaskMetric] = {}
+    for row in rows.scalars():
+        task = business_task_by_instance.get(row.instance_id) or {}
+        objective = task.get("business_objective") or {}
+        if row.metric_key != objective.get("metric_key"):
+            continue
         if row.instance_id not in result:
             result[row.instance_id] = row
     return result
@@ -227,6 +262,12 @@ async def list_business_tasks(
     ]
     instance_map = await _instances_by_ids(db, instance_ids)
     eval_map = await _latest_evaluations(db, instance_ids)
+    business_task_by_instance = {
+        order.materialized_instance_id: business_task
+        for order, business_task in candidate_orders
+        if order.materialized_instance_id
+    }
+    metric_map = await _latest_metrics(db, instance_ids, business_task_by_instance)
 
     # Python-level filters (JSON extraction / cross-table)
     filtered: list[tuple[TaskOrder, dict[str, Any]]] = []
@@ -249,6 +290,7 @@ async def list_business_tasks(
     for order, business_task in page_rows:
         instance = instance_map.get(order.materialized_instance_id or "")
         evaluation = eval_map.get(order.materialized_instance_id or "")
+        metric = metric_map.get(order.materialized_instance_id or "")
         instance_exists = None
         if order.materialized_instance_id:
             instance_exists = instance is not None
@@ -260,6 +302,7 @@ async def list_business_tasks(
                 evaluation,
                 instance_exists,
                 user_map.get(order.user_id or ""),
+                metric,
             )
         )
 

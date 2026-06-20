@@ -3,14 +3,13 @@
     <header class="page-header">
       <div class="title-section">
         <h1>拓扑节点</h1>
-        <p class="subtitle">管理参与路由和业务容器部署的终端/计算节点</p>
+        <p class="subtitle">管理当前正式拓扑：管理节点、终端节点 h1-h13、计算节点 compute-1/2/3</p>
       </div>
       <div class="header-actions">
         <el-select v-model="nodeKindFilter" class="node-kind-filter" size="small" placeholder="节点类型">
           <el-option label="全部节点" value="all" />
           <el-option label="计算节点" value="worker" />
           <el-option label="终端节点" value="terminal" />
-          <el-option label="计算+终端" value="both" />
           <el-option label="管理节点" value="admin" />
         </el-select>
         <span class="selected-count" v-if="selectedIds.length">已选 {{ selectedIds.length }} 项</span>
@@ -43,13 +42,9 @@
             <span class="status-badge" :class="node.status">
               已注册
             </span>
-            <el-tag v-if="node.node_kind && node.node_kind !== 'both'" size="small" :type="nodeKindTagType(node.node_kind)" style="margin-left: 8px">
+            <el-tag v-if="node.node_kind" size="small" :type="nodeKindTagType(node.node_kind)" style="margin-left: 8px">
               {{ nodeKindLabel(node.node_kind) }}
             </el-tag>
-            <template v-if="node.node_kind === 'both'">
-              <el-tag size="small" type="primary" style="margin-left: 8px">计算节点</el-tag>
-              <el-tag size="small" type="success" style="margin-left: 4px">终端节点</el-tag>
-            </template>
             <el-tag v-if="node.is_schedulable === false" size="small" type="info" style="margin-left: 4px">不可调度</el-tag>
             <el-tag v-if="node.is_routable === false" size="small" type="warning" style="margin-left: 4px">不参与路由</el-tag>
           </div>
@@ -80,6 +75,14 @@
           </el-dropdown>
         </div>
         <div class="node-details">
+          <div v-if="node.topology_node_id" class="detail-row">
+            <span class="label">拓扑节点 ID</span>
+            <span class="value mono">{{ node.topology_node_id }}</span>
+          </div>
+          <div v-if="node.topology_zone" class="detail-row">
+            <span class="label">拓扑区域</span>
+            <span class="value mono">{{ node.topology_zone }}</span>
+          </div>
           <div class="detail-row">
             <span class="label">管理 IP</span>
             <span class="value mono">{{ node.management_ip }}</span>
@@ -166,7 +169,6 @@
             <el-select v-model="form.node_kind" placeholder="选择节点类型">
               <el-option label="计算节点" value="worker" />
               <el-option label="终端节点" value="terminal" />
-              <el-option label="计算+终端" value="both" />
               <el-option label="管理节点" value="admin" />
             </el-select>
           </el-form-item>
@@ -308,7 +310,7 @@ const orphanLoading = ref(false)
 const form = ref(defaultForm())
 
 onMounted(() => {
-  fetchNodes()
+  fetchNodes({ official_only: true })
 })
 
 const paginatedNodes = computed(() => {
@@ -323,10 +325,10 @@ const filteredNodes = computed(() => {
     .sort(compareNodesByName)
   if (nodeKindFilter.value === 'all') return list
   if (nodeKindFilter.value === 'worker') {
-    return list.filter(node => ['worker', 'both'].includes(node.node_kind || 'worker'))
+    return list.filter(node => (node.node_kind || 'worker') === 'worker')
   }
   if (nodeKindFilter.value === 'terminal') {
-    return list.filter(node => ['terminal', 'both'].includes(node.node_kind))
+    return list.filter(node => node.node_kind === 'terminal')
   }
   return list.filter(node => node.node_kind === nodeKindFilter.value)
 })
@@ -346,11 +348,11 @@ function nodeSortKey(node) {
 }
 
 function nodeKindLabel(kind) {
-  const labels = { worker: '计算节点', terminal: '终端节点', both: '计算+终端', admin: '管理节点', router: '路由设备', switch: '交换机', storage: '存储节点' }
+  const labels = { worker: '计算节点', terminal: '终端节点', admin: '管理节点', router: '路由设备', switch: '交换机', storage: '存储节点' }
   return labels[kind] || kind || '未知'
 }
 function nodeKindTagType(kind) {
-  const types = { worker: 'primary', terminal: 'success', both: 'primary', admin: 'danger', router: 'warning', switch: 'info', storage: '' }
+  const types = { worker: 'primary', terminal: 'success', admin: 'danger', router: 'warning', switch: 'info', storage: '' }
   return types[kind] || 'info'
 }
 

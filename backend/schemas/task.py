@@ -517,12 +517,16 @@ class TaskOrderNodePlacementSummary(BaseModel):
     instance_node_name: str
     node_id: str
     hostname: Optional[str] = None
+    image: Optional[str] = None
+    container_id: Optional[str] = None
+    container_name: Optional[str] = None
     business_address: Optional[str] = None
     gpu_id: Optional[str] = None
     gpu_device: Optional[str] = None
     port_values: Optional[dict[str, Any]] = None
     port_access_urls: Optional[dict[str, str]] = None
     status: Optional[NodeStatus] = None
+    error_message: Optional[str] = None
 
 
 class TaskOrderDetailResponse(TaskOrderResponse):

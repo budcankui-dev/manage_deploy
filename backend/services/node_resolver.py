@@ -11,9 +11,9 @@ from models import Node as NodeModel
 async def resolve_node_id(db: AsyncSession, node_ref: str) -> str:
     """Resolve a platform node UUID from alias, topology id, or UUID.
 
-    The router-facing protocol uses topology node ids, while the UI usually
-    shows aliases such as h1/compute-1.  Accepting both keeps the integration
-    explicit without forcing the router to know platform UUIDs.
+    Router placements may reference terminal aliases (h1-h13) or compute
+    aliases (compute-1/2/3). User-entered source/sink endpoints are validated
+    separately and must remain terminal nodes.
     """
     result = await db.execute(
         select(NodeModel).where(

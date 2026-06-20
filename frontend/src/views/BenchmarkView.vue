@@ -63,14 +63,14 @@
             <span v-if="row.baseline_value != null" class="baseline-value">
               {{ row.baseline_value.toFixed(2) }} {{ row.unit }}
             </span>
-            <el-tag v-else type="danger" size="small">未测试</el-tag>
+            <el-tag v-else type="danger" size="small" disable-transitions>未测试</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="波动提示" min-width="150">
           <template #default="{ row }">
             <el-tag v-if="row.stable === true" type="success" size="small">稳定</el-tag>
             <el-tag v-else-if="row.stable === false" type="warning" size="small">波动大</el-tag>
-            <span v-else class="muted">未测试</span>
+            <span v-else class="muted">{{ row.baseline_value == null ? '未测试' : '样本不足' }}</span>
             <div v-if="row.std_dev != null" class="baseline-subline">
               样本标准差 {{ row.std_dev.toFixed(2) }}
             </div>
@@ -208,7 +208,7 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会自动分批执行，GPU 任务默认每个工单使用 1 张 GPU。</p>
+      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会根据节点资源、路由结果和当前占用情况分批执行。</p>
       <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
     </el-card>
 
@@ -435,6 +435,11 @@ import {
   videoPreviewDataUrl,
   modalityLabel,
 } from '@/constants/businessTaskDisplay'
+import {
+  isOfficialComputeNodeName,
+  isOfficialTerminalNodeName,
+  officialNodeSort,
+} from '@/constants/topologyNodes'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
 const route = useRoute()
@@ -556,11 +561,12 @@ const baselineRunCount = computed(() => (
 ))
 
 function isComputeNode(node) {
-  return ['worker', 'both'].includes(String(node.node_kind || 'worker').toLowerCase())
+  return isOfficialComputeNodeName(node.hostname)
+    && String(node.node_kind || 'worker').toLowerCase() === 'worker'
 }
 
 const nodeBaselineRows = computed(() =>
-  nodes.value.filter(n => n.is_schedulable && isComputeNode(n)).map(n => {
+  nodes.value.filter(n => n.is_schedulable && isComputeNode(n)).sort((a, b) => officialNodeSort(a.hostname, b.hostname)).map(n => {
     const bl = baselines.value.find(b => b.node_id === n.id)
     return {
       node_id: n.id,
@@ -582,12 +588,12 @@ const nodeBaselineRows = computed(() =>
 )
 
 const excludedNodeRows = computed(() =>
-  nodes.value.filter(n => !n.is_schedulable || !isComputeNode(n))
+  nodes.value.filter(n => isOfficialTerminalNodeName(n.hostname) || (isOfficialComputeNodeName(n.hostname) && !isComputeNode(n)))
 )
 
 const defaultEndpointPair = computed(() => {
   const endpoints = nodes.value
-    .filter(n => n.is_schedulable !== false && String(n.node_kind || '').toLowerCase() === 'terminal')
+    .filter(n => n.is_schedulable !== false && isOfficialTerminalNodeName(n.hostname) && String(n.node_kind || '').toLowerCase() === 'terminal')
     .map(n => n.hostname)
   return {
     source_name: endpoints.includes('h1') ? 'h1' : '',
@@ -995,8 +1001,8 @@ function normalizeBenchmarkExecutionDefaults(value) {
 async function loadNodes() {
   nodesLoading.value = true
   try {
-    const { data } = await nodesApi.list()
-    nodes.value = data
+    const { data } = await nodesApi.list({ official_only: true })
+    nodes.value = Array.isArray(data) ? data : []
   } finally {
     nodesLoading.value = false
   }
@@ -1148,11 +1154,50 @@ async function runBatchBaseline() {
   batchBaselineLoading.value = true
   try {
     const { data } = await baselinesApi.batchRun({ task_type: taskType.value, runs: baselineRunCount.value })
-    ElMessage.success(`批量基线测试完成：${data.succeeded} 个计算节点成功${data.failed ? `，${data.failed} 个失败` : ''}`)
+    const succeeded = Number(data.succeeded || 0)
+    const failed = Array.isArray(data.failed) ? data.failed : []
+    const failureText = failed.map(formatBatchBaselineFailure).join('；')
+    if (failed.length && succeeded > 0) {
+      ElMessage.warning({
+        message: `批量基线测试部分完成：${succeeded} 个计算节点成功，${failed.length} 个失败。${failureText}`,
+        duration: 9000,
+        showClose: true,
+      })
+    } else if (failed.length) {
+      ElMessage.error({
+        message: `批量基线测试未完成：${failed.length} 个计算节点失败。${failureText}`,
+        duration: 9000,
+        showClose: true,
+      })
+    } else {
+      ElMessage.success(`批量基线测试完成：${succeeded} 个计算节点成功`)
+    }
     await loadBaselines()
   } finally {
     batchBaselineLoading.value = false
   }
+}
+
+function formatBatchBaselineFailure(item) {
+  const node = item?.node || '未知节点'
+  const error = normalizeBatchBaselineError(item?.error)
+  return `${node}：${error}`
+}
+
+function normalizeBatchBaselineError(error) {
+  const text = String(error || '').trim()
+  if (!text) return '未返回失败原因'
+  if (text.includes('私有镜像仓库') || text.includes('insecure registry')) return text
+  if (text.includes('server gave HTTP response to HTTPS client')) {
+    return '节点 Docker 未配置私有镜像仓库访问，请先修复节点镜像仓库配置'
+  }
+  if (text.includes('无法从容器日志解析基准测试结果')) {
+    return '容器已启动但未输出基线结果，请检查该节点镜像、GPU 后端或容器日志'
+  }
+  if (text.includes('500 Internal Server Error')) {
+    return '节点 Agent 启动容器失败，请查看该节点 Docker/镜像日志'
+  }
+  return text.length > 100 ? `${text.slice(0, 100)}...` : text
 }
 
 async function createBatch() {

@@ -3,7 +3,19 @@ from sqlalchemy import select
 
 from api.auth import hash_password
 from enums import ConversationStatus, OrderStatus, RoutingStatus, TaskStatus, UserRole
-from models import Conversation, IntentDraft, RoutingRequest, TaskInstance, TaskOrder, TaskTemplate, User
+from models import (
+    BusinessTemplateCatalog,
+    Conversation,
+    IntentDraft,
+    Node,
+    RoutingRequest,
+    TaskInstance,
+    TaskInstanceNode,
+    TaskMetric,
+    TaskOrder,
+    TaskTemplate,
+    User,
+)
 
 
 async def _create_user(db_session, username: str, role: UserRole = UserRole.USER) -> User:
@@ -77,6 +89,170 @@ async def test_create_order_binds_current_user(client, db_session):
     assert response.json()["owner_user_id"] == owner.id
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == response.json()["id"]))
     assert row.scalar_one().user_id == owner.id
+
+
+@pytest.mark.asyncio
+async def test_order_uses_task_type_catalog_when_template_id_is_stale(client, db_session):
+    from api.orders import _template_id_for_order
+
+    headers, owner = await _auth_headers(client, db_session, username="catalog-template-owner")
+    stale_template = TaskTemplate(id="tpl-stale-intent", name="intent-chat-e2e-stale")
+    official_template = TaskTemplate(id="tpl-official-matmul", name="矩阵乘法计算任务")
+    node = Node(
+        id="node-compute-1",
+        hostname="compute-1",
+        agent_address="http://127.0.0.1:8001",
+        management_ip="10.0.0.1",
+        business_ip="10.0.1.1",
+        business_ipv6="2001:db8::1",
+        node_kind="worker",
+    )
+    db_session.add_all([stale_template, official_template, node])
+    await db_session.flush()
+    db_session.add(
+        BusinessTemplateCatalog(
+            task_type="high_throughput_matmul",
+            modality="高通量计算模态",
+            template_id=official_template.id,
+        )
+    )
+    order = TaskOrder(
+        id="order-stale-template",
+        template_id=stale_template.id,
+        user_id=owner.id,
+        name="旧模板污染工单",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
+    )
+    instance = TaskInstance(
+        id="instance-stale-template",
+        template_id=official_template.id,
+        name="旧模板污染实例",
+        status=TaskStatus.FAILED,
+        error_message="Node(s) failed: node-compute-row",
+        source_order_id=order.id,
+    )
+    order.materialized_instance_id = instance.id
+    db_session.add_all([order, instance])
+    await db_session.flush()
+    db_session.add(
+        TaskInstanceNode(
+            id="node-compute-row",
+            instance_id=instance.id,
+            template_node_id="template-node-compute",
+            name="compute",
+            image="10.112.244.94:5000/scientific-matmul:dev",
+            command="python /app/src/compute_main.py",
+            node_id=node.id,
+            status="failed",
+            error_message="镜像启动失败",
+            gpu_id="0",
+        )
+    )
+    await db_session.commit()
+
+    assert await _template_id_for_order(db_session, order) == official_template.id
+
+    response = await client.get(f"/api/orders/{order.id}", headers=headers)
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["instance"]["node_count"] == 1
+    placement = detail["node_placements"][0]
+    assert placement["image"] == "10.112.244.94:5000/scientific-matmul:dev"
+    assert placement["container_id"] is None
+    assert placement["container_name"] is None
+    assert placement["error_message"] == "镜像启动失败"
+
+
+@pytest.mark.asyncio
+async def test_order_detail_uses_latest_metric_as_user_mode_runtime_evidence(client, db_session):
+    headers, owner = await _auth_headers(client, db_session, username="metric-evidence-owner")
+    template = TaskTemplate(id="tpl-user-mode-metric", name="用户模式指标证据模板")
+    node = Node(
+        id="node-user-mode-compute",
+        hostname="compute-1",
+        agent_address="http://127.0.0.1:8001",
+        management_ip="10.0.0.1",
+        business_ip="10.0.0.1",
+        business_ipv6="2001:db8::10",
+        node_kind="worker",
+    )
+    order = TaskOrder(
+        id="order-user-mode-metric",
+        template_id=template.id,
+        user_id=owner.id,
+        name="用户模式运行证据",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        materialized_instance_id="instance-user-mode-metric",
+        runtime_config={
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+            },
+            "platform_deployment": {"mode": "user_access_demo", "deployable_roles": ["compute"]},
+        },
+    )
+    instance = TaskInstance(
+        id="instance-user-mode-metric",
+        template_id=template.id,
+        name="用户模式运行证据实例",
+        status=TaskStatus.RUNNING,
+        source_order_id=order.id,
+    )
+    db_session.add_all([template, node, order, instance])
+    await db_session.flush()
+    db_session.add(
+        TaskInstanceNode(
+            id="node-user-mode-metric",
+            instance_id=instance.id,
+            template_node_id="template-node-user-mode-metric",
+            name="compute",
+            image="10.112.244.94:5000/scientific-matmul:dev",
+            command="python /app/src/compute_main.py",
+            node_id=node.id,
+            status=TaskStatus.RUNNING,
+            ports={"18000": "18000"},
+            container_name="instance-user-mode-metric_node-user-mode-metric",
+            container_id="container-user-mode-metric",
+            gpu_id="0",
+        )
+    )
+    db_session.add(
+        TaskMetric(
+            instance_id=instance.id,
+            template_id=template.id,
+            metric_key="effective_gflops",
+            metric_value=12.34,
+            unit="GFLOPS",
+        tags={
+                "result": {
+                    "effective_gflops": 12.34,
+                    "matrix_size": 256,
+                    "batch_count": 10,
+                }
+            },
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/api/orders/{order.id}", headers=headers)
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["evaluation"]["metric_key"] == "effective_gflops"
+    assert detail["evaluation"]["actual_value"] == 12.34
+    assert detail["evaluation"]["business_success"] is None
+    assert detail["evaluation"]["result_metadata"]["effective_gflops"] == 12.34
+    placement = detail["node_placements"][0]
+    assert placement["container_name"] == "instance-user-mode-metric_node-user-mode-metric"
+    assert placement["port_values"] == {"compute": 18000}
+    assert placement["port_access_urls"]["compute"].endswith(":18000")
 
 
 @pytest.mark.asyncio

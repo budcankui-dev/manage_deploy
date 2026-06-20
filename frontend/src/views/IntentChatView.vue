@@ -356,9 +356,9 @@
               </template>
               <div class="node-popover-body">
                 <strong>可用拓扑节点</strong>
-                <p>源节点和目的节点请使用已登记的运营商节点别名、拓扑节点 ID 或业务面 IP，系统会按数据库校验。</p>
+                <p>源节点和目的节点请使用已登记的终端节点别名、拓扑节点 ID 或业务面 IP，系统会按数据库校验。</p>
                 <div class="node-popover-tags">
-                  <span>运营商节点：{{ operatorNodeHint }}</span>
+                  <span>终端节点：{{ operatorNodeHint }}</span>
                   <span>计算节点：{{ computeNodeHint }}（由系统或路由模块选择，不作为源/目的输入）</span>
                 </div>
               </div>
@@ -406,7 +406,7 @@
     <!-- Order detail drawer (outside v-if/v-else, always mounted) -->
     <el-drawer
       v-model="orderDrawerVisible"
-      size="50%"
+      size="76%"
       direction="rtl"
       destroy-on-close
       class="order-detail-drawer"
@@ -439,6 +439,10 @@
         :detail="selectedOrderDetail"
         :result-objects="orderResultObjects"
         :show-routing-dag-json="showRoutingDagJson"
+      />
+      <el-empty
+        v-else
+        description="工单详情加载失败，请关闭后重试"
       />
     </el-drawer>
 
@@ -512,6 +516,7 @@ import { useAuthStore } from '@/stores/auth'
 import { handleAuthExpired } from '@/utils/authExpired'
 import { extractErrorMessage } from '@/utils/errorMessage'
 import { getLastConversationId, setLastConversationId } from '@/utils/sessionState'
+import { cleanupStaleElementOverlays as cleanupGlobalStaleOverlays } from '@/utils/staleOverlayCleanup'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   modalityLabel,
@@ -519,6 +524,11 @@ import {
   describeDataProfile,
   formatMetricValue,
 } from '@/constants/businessTaskDisplay'
+import {
+  isOfficialComputeNodeName,
+  isOfficialTerminalNodeName,
+  officialNodeSort,
+} from '@/constants/topologyNodes'
 import { routingPolicyLabel, DEPLOYMENT_STATUS_LABELS, ORDER_STATUS_LABELS } from '@/constants/routingPolicy'
 
 const router = useRouter()
@@ -719,8 +729,8 @@ const conversationInputLockMessage = computed(() =>
 const canDemoRoute = computed(() =>
   auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
 )
-const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13'))
-const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute', 'both'], 'compute-1、compute-2、compute-3'))
+const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13', isOfficialTerminalNodeName))
+const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute'], 'compute-1、compute-2、compute-3', isOfficialComputeNodeName))
 
 watch(draft, syncEndpointFormFromDraft, { immediate: true })
 watch(orderDrawerVisible, (visible) => {
@@ -729,22 +739,15 @@ watch(orderDrawerVisible, (visible) => {
   }
 })
 
-function cleanupStaleElementOverlays() {
+function cleanupIntentStaleOverlays() {
   if (orderDrawerVisible.value) return
   orderDetailLoading.value = false
-  document.querySelectorAll('.el-overlay, .el-loading-mask').forEach((element) => {
-    const text = element.textContent || ''
-    const hasDialog = element.querySelector('.el-drawer, .el-dialog, .el-message-box')
-    if (!hasDialog && !text.includes('加载中')) {
-      element.remove()
-    }
-  })
-  document.body.classList.remove('el-popup-parent--hidden')
+  cleanupGlobalStaleOverlays()
 }
 
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
-    cleanupStaleElementOverlays()
+    cleanupIntentStaleOverlays()
   }
 }
 
@@ -786,16 +789,17 @@ function syncEndpointFormFromDraft(currentDraft) {
   }
 }
 
-function nodeHintByKinds(kinds, fallback) {
+function nodeHintByKinds(kinds, fallback, nameFilter = () => true) {
   const names = availableNodes.value
     .filter(node => {
       if (node.is_routable === false) return false
       const kind = String(node.node_kind || '').toLowerCase()
-      return kinds.includes(kind)
+      const name = node.hostname || node.topology_node_id
+      return kinds.includes(kind) && nameFilter(name)
     })
     .map(node => node.hostname || node.topology_node_id)
     .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN', { numeric: true }))
+    .sort(officialNodeSort)
   if (!names.length) return fallback
   if (names.length <= 8) return names.join('、')
   return `${names.slice(0, 8).join('、')} 等 ${names.length} 个`
@@ -1167,7 +1171,7 @@ async function loadSystemSettings() {
 
 async function loadAvailableNodes() {
   try {
-    const { data } = await nodesApi.list()
+    const { data } = await nodesApi.list({ official_only: true })
     availableNodes.value = Array.isArray(data) ? data : []
   } catch {
     availableNodes.value = []
@@ -1197,8 +1201,9 @@ async function openOrderDetail(order) {
         orderResultObjects.value = objs || []
       } catch { /* ignore */ }
     }
-  } catch {
-    // keep null
+  } catch (err) {
+    selectedOrderDetail.value = null
+    ElMessage.error(extractErrorMessage(err, '工单详情加载失败，请重试'))
   } finally {
     orderDetailLoading.value = false
   }

@@ -118,6 +118,7 @@
         highlight-current-row
         v-loading="listLoading"
         @selection-change="handleOrderSelectionChange"
+        @row-click="handleOrderRowClick"
       >
         <el-table-column type="selection" width="44" fixed="left" />
         <el-table-column label="工单" min-width="180" fixed="left" show-overflow-tooltip>
@@ -174,6 +175,9 @@
             <span v-if="row.target_value != null">
               {{ formatMetric(row.actual_value) }} / {{ formatMetric(row.target_value) }} {{ row.unit || '' }}
             </span>
+            <span v-else-if="row.actual_value != null">
+              实际 {{ formatMetric(row.actual_value) }} {{ row.unit || '' }}
+            </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -186,7 +190,7 @@
         </el-table-column>
         <el-table-column label="业务指标" min-width="160">
           <template #default="{ row }">
-            <span v-if="row.target_value != null">{{ metricMeaningLabel(row) }}</span>
+            <span v-if="row.metric_key">{{ metricMeaningLabel(row) }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -218,26 +222,30 @@
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openDetail(row.order_id)">详情</el-button>
+            <el-button link type="primary" @click.stop="openDetail(row.order_id)">详情</el-button>
             <el-button
               v-if="showInternalControls && row.order_status === 'pending' && !row.instance_id"
               link
               type="warning"
-              @click="openManualRouting(row)"
+              @click.stop="openManualRouting(row)"
             >手动路由</el-button>
             <el-button
               v-if="row.instance_id && row.instance_exists !== false && canStart(row.deployment_status)"
               link
               type="success"
-              @click="startInstance(row.instance_id)"
+              :loading="instanceActionLoading === `start:${row.instance_id}`"
+              :disabled="Boolean(instanceActionLoading)"
+              @click.stop="startInstance(row.instance_id)"
             >启动</el-button>
             <el-button
               v-if="row.instance_id && row.instance_exists !== false && row.deployment_status === 'running'"
               link
               type="warning"
-              @click="stopInstance(row.instance_id)"
+              :loading="instanceActionLoading === `stop:${row.instance_id}`"
+              :disabled="Boolean(instanceActionLoading)"
+              @click.stop="stopInstance(row.instance_id)"
             >停止</el-button>
-            <el-button link type="danger" @click="deleteOrder(row)">删除</el-button>
+            <el-button link type="danger" @click.stop="deleteOrder(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -278,19 +286,19 @@
       <el-form label-width="100px" size="small">
         <el-form-item label="数据源节点">
           <el-select v-model="manualPlacements.source.topology_node_id" placeholder="选择节点" :disabled="manualPlacements.source.skip_deploy" clearable style="width:200px">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+            <el-option v-for="n in terminalNodes" :key="n.id" :label="nodeOptionLabel(n)" :value="n.hostname" />
           </el-select>
           <el-checkbox v-model="manualPlacements.source.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
         </el-form-item>
         <el-form-item label="计算节点">
           <el-select v-model="manualPlacements.compute.topology_node_id" placeholder="选择节点" style="width:200px">
-            <el-option v-for="n in schedulableNodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+            <el-option v-for="n in computeNodes" :key="n.id" :label="nodeOptionLabel(n)" :value="n.hostname" />
           </el-select>
           <el-input v-model="manualPlacements.compute.gpu_device" placeholder="GPU编号" style="width:80px;margin-left:8px" />
         </el-form-item>
         <el-form-item label="汇总节点">
           <el-select v-model="manualPlacements.sink.topology_node_id" placeholder="选择节点" :disabled="manualPlacements.sink.skip_deploy" clearable style="width:200px">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.hostname" :value="n.hostname" />
+            <el-option v-for="n in terminalNodes" :key="n.id" :label="nodeOptionLabel(n)" :value="n.hostname" />
           </el-select>
           <el-checkbox v-model="manualPlacements.sink.skip_deploy" style="margin-left:12px">不部署</el-checkbox>
         </el-form-item>
@@ -342,12 +350,18 @@ import {
   videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
 } from '@/constants/businessTaskDisplay'
+import {
+  officialNodeSort,
+  isOfficialComputeNodeName,
+  isOfficialTerminalNodeName,
+} from '@/constants/topologyNodes'
 
 const route = useRoute()
 const router = useRouter()
 const demoRunning = ref(false)
 const listLoading = ref(false)
 const detailLoading = ref(false)
+const instanceActionLoading = ref('')
 const batchCleanupLoading = ref(false)
 const batchDeleteLoading = ref(false)
 const runCleanupLoading = ref(false)
@@ -361,7 +375,9 @@ const pageSize = ref(20)
 const nodes = ref([])
 const selectedOrderIds = ref([])
 
-const schedulableNodes = computed(() => nodes.value.filter(n => n.is_schedulable !== false))
+const officialNodes = computed(() => [...nodes.value].sort((a, b) => officialNodeSort(a.hostname, b.hostname)))
+const terminalNodes = computed(() => officialNodes.value.filter(n => isOfficialTerminalNodeName(n.hostname)))
+const computeNodes = computed(() => officialNodes.value.filter(n => isOfficialComputeNodeName(n.hostname) && n.is_schedulable !== false))
 const showInternalControls = ref(false)
 const showRoutingDagJson = ref(false)
 
@@ -529,6 +545,80 @@ function applyRouteFilters() {
   }
 }
 
+function nodeOptionLabel(node) {
+  if (!node) return '-'
+  const parts = [node.hostname]
+  if (node.topology_node_id && node.topology_node_id !== node.hostname) parts.push(node.topology_node_id)
+  return parts.filter(Boolean).join(' / ')
+}
+
+function inferRoleFromInstanceNode(node) {
+  return node?.env?.TASK_ROLE || node?.name || ''
+}
+
+function formatBusinessAddress(node, machine) {
+  return node?.business_address || machine?.business_ipv6 || machine?.business_ip || ''
+}
+
+function mergeInstanceNodesIntoOrderDetail(orderData, instanceData) {
+  if (!instanceData?.nodes?.length) {
+    return {
+      ...orderData,
+      node_placements: orderData.instance_exists === false ? [] : (orderData.node_placements || []),
+    }
+  }
+  const machinesById = new Map(nodes.value.map(node => [node.id, node]))
+  const existing = new Map((orderData.node_placements || []).map(row => [String(row.role || row.instance_node_name || '').toLowerCase(), row]))
+  const mergedRows = instanceData.nodes.map((node) => {
+    const role = String(inferRoleFromInstanceNode(node)).toLowerCase()
+    const machine = machinesById.get(node.node_id)
+    const portValues = normalizeInstancePortValues(node)
+    return {
+      ...(existing.get(role) || {}),
+      role,
+      instance_node_name: node.name,
+      node_id: node.node_id,
+      hostname: machine?.hostname || node.hostname || existing.get(role)?.hostname,
+      image: node.image,
+      container_id: node.container_id,
+      container_name: node.container_name,
+      business_address: formatBusinessAddress(node, machine),
+      gpu_id: node.gpu_id,
+      gpu_device: node.env?.GPU_DEVICE || node.gpu_id || existing.get(role)?.gpu_device,
+      port_values: portValues || existing.get(role)?.port_values || {},
+      port_access_urls: existing.get(role)?.port_access_urls,
+      status: node.status,
+      error_message: node.error_message,
+    }
+  })
+  return {
+    ...orderData,
+    node_placements: mergedRows,
+    instance: {
+      ...(orderData.instance || {}),
+      id: instanceData.id,
+      status: instanceData.status,
+      node_count: instanceData.nodes.length,
+      error_message: instanceData.error_message,
+      created_at: instanceData.created_at,
+      updated_at: instanceData.updated_at,
+      port_access_urls: orderData.instance?.port_access_urls,
+    },
+  }
+}
+
+function normalizeInstancePortValues(node) {
+  if (node?.port_values && Object.keys(node.port_values).length) return node.port_values
+  if (!node?.ports || !Object.keys(node.ports).length) return null
+  const values = {}
+  Object.entries(node.ports).forEach(([containerPort, hostPort]) => {
+    const rawName = String(containerPort).split('/')[0]
+    const name = /^\d+$/.test(rawName) ? (node.name || 'service') : rawName
+    values[name] = hostPort
+  })
+  return values
+}
+
 
 function formatMetric(value) {
   return value == null ? '-' : Number(value)
@@ -682,7 +772,7 @@ async function loadBenchmarkRunOptions() {
 }
 
 async function loadNodes() {
-  const { data } = await nodesApi.list()
+  const { data } = await nodesApi.list({ official_only: true })
   nodes.value = data
 }
 
@@ -728,30 +818,51 @@ async function openDetail(orderId, tab = 'business') {
       resultObjects.value = objectsResp.data
       evaluationData = evalResp.data || evaluationData
     }
-    orderDetail.value = {
+    orderDetail.value = mergeInstanceNodesIntoOrderDetail({
       ...data,
       evaluation: evaluationData || data.evaluation || null,
-    }
+    }, instanceDetail.value)
   } finally {
     detailLoading.value = false
   }
 }
 
+function handleOrderRowClick(row, column) {
+  if (column?.type === 'selection') return
+  if (row?.order_id) openDetail(row.order_id)
+}
+
 async function startInstance(instanceId) {
-  await instancesApi.start(instanceId)
-  ElMessage.success('实例已启动')
-  await refreshAll()
-  if (orderDetail.value?.instance?.id === instanceId) {
-    await openDetail(orderDetail.value.id)
+  if (!instanceId || instanceActionLoading.value) return
+  instanceActionLoading.value = `start:${instanceId}`
+  try {
+    await instancesApi.start(instanceId)
+    ElMessage.success('实例已启动')
+    await refreshAll()
+    if (orderDetail.value?.instance?.id === instanceId) {
+      await openDetail(orderDetail.value.id)
+    }
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '启动实例失败'))
+  } finally {
+    instanceActionLoading.value = ''
   }
 }
 
 async function stopInstance(instanceId) {
-  await instancesApi.stop(instanceId)
-  ElMessage.success('实例已停止')
-  await refreshAll()
-  if (orderDetail.value?.instance?.id === instanceId) {
-    await openDetail(orderDetail.value.id)
+  if (!instanceId || instanceActionLoading.value) return
+  instanceActionLoading.value = `stop:${instanceId}`
+  try {
+    await instancesApi.stop(instanceId)
+    ElMessage.success('实例已停止')
+    await refreshAll()
+    if (orderDetail.value?.instance?.id === instanceId) {
+      await openDetail(orderDetail.value.id)
+    }
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '停止实例失败'))
+  } finally {
+    instanceActionLoading.value = ''
   }
 }
 
@@ -933,8 +1044,11 @@ async function waitForEvaluation(instanceId, maxAttempts = 80, intervalMs = 3000
 }
 
 async function submitSample() {
-  if (nodes.value.length < 3) {
-    ElMessage.error('至少需要 3 个可调度拓扑节点才能提交示例任务')
+  const sourceNode = nodes.value.find(node => node.hostname === 'h1' && node.node_kind === 'terminal')
+  const sinkNode = nodes.value.find(node => node.hostname === 'h2' && node.node_kind === 'terminal')
+  const computeNode = nodes.value.find(node => node.hostname === 'compute-1' && node.node_kind === 'worker')
+  if (!sourceNode || !sinkNode || !computeNode) {
+    ElMessage.error('示例任务需要 h1、h2 终端节点和 compute-1 计算节点')
     return
   }
   demoRunning.value = true
@@ -964,9 +1078,9 @@ async function submitSample() {
     routing_result: {
       strategy: 'fastest_completion',
       placements: [
-        { task_node_id: 'source', topology_node_id: nodes.value[0].hostname },
-        { task_node_id: 'compute', topology_node_id: nodes.value[1].hostname, gpu_device: '0' },
-        { task_node_id: 'sink', topology_node_id: nodes.value[2].hostname },
+        { task_node_id: 'source', topology_node_id: sourceNode.hostname },
+        { task_node_id: 'compute', topology_node_id: computeNode.hostname, gpu_device: '0' },
+        { task_node_id: 'sink', topology_node_id: sinkNode.hostname },
       ],
       estimated_metric: { metric_key: 'effective_gflops', metric_value: 200, unit: 'GFLOPS' },
     },
@@ -1092,7 +1206,7 @@ async function submitSample() {
 }
 
 .business-order-table :deep(.el-table__row) {
-  cursor: default;
+  cursor: pointer;
 }
 
 .order-cell {

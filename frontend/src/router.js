@@ -137,10 +137,12 @@ router.beforeEach(async (to) => {
   }
 
   if (ADMIN_ROUTE_NAMES.has(to.name) && !auth.isAdmin) {
+    ElMessage.warning('当前账号无管理端权限，已返回用户端页面')
     return auth.homePath
   }
 
   if (USER_ROUTE_NAMES.has(to.name) && auth.isAdmin) {
+    ElMessage.warning('管理员账号请在管理端查看工单和测评数据')
     return auth.homePath
   }
 

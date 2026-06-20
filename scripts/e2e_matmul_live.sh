@@ -4,20 +4,20 @@
 # Local mode (default, single host):
 #   ./scripts/e2e_matmul_live.sh
 #
-# Remote mode (3 physically isolated compute nodes):
+# Remote mode (real topology nodes):
 #   E2E_REMOTE=1 \
 #   WORKER_IMAGE=<registry-host:port>/scientific-matmul \
 #   WORKER_TAG=dev \
 #   NODE_AGENT_IMAGE=<registry-host:port>/node-agent \
 #   NODE_AGENT_TAG=dev \
-#   E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
-#   E2E_NODE_AGENT_HOSTS="<ip1> <ip2> <ip3>" \
+#   E2E_REMOTE_NODES="h1 compute-1 h2" \
+#   E2E_NODE_AGENT_HOSTS="<h1-ip> <compute-1-ip> <h2-ip>" \
 #   ./scripts/e2e_matmul_live.sh
 #
-# Placement: source -> compute-1, compute -> compute-2, sink -> compute-3.
-# Each role runs on a different physical host; the data path source->compute
-# and compute->sink crosses physical machines, exercising the random-walk
-# routing decision end to end.
+# Placement: source -> h1, compute -> compute-1, sink -> h2.
+# source/sink are terminal nodes; compute is the selected compute node. The data
+# path source->compute->sink crosses physical machines and preserves the current
+# user endpoint + along-path compute story.
 #
 # Both WORKER_IMAGE and NODE_AGENT_IMAGE are required in remote mode and
 # must be registry-qualified so the remote nodes can pull them.
@@ -239,7 +239,7 @@ if [[ "${E2E_REMOTE}" == "1" ]]; then
   remote_preflight
 fi
 
-echo "[2/7] create business task (using real node hostnames)"
+echo "[2/7] create business task (using official topology aliases)"
 TASK_ID="matmul-live-$(date +%s)"
 echo "[3/7] create business task ${TASK_ID} (matrix=${MATRIX_SIZE}, batch=${BATCH_COUNT})"
 CREATE_BODY=$(cat <<EOF
@@ -268,9 +268,9 @@ CREATE_BODY=$(cat <<EOF
   "routing_result": {
     "strategy": "fastest_completion",
     "placements": [
-      {"task_node_id": "source", "topology_node_id": "compute-1"},
-      {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
-      {"task_node_id": "sink", "topology_node_id": "compute-3"}
+      {"task_node_id": "source", "topology_node_id": "h1"},
+      {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+      {"task_node_id": "sink", "topology_node_id": "h2"}
     ],
     "estimated_metric": {
       "metric_key": "compute_latency_ms",

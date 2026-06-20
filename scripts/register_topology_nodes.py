@@ -61,18 +61,41 @@ def _login(api_base: str) -> str:
     return result["access_token"]
 
 
-def _node_payload(item: dict[str, Any], registry_host: str | None = None) -> dict[str, Any]:
-    management_ip = item["management_ip"]
+def _profiled_value(item: dict[str, Any], key: str, profile: str) -> Any:
+    if profile == "acceptance":
+        profile_key = f"acceptance_{key}"
+        if item.get(profile_key) is not None:
+            return item.get(profile_key)
+    return item.get(key)
+
+
+def _node_payload(
+    item: dict[str, Any],
+    registry_host: str | None = None,
+    *,
+    network_profile: str = "current",
+) -> dict[str, Any]:
+    management_ip = _profiled_value(item, "management_ip", network_profile)
+    if not management_ip:
+        raise ValueError(f"{item.get('hostname') or item!r} missing management_ip for {network_profile}")
     agent_port = int(item.get("agent_port") or 8001)
+    business_ip = _profiled_value(item, "business_ip", network_profile) or management_ip
+    business_ipv6 = _profiled_value(item, "business_ipv6", network_profile)
+    agent_address = (
+        _profiled_value(item, "agent_address", network_profile)
+        or item.get("agent_address")
+        or f"http://{management_ip}:{agent_port}"
+    )
+    profile_label = "验收网络" if network_profile == "acceptance" else "当前调试网络"
     payload = {
         "hostname": item["hostname"],
         "display_name": item.get("display_name"),
         "topology_node_id": item.get("topology_node_id"),
         "topology_zone": item.get("topology_zone"),
-        "agent_address": item.get("agent_address") or f"http://{management_ip}:{agent_port}",
+        "agent_address": agent_address,
         "management_ip": management_ip,
-        "business_ip": item.get("business_ip") or management_ip,
-        "business_ipv6": item.get("business_ipv6"),
+        "business_ip": business_ip,
+        "business_ipv6": business_ipv6,
         "node_kind": item.get("node_kind") or "terminal",
         "gpu_count": int(item.get("gpu_count") or 0),
         "gpu_model": item.get("gpu_model"),
@@ -83,7 +106,7 @@ def _node_payload(item: dict[str, Any], registry_host: str | None = None) -> dic
         "driver_version": item.get("driver_version"),
         "cuda_version": item.get("cuda_version"),
         "resource_note": item.get("resource_note")
-        or f"拓扑区域 {item.get('topology_zone') or '-'}；当前使用 10.112 IPv4，后续业务面网络变更时更新 business_ip/business_ipv6。",
+        or f"拓扑区域 {item.get('topology_zone') or '-'}；按 {profile_label} 注册，业务面优先使用 business_ipv6。",
         "is_schedulable": bool(item.get("is_schedulable", True)),
         "is_routable": bool(item.get("is_routable", True)),
     }
@@ -102,6 +125,12 @@ def main() -> int:
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--include-compute", action="store_true", help="also upsert compute_nodes from inventory")
     parser.add_argument("--include-admin", action="store_true", help="also upsert manager node from inventory")
+    parser.add_argument(
+        "--network-profile",
+        choices=["current", "acceptance"],
+        default=os.environ.get("NETWORK_PROFILE", "current"),
+        help="current uses 10.112 debug addresses; acceptance uses 172.16 management and 3012 IPv6 fields when present",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -114,7 +143,16 @@ def main() -> int:
         items.append(inventory["manager"])
 
     if args.dry_run:
-        print(json.dumps([_node_payload(item, registry) for item in items], ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                [
+                    _node_payload(item, registry, network_profile=args.network_profile)
+                    for item in items
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     token = _login(args.api_base.rstrip("/"))
@@ -122,7 +160,7 @@ def main() -> int:
     by_hostname = {item["hostname"]: item for item in nodes}
 
     for item in items:
-        payload = _node_payload(item, registry)
+        payload = _node_payload(item, registry, network_profile=args.network_profile)
         existing = by_hostname.get(payload["hostname"])
         if existing:
             result = _request(

@@ -126,6 +126,16 @@ def _find_binding(order: dict[str, Any], src: str, dst: str) -> dict[str, Any]:
     raise RuntimeError(f"missing network binding {src}->{dst}: {bindings}")
 
 
+def _compute_access_binding(order: dict[str, Any]) -> dict[str, Any] | None:
+    bindings = ((order.get("routing_result") or {}).get("network_bindings") or [])
+    if not isinstance(bindings, list):
+        return None
+    for binding in bindings:
+        if binding.get("from") == "source" and binding.get("to") == "compute" and binding.get("dst_access_url"):
+            return binding
+    return None
+
+
 def _node_by_alias(base: str, session: requests.Session, alias: str) -> dict[str, Any]:
     nodes = _get(session, f"{base}/api/nodes")
     for node in nodes:
@@ -347,40 +357,56 @@ def main() -> int:
     )
     print(f"  receiver={receiver_url}/")
 
-    print("[5/8] 路由回写并物化 compute-only 实例")
-    _patch_public(f"{base}/api/routing-orders/{order_id}/claim")
+    print("[5/8] 获取或回写路由结果，物化 compute-only 实例")
+    order_after_confirm = _get(session, f"{base}/api/orders/{order_id}")
+    compute_binding = _compute_access_binding(order_after_confirm)
     route_body = None
-    candidates = [item.strip() for item in args.compute_nodes.split(",") if item.strip()]
-    _assert(bool(candidates), "compute candidates cannot be empty")
-    for index, compute_node in enumerate(candidates):
-        if index > 0:
-            _patch_public(f"{base}/api/routing-orders/{order_id}/requeue", json={"reason": "retry candidate"})
-            _patch_public(f"{base}/api/routing-orders/{order_id}/claim")
-        response = requests.post(
-            f"{base}/api/routing-orders/{order_id}/result",
-            json={
-                "placements": [
-                    {"task_node_id": "compute", "topology_node_id": compute_node, "gpu_device": args.gpu_device}
-                ],
-                "strategy": "resource_guarantee",
-                "metadata": {"source": "e2e_user_endpoint_manual_containers", "candidate": compute_node},
-            },
-            timeout=180,
+    if compute_binding and order_after_confirm.get("materialized_instance_id"):
+        route_body = order_after_confirm.get("routing_result") or {}
+        selected = next(
+            (
+                item.get("topology_node_id")
+                for item in route_body.get("placements", [])
+                if item.get("task_node_id") == "compute"
+            ),
+            "系统自动分配",
         )
-        if response.status_code == 200:
-            route_body = response.json()
-            print(f"  placement={compute_node}:gpu{args.gpu_device}")
-            break
-        conflict = response.status_code == 409 and re.search(r"GPU slot conflict", response.text or "")
-        if conflict and index + 1 < len(candidates):
-            print(f"  skip {compute_node}:gpu{args.gpu_device} conflict")
-            continue
-        raise RuntimeError(f"routing result failed on {compute_node}: HTTP {response.status_code} {response.text}")
-    _assert(route_body is not None, "no route result")
-    compute_binding = next(
-        (item for item in route_body.get("network_bindings", []) if item.get("from") == "source" and item.get("to") == "compute"),
-        None,
-    )
+        print(f"  placement={selected}:已由系统自动分配")
+    else:
+        claim_response = requests.patch(f"{base}/api/routing-orders/{order_id}/claim", timeout=60)
+        if claim_response.status_code not in {200, 409}:
+            raise RuntimeError(f"claim routing order failed: HTTP {claim_response.status_code} {claim_response.text}")
+        candidates = [item.strip() for item in args.compute_nodes.split(",") if item.strip()]
+        _assert(bool(candidates), "compute candidates cannot be empty")
+        for index, compute_node in enumerate(candidates):
+            if index > 0:
+                _patch_public(f"{base}/api/routing-orders/{order_id}/requeue", json={"reason": "retry candidate"})
+                _patch_public(f"{base}/api/routing-orders/{order_id}/claim")
+            response = requests.post(
+                f"{base}/api/routing-orders/{order_id}/result",
+                json={
+                    "placements": [
+                        {"task_node_id": "compute", "topology_node_id": compute_node, "gpu_device": args.gpu_device}
+                    ],
+                    "strategy": "resource_guarantee",
+                    "metadata": {"source": "e2e_user_endpoint_manual_containers", "candidate": compute_node},
+                },
+                timeout=180,
+            )
+            if response.status_code == 200:
+                route_body = response.json()
+                print(f"  placement={compute_node}:gpu{args.gpu_device}")
+                break
+            conflict = response.status_code == 409 and re.search(r"GPU slot conflict", response.text or "")
+            if conflict and index + 1 < len(candidates):
+                print(f"  skip {compute_node}:gpu{args.gpu_device} conflict")
+                continue
+            raise RuntimeError(f"routing result failed on {compute_node}: HTTP {response.status_code} {response.text}")
+        _assert(route_body is not None, "no route result")
+        compute_binding = next(
+            (item for item in route_body.get("network_bindings", []) if item.get("from") == "source" and item.get("to") == "compute"),
+            None,
+        )
     _assert(compute_binding and compute_binding.get("dst_access_url"), f"missing compute access binding: {route_body}")
     compute_url = str(compute_binding["dst_access_url"]).rstrip("/")
     print(f"  compute_url={compute_url}")

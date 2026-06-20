@@ -12,15 +12,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from enums import NodeKind
 from models import Node as NodeModel, NodeBaseline
+from services.topology_catalog import COMPUTE_NODE_ALIASES
 
 router = APIRouter(prefix="/api/baselines", tags=["baselines"])
 
 
-COMPUTE_NODE_KINDS = {NodeKind.WORKER.value, NodeKind.BOTH.value}
+COMPUTE_NODE_KINDS = {NodeKind.WORKER.value}
+OFFICIAL_COMPUTE_NODE_ALIAS_SET = set(COMPUTE_NODE_ALIASES)
 
 
 def _is_compute_node(node: NodeModel) -> bool:
-    return str(node.node_kind or NodeKind.WORKER.value).lower() in COMPUTE_NODE_KINDS
+    return (
+        node.hostname in OFFICIAL_COMPUTE_NODE_ALIAS_SET
+        and str(node.node_kind or NodeKind.WORKER.value).lower() in COMPUTE_NODE_KINDS
+    )
+
+
+def _normalize_baseline_error(exc: Exception) -> str:
+    message = str(exc)
+    if "server gave HTTP response to HTTPS client" in message:
+        return "节点 Docker 未配置私有镜像仓库 10.112.244.94:5000 为可信 HTTP 仓库，请修复节点 Docker 配置后重测"
+    if "无法从容器日志解析基准测试结果" in message:
+        return "容器已启动但未输出基线结果，请检查该节点镜像版本、GPU 后端或容器日志"
+    if "500 Internal Server Error" in message:
+        return "节点 Agent 启动容器失败，请查看该节点 Docker/镜像日志"
+    return message
 
 
 class BaselineCreate(BaseModel):
@@ -90,6 +106,8 @@ async def run_baseline_endpoint(payload: BaselineRunRequest, db: AsyncSession = 
     )).scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    if not _is_compute_node(node):
+        raise HTTPException(status_code=400, detail="基线测试只支持正式计算节点 compute-1、compute-2、compute-3")
 
     if payload.task_type not in BENCHMARK_PROFILES:
         raise HTTPException(status_code=400, detail=f"Unknown task_type: {payload.task_type}")
@@ -168,7 +186,11 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
         raise HTTPException(status_code=400, detail=f"不支持的任务类型: {payload.task_type}")
 
     nodes = (await db.execute(
-        select(NodeModel).where(NodeModel.is_schedulable == True, NodeModel.deleted_at.is_(None))
+        select(NodeModel).where(
+            NodeModel.is_schedulable == True,
+            NodeModel.deleted_at.is_(None),
+            NodeModel.hostname.in_(OFFICIAL_COMPUTE_NODE_ALIAS_SET),
+        )
     )).scalars().all()
     nodes = [node for node in nodes if _is_compute_node(node)]
 
@@ -208,7 +230,7 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
             await db.commit()
             succeeded.append(node.hostname)
         except Exception as e:
-            failed.append({"node": node.hostname, "error": str(e)})
+            failed.append({"node": node.hostname, "error": _normalize_baseline_error(e)})
 
     return {"succeeded": len(succeeded), "failed": failed, "nodes": succeeded}
 

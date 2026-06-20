@@ -420,7 +420,7 @@ LIMIT 100;
 | `topology_node_id` | 实验拓扑或资产主机 ID，如 `h18001001`；用户固定端点会在 DAG 的 `fixed_topology_node_id` 中使用它，但路由回写 placement 不使用它。 |
 | `topology_zone` | 拓扑区域，如 `h180`、`h400`、`h410`、`compute`。 |
 | `business_ip` / `business_ipv6` | 数据面地址。 |
-| `node_kind` | `worker`、`terminal`、`both`、`admin` 等。 |
+| `node_kind` | 当前正式拓扑只使用 `worker`、`terminal`、`admin`。`worker` 表示计算节点，`terminal` 表示源/目的终端节点。 |
 | `is_schedulable` | 是否可部署业务容器。 |
 | `is_routable` | 是否参与路由。 |
 | `deleted_at` | 非空必须跳过。 |
@@ -437,10 +437,10 @@ WHERE deleted_at IS NULL
 
 节点筛选建议：
 
-- `node_kind in ('worker', 'both')` 且 `is_schedulable=1` 的节点可作为 `compute` 候选。
-- `node_kind in ('terminal', 'both', 'worker')` 且 `is_routable=1` 的节点可参与路径计算。
-- 新增终端节点时推荐也部署 Docker 和 Node Agent，并设置 `is_schedulable=1, is_routable=1`，这样同一台终端既能承载 source/sink 容器，也能只作为路由端点。
-- 当前最终拓扑包含 `admin-server`、`compute-1~compute-3` 和 `h1~h13`。用户源/目的端点优先来自 `h1~h13` 终端节点；`compute-1~compute-3` 是算力候选节点，通常由路由系统回写到 `compute` placement。
+- `node_kind='worker'` 且 `hostname in ('compute-1','compute-2','compute-3')` 的节点可作为 `compute` 候选。
+- `node_kind='terminal'` 且 `hostname in ('h1'...'h13')` 的节点是用户源/目的终端，可参与路径计算。
+- 新增终端节点时推荐也部署 Docker 和 Node Agent，并设置 `is_schedulable=1, is_routable=1`；是否真正部署 source/sink 容器由工单部署策略决定。
+- 当前最终拓扑包含 `admin`、`compute-1~compute-3` 和 `h1~h13`。用户源/目的端点来自 `h1~h13` 终端节点；`compute-1~compute-3` 是算力候选节点，由路由系统回写到 `compute` placement。
 - 是否为 source/sink 创建容器由平台工单的 `platform_deployment.deployable_roles` 决定，不由路由系统决定。
 - 如果 DAG 的 `fixed_topology_node_id` 指向某个节点，路由系统可先按 `nodes.topology_node_id` 匹配，匹配不到再按 `nodes.hostname` 兜底；平台生成的新 DAG 会同时给出 `topology_alias` 方便回查。
 - 回写 `placements[].topology_node_id` 时必须使用 `nodes.hostname`，不要使用 `nodes.id` 或资产字段 `nodes.topology_node_id`。
@@ -449,10 +449,9 @@ WHERE deleted_at IS NULL
 
 | 场景 | 推荐配置 | 是否可用于业务目标测评 | 说明 |
 |------|----------|------------------------|------|
-| 终端节点需要承载 source/sink 容器 | `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
-| 终端节点参与某些任务但该任务不部署 source/sink 容器 | 通常仍为 `node_kind=terminal` 或 `both`，`is_schedulable=1`，`is_routable=1` | 视任务而定 | 机器具备部署能力，但当前任务可用 `deployable_roles=["compute"]` 或 `[]` 只建立路由路径。 |
+| 终端节点需要承载 source/sink 容器 | `node_kind=terminal`，`is_schedulable=1`，`is_routable=1` | 可以 | 需要部署 Node Agent、Docker，并能拉取/运行业务镜像。 |
+| 终端节点参与某些任务但该任务不部署 source/sink 容器 | `node_kind=terminal`，`is_schedulable=1`，`is_routable=1` | 视任务而定 | 机器具备部署能力，但当前任务可用 `deployable_roles=["compute"]` 或 `[]` 只建立路由路径。 |
 | 少数纯网络节点确实没有容器环境 | `node_kind=terminal`，`is_schedulable=0`，`is_routable=1` | 不可以 | 仅用于 route-only 路径检查，不用于需要业务容器的测评。 |
-| 特殊情况下计算节点也作为用户输入的源/目的节点 | `node_kind=worker` 或 `both`，`is_schedulable=1`，`is_routable=1` | 可以，但不是默认演示口径 | 在 DAG 里仍写成 `source/sink` 角色，真实机器名放在 `fixed_topology_node_id`。默认用户端演示仍建议使用 `h1~h13`。 |
 | 专用计算节点 | `node_kind=worker`，`is_schedulable=1`，`is_routable=1` | 可以 | 路由系统可把它作为 `compute` placement，并按 GPU 独占规则扣减资源。 |
 
 ### 6.3 `node_baselines`
@@ -496,7 +495,8 @@ WHERE n.deleted_at IS NULL
 ```sql
   AND n.is_schedulable = 1
   AND n.is_routable = 1
-  AND n.node_kind IN ('worker', 'both')
+  AND n.node_kind = 'worker'
+  AND n.hostname IN ('compute-1', 'compute-2', 'compute-3')
 ```
 
 baseline 准备规则：
@@ -632,7 +632,7 @@ nodes(
   topology_zone varchar(64),               -- h180 / h400 / h410 / compute
   business_ip varchar(45),
   business_ipv6 varchar(64),
-  node_kind varchar(50),                   -- worker / terminal / both / admin
+  node_kind varchar(50),                   -- worker / terminal / admin
   is_schedulable boolean,
   is_routable boolean,
   deleted_at datetime
@@ -687,8 +687,8 @@ routing_resource_events(
   "job_id": "order-uuid-001",
   "order_id": "order-uuid-001",
   "job_name": "视频AI推理",
-  "source_name": "terminal-a",
-  "destination_name": "terminal-b",
+  "source_name": "h1",
+  "destination_name": "h2",
   "modal": "低时延转发模态",
   "priority": 1,
   "routing_strategy": "low_latency_forwarding",
@@ -700,7 +700,7 @@ routing_resource_events(
       "task_node_id": "source",
       "task_role": "source",
       "task_node_type": "terminal",
-      "fixed_topology_node_id": "terminal-a",
+      "fixed_topology_node_id": "h1",
       "network": {
         "port_requirements": [
           {"name": "source", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
@@ -723,7 +723,7 @@ routing_resource_events(
       "task_node_id": "sink",
       "task_role": "sink",
       "task_node_type": "terminal",
-      "fixed_topology_node_id": "terminal-b",
+      "fixed_topology_node_id": "h2",
       "network": {
         "port_requirements": [
           {"name": "sink", "protocol": "tcp", "auto": true, "range": [18800, 19100], "direction": "inbound"}
@@ -765,7 +765,7 @@ routing_resource_events(
 
 - `task_node_id` 是任务内部子任务节点名，不是物理节点名。
 - 用户输入的源节点和目的节点写在 `fixed_topology_node_id`，平台同时给出 `topology_alias`、`business_ip/business_ipv6` 便于路由系统匹配和展示。
-- 源节点和目的节点可以是物理终端节点，也可以是物理计算节点；在 DAG 里它们仍然只是 `source/sink` 子任务角色。
+- 当前验收口径下，用户源节点和目的节点只使用 `h1-h13` 终端节点或用户登记的合法数据面 IP；`compute-1~compute-3` 只作为计算节点候选，不作为用户源/目的端点。
 - source/sink 是否启动端点容器由平台工单的 `platform_deployment.deployable_roles` 决定；例如 `["source","compute","sink"]` 表示三类角色都部署，`["compute"]` 表示 source/sink 只作为路由端点。
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
@@ -798,7 +798,7 @@ routing_resource_events(
 }
 ```
 
-`topology_node_id` 建议填写平台 `nodes.hostname` 中的业务别名（如 `h1`、`compute-1`）。平台也会兼容 `nodes.topology_node_id` 和节点 UUID，但对接时请固定一种口径，避免日志排查混乱。如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
+`placements[].topology_node_id` 必须填写平台 `nodes.hostname` 中的业务别名（例如 `compute-1`，自动化测评补齐 source/sink 时才会出现 `h1`、`h2`）。不要填写数据库 UUID，也不要填写资产拓扑 ID。资产拓扑 ID 仅通过 DAG 的 `fixed_topology_node_id` 提供给路由系统识别固定用户端点。如果当前工单需要部署 source/sink，平台会自动补齐 source/sink placement，并返回真实业务 IP/端口绑定；如果 source/sink 不部署，返回的 `network_bindings` 会把外部端点和 compute 接入地址标清楚。
 
 用户目的端如需接收 compute 回调，可手动启动 endpoint receiver，例如 `python /app/src/receiver_main.py --port 9000`。平台会把内部回调地址 `callback_url=http://[<sink-business-ipv6>]:9000/callback` 注入 compute；用户界面和 `network_bindings.dst_access_url` 展示的是容器首页地址 `http://[<sink-business-ipv6>]:9000`，浏览器打开即可查看 receiver 页面。路由系统只需按 `/result` 返回的 `network_bindings` 下发网络规则，不需要访问或管理 receiver 进程。
 
@@ -813,8 +813,8 @@ routing_resource_events(
   "strategy": "resource_guarantee",
   "placements": [],
   "metadata": {
-    "path": ["terminal-a", "terminal-b"],
-    "selected_reason": "terminal path is reachable"
+    "path": ["h1", "h2"],
+    "selected_reason": "h1 to h2 path is reachable"
   }
 }
 ```
@@ -827,10 +827,10 @@ routing_resource_events(
 {
   "strategy": "resource_guarantee",
   "placements": [
-    {"task_node_id": "compute", "topology_node_id": "compute-node-a", "gpu_device": "0"}
+    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
   ],
   "metadata": {
-    "path": ["terminal-a", "compute-node-a"]
+    "path": ["h1", "compute-1"]
   }
 }
 ```
@@ -852,11 +852,11 @@ Content-Type: application/json
   "selected_strategy": "GPU_EXCLUSIVE_RESOURCE_FIT",
   "external_routing_id": "route-20260610-0001",
   "placements": [
-    {"task_node_id": "compute", "topology_node_id": "compute-node-a", "gpu_device": "0"}
+    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
   ],
   "metadata": {
-    "path": ["terminal-a", "compute-node-a", "terminal-b"],
-    "selected_reason": "compute-node-a GPU 0 is available and baseline is stable",
+    "path": ["h1", "compute-1", "h2"],
+    "selected_reason": "compute-1 GPU 0 is available and baseline is stable",
     "algorithm_version": "router-v1",
     "cost": {"estimated_price": 1.25, "currency": "CNY"}
   }
@@ -894,11 +894,11 @@ Content-Type: application/json
       "task_type": "low_latency_video_pipeline",
       "modal": "低时延转发模态",
       "priority": 1,
-      "src_topology_node_id": "terminal-a",
-      "src_host": "terminal-a",
+      "src_topology_node_id": "h1",
+      "src_host": "h1",
       "src_ip": "fd00::10",
-      "dst_topology_node_id": "compute-node-a",
-      "dst_host": "compute-node-a",
+      "dst_topology_node_id": "compute-1",
+      "dst_host": "compute-1",
       "dst_ip": "fd00::21",
       "dst_port": 18842,
       "dst_named_ports": {"compute": 18842},
@@ -971,7 +971,7 @@ Content-Type: application/json
 
 ## 10. GPU 独占和资源释放
 
-验收业务默认 GPU 独占：
+被路由分配的 GPU 资源按任务时间窗独占：
 
 ```text
 同一 topology_node_id + gpu_device

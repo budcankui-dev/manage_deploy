@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -17,9 +17,11 @@ from schemas import (
     OrphanCleanupRequest,
     OrphanCleanupResponse,
 )
+from services.topology_catalog import OFFICIAL_TOPOLOGY_ALIASES
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 MANAGED_CONTAINER_PATTERN = re.compile(r"^[0-9a-f-]{36}_[0-9a-f-]{36}$")
+OFFICIAL_TOPOLOGY_ALIAS_SET = set(OFFICIAL_TOPOLOGY_ALIASES)
 
 
 def _get_node_endpoint(node: NodeModel) -> str:
@@ -83,9 +85,16 @@ async def create_node(
 
 @router.get("", response_model=list[NodeSimple])
 async def list_nodes(
+    official_only: bool = Query(False),
+    include_deleted: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(NodeModel))
+    query = select(NodeModel)
+    if not include_deleted:
+        query = query.where(NodeModel.deleted_at.is_(None))
+    if official_only:
+        query = query.where(NodeModel.hostname.in_(OFFICIAL_TOPOLOGY_ALIAS_SET))
+    result = await db.execute(query.order_by(NodeModel.hostname.asc()))
     nodes = result.scalars().all()
     return nodes
 

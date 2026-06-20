@@ -35,7 +35,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -60,9 +60,9 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     ).scalar_one()
     source_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "source")
     sink_node = next(item for item in order.routing_input_dag["nodes"] if item["task_node_id"] == "sink")
-    assert source_node["topology_node_id"] == "worker-a"
+    assert source_node["topology_node_id"] == "h1"
     assert source_node["business_ip"] == "10.0.1.1"
-    assert sink_node["topology_node_id"] == "worker-c"
+    assert sink_node["topology_node_id"] == "h2"
     assert sink_node["business_ip"] == "10.0.1.3"
     assert sink_node["business_port"] == 9000
     assert sink_node["callback_url"] == "http://10.0.1.3:9000/callback"
@@ -97,7 +97,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert detail_response.json()["status"] == "submitted"
     routing_placements = detail_response.json()["latest_routing_request"]["placements"]
     compute_route = next(item for item in routing_placements if item["task_node_id"] == "compute")
-    assert compute_route["topology_node_id"] == "worker-b"
+    assert compute_route["topology_node_id"] == "compute-1"
     assert compute_route["gpu_device"] == "0"
 
     order = (
@@ -108,7 +108,7 @@ async def test_conversation_parse_confirm_route_and_submit(client, db_session, m
     assert order.materialized_instance_id
     order_placements = order.runtime_config["routing_result"]["placements"]
     compute_order_route = next(item for item in order_placements if item["task_node_id"] == "compute")
-    assert compute_order_route["topology_node_id"] == "worker-b"
+    assert compute_order_route["topology_node_id"] == "compute-1"
     assert compute_order_route["gpu_device"] == "0"
 
     inst_nodes = (
@@ -135,7 +135,7 @@ async def test_conversation_rejects_compute_node_as_source_or_destination_slot(c
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-b，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 compute-1，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
 
@@ -143,10 +143,10 @@ async def test_conversation_rejects_compute_node_as_source_or_destination_slot(c
     body = message_response.json()
     draft = body["latest_draft"]
     assert draft["parse_status"] == "incomplete"
-    assert draft["source_name"] == "worker-a"
+    assert draft["source_name"] == "h1"
     assert draft["destination_name"] is None
-    assert "目的节点不存在：worker-b" in draft["validation_errors"]
-    assert "目的节点不存在：worker-b" in body["messages"][-1]["content"]
+    assert "目的节点不存在：compute-1" in draft["validation_errors"]
+    assert "目的节点不存在：compute-1" in body["messages"][-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -173,7 +173,7 @@ async def test_confirm_intent_preserves_explicit_callback_url(client, db_session
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -225,22 +225,18 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
         },
     )
     assert catalog_response.status_code == 200
-    source_response = await client.post(
-        "/api/nodes",
-        json={
-            "hostname": "h1",
-            "display_name": "h1",
-            "agent_address": "http://172.16.0.11:8001",
-            "management_ip": "172.16.0.11",
-            "business_ip": "10.112.126.124",
-            "business_ipv6": "2001:db8::1",
-            "node_kind": "terminal",
-            "topology_node_id": "h18001001",
-            "is_schedulable": True,
-            "is_routable": True,
-        },
-    )
-    assert source_response.status_code == 200
+    source_node = (
+        await db_session.execute(select(Node).where(Node.hostname == "h1"))
+    ).scalar_one()
+    source_node.display_name = "h1"
+    source_node.agent_address = "http://172.16.0.11:8001"
+    source_node.management_ip = "172.16.0.11"
+    source_node.business_ip = "10.112.126.124"
+    source_node.business_ipv6 = "2001:db8::1"
+    source_node.topology_node_id = "h18001001"
+    source_node.is_schedulable = True
+    source_node.is_routable = True
+    await db_session.flush()
     sink_response = await client.post(
         "/api/nodes",
         json={
@@ -263,7 +259,7 @@ async def test_confirm_intent_resolves_user_endpoint_inputs_into_routing_dag(cli
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -373,7 +369,7 @@ async def test_confirm_intent_prefers_business_ipv6_for_callback_when_enabled(cl
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -443,7 +439,7 @@ async def test_update_draft_can_clear_destination_port_and_generated_callback(cl
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -503,7 +499,7 @@ async def test_confirm_intent_rejects_unroutable_user_endpoint(client, db_sessio
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -546,7 +542,7 @@ async def test_update_draft_rejects_invalid_callback_url(client, db_session, mon
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -585,7 +581,7 @@ async def test_confirm_intent_supports_route_only_mode(client, db_session, monke
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -654,7 +650,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -682,7 +678,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
     assert route_body["latest_routing_request"]["status"] == "completed"
     routing_placements = route_body["latest_routing_request"]["placements"]
     routing_compute = next(item for item in routing_placements if item["task_node_id"] == "compute")
-    assert routing_compute["topology_node_id"] == "worker-b"
+    assert routing_compute["topology_node_id"] == "compute-1"
     assert routing_compute["gpu_device"] == "0"
 
     order = (
@@ -695,7 +691,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
 
     route_placements = order.runtime_config["routing_result"]["placements"]
     compute_route = next(item for item in route_placements if item["task_node_id"] == "compute")
-    assert compute_route["topology_node_id"] == "worker-b"
+    assert compute_route["topology_node_id"] == "compute-1"
     assert compute_route["gpu_device"] == "0"
 
     inst_nodes = (
@@ -741,7 +737,7 @@ async def test_confirm_intent_auto_routes_when_internal_auto_enabled(client, db_
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -763,7 +759,7 @@ async def test_confirm_intent_auto_routes_when_internal_auto_enabled(client, db_
     assert order.routing_status == "completed"
     assert order.materialized_instance_id
     placements = order.runtime_config["routing_result"]["placements"]
-    assert placements == [{"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}]
+    assert placements == [{"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}]
 
     inst_nodes = (
         await db_session.execute(
@@ -793,11 +789,11 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
     assert catalog_response.status_code == 200
 
     worker_b = (
-        await db_session.execute(select(Node).where(Node.hostname == "worker-b"))
+        await db_session.execute(select(Node).where(Node.hostname == "compute-1"))
     ).scalar_one()
     worker_b.gpu_count = 1
     extra_compute = Node(
-        hostname="worker-d",
+        hostname="compute-2",
         agent_address="http://127.0.0.1:8004",
         management_ip="10.0.0.4",
         business_ip="10.0.1.4",
@@ -811,7 +807,7 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
 
     occupied_instance = TaskInstance(
         template_id=template_id,
-        name="占用 worker-b gpu0 的历史工单",
+        name="占用 compute-1 gpu0 的历史工单",
         status=TaskStatus.RUNNING,
         deployment_mode=DeploymentMode.SCHEDULED,
         scheduled_start_time=datetime.utcnow() - timedelta(days=1),
@@ -820,11 +816,11 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
     db_session.add(occupied_instance)
     await db_session.flush()
     occupied_order = TaskOrder(
-        id="occupied-worker-b-gpu0",
+        id="occupied-compute-1-gpu0",
         template_id=template_id,
-        name="占用 worker-b gpu0 的历史工单",
-        source_name="worker-a",
-        destination_name="worker-c",
+        name="占用 compute-1 gpu0 的历史工单",
+        source_name="h1",
+        destination_name="h2",
         business_start_time=datetime.utcnow() - timedelta(days=1),
         business_end_time=datetime.utcnow() + timedelta(days=1),
         deployment_mode=DeploymentMode.SCHEDULED,
@@ -834,7 +830,7 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
         runtime_config={
             "routing_result": {
                 "placements": [
-                    {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
                 ],
             },
         },
@@ -846,7 +842,7 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -861,7 +857,7 @@ async def test_confirm_intent_auto_route_skips_occupied_compute_gpu(client, db_s
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == conversation_id))
     ).scalar_one()
     placements = order.runtime_config["routing_result"]["placements"]
-    assert placements == [{"task_node_id": "compute", "topology_node_id": "worker-d", "gpu_device": "0"}]
+    assert placements == [{"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"}]
 
 
 @pytest.mark.asyncio
@@ -887,7 +883,7 @@ async def test_routing_result_requiring_network_ready_keeps_conversation_pending
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -938,7 +934,7 @@ async def test_submit_after_network_ready_reuses_compute_only_order(client, db_s
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -954,7 +950,7 @@ async def test_submit_after_network_ready_reuses_compute_only_order(client, db_s
         f"/api/routing-orders/{conversation_id}/result",
         json={
             "strategy": "resource_guarantee",
-            "placements": [{"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}],
+            "placements": [{"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}],
             "require_network_ready": True,
         },
     )
@@ -1003,7 +999,7 @@ async def test_submit_after_network_ready_ignores_non_deployable_endpoint_placem
     conversation_id = create_response.json()["id"]
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "矩阵乘法任务，从 worker-a 到 worker-c，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
+        json={"content": "矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1050,7 +1046,7 @@ async def test_conversation_ignores_user_supplied_video_latency_threshold(client
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，端到端时延低于 1ms"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，端到端时延低于 1ms"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1076,7 +1072,7 @@ async def test_confirm_intent_rejects_missing_video_fps(client, db_session, monk
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，现在开始跑2小时，低时延策略"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，现在开始跑2小时，低时延策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1110,7 +1106,7 @@ async def test_confirm_intent_rejects_invalid_video_fps(client, db_session, monk
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 worker-a 到 worker-c，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
         headers=headers,
     )
     assert message_response.status_code == 200

@@ -76,6 +76,7 @@ from services.system_settings import (
     routing_resource_options_from_settings,
 )
 from services.time_utils import business_now
+from services.topology_catalog import COMPUTE_NODE_ALIASES, TERMINAL_NODE_ALIASES
 
 from .instances import _build_preflight_plan_from_instance, _create_instance_from_template, _preflight_instance_plan
 
@@ -236,14 +237,24 @@ async def _resolve_batch_orders(
 
 
 async def _catalog_for_order(db: AsyncSession, order: TaskOrder) -> BusinessTemplateCatalog | None:
-    query = select(BusinessTemplateCatalog).where(
-        BusinessTemplateCatalog.template_id == order.template_id
-    )
     task_type = _benchmark_task_type(order)
     if task_type:
-        query = query.where(BusinessTemplateCatalog.task_type == task_type)
-    rows = (await db.execute(query)).scalars().all()
-    return rows[0] if rows else None
+        result = await db.execute(
+            select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.task_type == task_type)
+        )
+        catalog = result.scalar_one_or_none()
+        if catalog:
+            return catalog
+
+    result = await db.execute(
+        select(BusinessTemplateCatalog).where(BusinessTemplateCatalog.template_id == order.template_id)
+    )
+    return result.scalars().first()
+
+
+async def _template_id_for_order(db: AsyncSession, order: TaskOrder) -> str:
+    catalog = await _catalog_for_order(db, order)
+    return catalog.template_id if catalog else order.template_id
 
 
 def _benchmark_config(task_type: str) -> dict:
@@ -258,19 +269,21 @@ def _normal_node_kind(node: NodeModel) -> str:
 
 
 def _node_can_host_endpoint_container(node: NodeModel) -> bool:
-    """A source/sink endpoint can be terminal, worker, or both, but must run containers."""
+    """Current topology keeps source/sink endpoint containers on h1-h13 only."""
     return (
-        bool(node.is_schedulable)
+        node.hostname in TERMINAL_NODE_ALIASES
+        and bool(node.is_schedulable)
         and bool(node.is_routable)
         and node.deleted_at is None
-        and _normal_node_kind(node) in {"terminal", "worker", "both"}
+        and _normal_node_kind(node) == "terminal"
     )
 
 
 def _node_can_host_benchmark_endpoint(node: NodeModel) -> bool:
     """Batch business evaluation deploys source/sink on terminal-side nodes only."""
     return (
-        bool(node.is_schedulable)
+        node.hostname in TERMINAL_NODE_ALIASES
+        and bool(node.is_schedulable)
         and bool(node.is_routable)
         and node.deleted_at is None
         and _normal_node_kind(node) == "terminal"
@@ -280,10 +293,11 @@ def _node_can_host_benchmark_endpoint(node: NodeModel) -> bool:
 def _node_can_host_compute(node: NodeModel) -> bool:
     """Compute placement must stay on compute-capable topology nodes."""
     return (
-        bool(node.is_schedulable)
+        node.hostname in COMPUTE_NODE_ALIASES
+        and bool(node.is_schedulable)
         and bool(node.is_routable)
         and node.deleted_at is None
-        and _normal_node_kind(node) in {"worker", "both"}
+        and _normal_node_kind(node) == "worker"
     )
 
 
@@ -994,9 +1008,10 @@ async def get_order(
             gpu_device = env.get("GPU_DEVICE")
             gpu_id = inst_node.gpu_id
             biz_addr = get_business_address(machine, settings.prefer_business_ipv6) if machine else None
+            port_values = _instance_node_port_values(inst_node)
             node_port_access_urls: dict[str, str] = {}
-            if inst_node.port_values and biz_addr:
-                for port_name, port_val in inst_node.port_values.items():
+            if port_values and biz_addr:
+                for port_name, port_val in port_values.items():
                     try:
                         port_int = int(port_val)
                     except (TypeError, ValueError):
@@ -1011,19 +1026,23 @@ async def get_order(
                     instance_node_name=inst_node.name,
                     node_id=inst_node.node_id,
                     hostname=machine.hostname if machine else None,
+                    image=inst_node.image,
+                    container_id=inst_node.container_id,
+                    container_name=inst_node.container_name,
                     business_address=biz_addr,
                     gpu_id=gpu_id,
                     gpu_device=gpu_device,
-                    port_values=inst_node.port_values,
+                    port_values=port_values,
                     port_access_urls=node_port_access_urls or None,
                     status=inst_node.status,
+                    error_message=inst_node.error_message,
                 )
             )
-            if not inst_node.port_values:
+            if not port_values:
                 continue
             if not machine:
                 continue
-            for port_name, port_val in inst_node.port_values.items():
+            for port_name, port_val in port_values.items():
                 try:
                     port_int = int(port_val)
                 except (TypeError, ValueError):
@@ -1035,7 +1054,7 @@ async def get_order(
         detail.instance = TaskOrderInstanceSummary(
             id=instance.id,
             status=instance.status,
-            node_count=len(instance.nodes or []),
+            node_count=len(inst_nodes),
             error_message=instance.error_message,
             port_access_urls=port_access_urls or None,
             created_at=instance.created_at,
@@ -1245,7 +1264,7 @@ async def materialize_order(
     config = order.runtime_config or {}
     try:
         instance = TaskInstanceCreate(
-            template_id=order.template_id,
+            template_id=await _template_id_for_order(db, order),
             name=order.name,
             deployment_mode=order.deployment_mode,
             scheduled_start_time=order.scheduled_start_time,
@@ -1283,7 +1302,7 @@ async def materialize_pending_orders(
         try:
             config = order.runtime_config or {}
             instance = TaskInstanceCreate(
-                template_id=order.template_id,
+                template_id=await _template_id_for_order(db, order),
                 name=order.name,
                 deployment_mode=order.deployment_mode,
                 scheduled_start_time=order.scheduled_start_time,
@@ -1464,6 +1483,22 @@ def _placement_gpu_ids(placement: RoutingPlacement | dict[str, Any]) -> list[str
     return []
 
 
+def _instance_node_port_values(node: TaskInstanceNode) -> dict[str, Any] | None:
+    if isinstance(node.port_values, dict) and node.port_values:
+        return node.port_values
+    if not isinstance(node.ports, dict) or not node.ports:
+        return None
+    values: dict[str, Any] = {}
+    for container_port, host_port in node.ports.items():
+        raw_name = str(container_port).split("/", 1)[0]
+        name = (node.name or "service") if raw_name.isdigit() else raw_name
+        try:
+            values[name] = int(host_port)
+        except (TypeError, ValueError):
+            values[name] = host_port
+    return values or None
+
+
 def _compute_gpu_slots_from_placements(
     placements: list[RoutingPlacement] | list[dict[str, Any]],
 ) -> set[tuple[str, str]]:
@@ -1483,11 +1518,12 @@ def _normalize_effective_placement_resources(
     order: TaskOrder,
     placements: list[RoutingPlacement],
 ) -> list[RoutingPlacement]:
-    """Persist the resources the platform will actually allocate.
+    """Persist the GPU slot the platform will reserve for compute roles.
 
-    Compute roles default to GPU 0 when the router omits a GPU id.  Normalizing
-    before conflict checks keeps routing_result, UI display, and release events
-    consistent with the acceptance rule: one task occupies one GPU by default.
+    If the router omits a GPU id for a GPU-backed compute role, the platform
+    reserves GPU 0 as the resource slot before conflict checks. This keeps
+    routing_result, UI display, and release events consistent without implying
+    anything about the physical node's GPU count.
     """
     default_gpu = _default_compute_gpu_for_order(order)
     if default_gpu is None:
@@ -1539,7 +1575,7 @@ async def _validate_deployable_placements(
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"Compute role '{role}' requires a schedulable worker/both node, "
+                        f"Compute role '{role}' requires one of compute-1/2/3 with node_kind=worker, "
                         f"got {node.hostname} ({_normal_node_kind(node)})"
                     ),
                 )
@@ -1548,7 +1584,7 @@ async def _validate_deployable_placements(
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"Endpoint role '{role}' requires a schedulable terminal/worker/both node "
+                        f"Endpoint role '{role}' requires one of h1-h13 with node_kind=terminal "
                         f"because this order deploys endpoint containers. "
                         f"Use platform_deployment.deployable_roles=[] for route-only checks."
                     ),
@@ -1938,7 +1974,7 @@ async def receive_routing_result(
     start_time = order.business_start_time or order.scheduled_start_time or business_now()
     end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
-        template_id=order.template_id,
+        template_id=catalog.template_id if catalog else order.template_id,
         name=order.name,
         deployment_mode=DeploymentMode.IMMEDIATE if payload.require_network_ready else DeploymentMode.SCHEDULED,
         scheduled_start_time=start_time,
@@ -2599,7 +2635,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
     start_time = order.business_start_time or order.scheduled_start_time or business_now()
     end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))
     instance_create = TaskInstanceCreate(
-        template_id=order.template_id,
+        template_id=catalog.template_id if catalog else order.template_id,
         name=order.name,
         deployment_mode=DeploymentMode.SCHEDULED,
         scheduled_start_time=start_time,

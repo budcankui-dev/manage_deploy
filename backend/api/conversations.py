@@ -35,6 +35,7 @@ from services.system_settings import (
     modality_priority_map_from_settings,
     routing_resource_options_from_settings,
 )
+from services.topology_catalog import COMPUTE_NODE_ALIASES
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -50,10 +51,11 @@ def _node_kind(node: Node) -> str:
 
 def _is_demo_compute_candidate(node: Node) -> bool:
     return (
-        bool(node.is_schedulable)
+        node.hostname in COMPUTE_NODE_ALIASES
+        and bool(node.is_schedulable)
         and bool(node.is_routable)
         and node.deleted_at is None
-        and _node_kind(node) in {"worker", "both"}
+        and _node_kind(node) == "worker"
     )
 
 

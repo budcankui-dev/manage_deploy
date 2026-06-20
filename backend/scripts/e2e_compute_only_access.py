@@ -56,7 +56,7 @@ def main() -> None:
     print("\n[2/5] 创建对话并确认意图...")
     conv = session.post(f"{base}/api/conversations", json={"title": "compute-only E2E"}).json()
     conv_id = conv["id"]
-    msg = "矩阵乘法任务，从 compute-1 到 compute-3，256阶矩阵，10批，现在开始跑30分钟，资源保障策略"
+    msg = "矩阵乘法任务，从 h1 到 h2，256阶矩阵，10批，现在开始跑30分钟，资源保障策略"
     conv = session.post(f"{base}/api/conversations/{conv_id}/messages", json={"content": msg}).json()
     draft = conv.get("latest_draft") or {}
     _assert(draft.get("parse_status") == "valid", f"意图解析未通过: {draft.get('validation_errors')}")

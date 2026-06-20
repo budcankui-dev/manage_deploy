@@ -41,6 +41,7 @@ from services.business_task_query import (
     list_business_tasks,
     summarize_business_tasks,
 )
+from services.topology_catalog import COMPUTE_NODE_ALIASES, TERMINAL_NODE_ALIASES
 
 from .instances import _create_instance_from_template
 
@@ -55,13 +56,32 @@ def _is_uuid(value: str) -> bool:
     return bool(UUID_PATTERN.match(value))
 
 
-async def _resolve_hostname_to_uuid(db: AsyncSession, hostname: str) -> str:
-    """Resolve hostname to node UUID. Raises HTTPException if not found."""
-    result = await db.execute(select(NodeModel).where(NodeModel.hostname == hostname))
+def _node_kind(node: NodeModel) -> str:
+    return str(node.node_kind or "").lower()
+
+
+async def _resolve_placement_node(db: AsyncSession, role: str, node_name: str) -> NodeModel:
+    """Resolve and validate official topology placement for a business DAG role."""
+    result = await db.execute(select(NodeModel).where(NodeModel.hostname == node_name))
     node = result.scalar_one_or_none()
     if not node:
-        raise HTTPException(status_code=404, detail=f"Node not found: {hostname}")
-    return node.id
+        raise HTTPException(status_code=404, detail=f"Node not found: {node_name}")
+    if node.deleted_at is not None or not node.is_schedulable:
+        raise HTTPException(status_code=422, detail=f"Node is not schedulable: {node_name}")
+
+    if role == "compute":
+        if node.hostname not in COMPUTE_NODE_ALIASES or _node_kind(node) != "worker":
+            raise HTTPException(
+                status_code=422,
+                detail="compute placement must use compute-1/2/3 with node_kind=worker",
+            )
+    elif role in {"source", "sink"}:
+        if node.hostname not in TERMINAL_NODE_ALIASES or _node_kind(node) != "terminal":
+            raise HTTPException(
+                status_code=422,
+                detail="source/sink placement must use h1-h13 terminal nodes",
+            )
+    return node
 
 
 async def build_instance_create_from_business_task(
@@ -85,9 +105,12 @@ async def build_instance_create_from_business_task(
         if not raw_node_id:
             raise HTTPException(status_code=400, detail=f"Missing placement for role: {role}")
         if _is_uuid(raw_node_id):
-            node_id = raw_node_id
-        else:
-            node_id = await _resolve_hostname_to_uuid(db, raw_node_id)
+            raise HTTPException(
+                status_code=422,
+                detail="placements[].topology_node_id must use official hostname aliases, not database UUID",
+            )
+        node = await _resolve_placement_node(db, role, raw_node_id)
+        node_id = node.id
         env = build_business_env(
             business_task=payload.model_dump(mode="json"),
             task_role=role,

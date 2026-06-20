@@ -38,11 +38,11 @@ async def _auth_headers(client, db_session, username: str = "testuser", role: Us
 async def _seed_business_fixture(client):
     node_ids = []
     node_kinds = {
-        "worker-a": "terminal",
-        "worker-b": "worker",
-        "worker-c": "terminal",
+        "h1": "terminal",
+        "compute-1": "worker",
+        "h2": "terminal",
     }
-    for idx, hostname in enumerate(["worker-a", "worker-b", "worker-c"], start=1):
+    for idx, hostname in enumerate(["h1", "compute-1", "h2"], start=1):
         response = await client.post(
             "/api/nodes",
             json={
@@ -112,9 +112,9 @@ async def _seed_business_fixture(client):
 
 
 def _standard_placements(
-    source: str = "worker-a",
-    compute: str = "worker-b",
-    sink: str = "worker-c",
+    source: str = "h1",
+    compute: str = "compute-1",
+    sink: str = "h2",
     *,
     gpu_device: str | None = "0",
 ) -> list[dict]:
@@ -447,6 +447,66 @@ async def test_business_task_create_and_metric_evaluation(client, db_session):
     assert summary[0]["evaluated_count"] == 1
     assert summary[0]["success_count"] == 1
     assert summary[0]["business_success_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_business_task_create_rejects_compute_node_as_sink(client, db_session):
+    await _seed_business_fixture(client)
+
+    payload = {
+        "external_task_id": "intent-api-invalid-sink",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "非法目的节点",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "runtime_plan": {"codec": "h264"},
+        "routing_result": {
+            "strategy": "completion_time_first",
+            "placements": _standard_placements(sink="compute-1"),
+        },
+    }
+
+    response = await client.post("/api/business-tasks", json=payload)
+
+    assert response.status_code == 422
+    assert "source/sink" in response.json()["detail"]
+    assert "h1-h13" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_business_task_create_rejects_terminal_node_as_compute(client, db_session):
+    await _seed_business_fixture(client)
+
+    payload = {
+        "external_task_id": "intent-api-invalid-compute",
+        "task_type": "low_latency_video_pipeline",
+        "modality": "low_latency_forwarding",
+        "name": "非法计算节点",
+        "data_profile": {"profile_id": "video_720p_frame_stream"},
+        "business_objective": {
+            "metric_key": "end_to_end_latency_ms",
+            "operator": "<=",
+            "target_value": 200,
+            "unit": "ms",
+        },
+        "runtime_plan": {"codec": "h264"},
+        "routing_result": {
+            "strategy": "resource_guarantee",
+            "placements": _standard_placements(compute="h1"),
+        },
+    }
+
+    response = await client.post("/api/business-tasks", json=payload)
+
+    assert response.status_code == 422
+    assert "compute" in response.json()["detail"]
+    assert "compute-1/2/3" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -882,11 +942,11 @@ async def test_batch_benchmark_creates_task_type_aware_video_orders(client, db_s
     assert [node["task_node_id"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["task_role"] for node in dag["nodes"]] == ["source", "compute", "sink"]
     assert [node["task_node_type"] for node in dag["nodes"]] == ["terminal", "worker", "terminal"]
-    assert order.source_name == "worker-a"
-    assert order.destination_name == "worker-c"
+    assert order.source_name == "h1"
+    assert order.destination_name == "h2"
     assert order.runtime_config["platform_deployment"]["deployable_roles"] == ["source", "compute", "sink"]
-    assert dag["nodes"][0]["fixed_topology_node_id"] == "worker-a"
-    assert dag["nodes"][2]["fixed_topology_node_id"] == "worker-c"
+    assert dag["nodes"][0]["fixed_topology_node_id"] == "h1"
+    assert dag["nodes"][2]["fixed_topology_node_id"] == "h2"
     assert all("exec" not in node for node in dag["nodes"])
     edge_pairs = [(edge["from"], edge["to"], edge["data_mb"], edge["bandwidth_mbps"]) for edge in dag["edges"]]
     assert edge_pairs == [
@@ -953,22 +1013,6 @@ async def test_batch_benchmark_respects_fixed_endpoint_names(client, db_session)
     _node_ids, _template_id = await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="benchmark-fixed-endpoint-user")
 
-    for idx, hostname in enumerate(["h1", "h2"], start=10):
-        response = await client.post(
-            "/api/nodes",
-            json={
-                "hostname": hostname,
-                "display_name": hostname,
-                "agent_address": f"http://127.0.0.1:81{idx}",
-                "management_ip": f"10.0.0.{idx}",
-                "business_ip": f"10.0.1.{idx}",
-                "node_kind": "terminal",
-                "is_schedulable": True,
-                "is_routable": True,
-            },
-        )
-        assert response.status_code == 200
-
     response = await client.post(
         "/api/orders/batch-benchmark",
         headers=headers,
@@ -1014,9 +1058,9 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
         "selected_strategy": "GPU_EXCLUSIVE_LOW_RENT",
         "external_routing_id": "route-meta-001",
         "placements": [
-            {"task_node_id": "source", "topology_node_id": "worker-a"},
-            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
-            {"task_node_id": "sink", "topology_node_id": "worker-c"},
+            {"task_node_id": "source", "topology_node_id": "h1"},
+            {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+            {"task_node_id": "sink", "topology_node_id": "h2"},
         ],
         "estimated_metric": {
             "estimated_cost": 1.6,
@@ -1024,9 +1068,9 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
             "confidence": 0.9,
         },
         "metadata": {
-            "path": ["worker-a", "worker-b", "worker-c"],
+            "path": ["h1", "compute-1", "h2"],
             "rent": {"amount": 1.6, "currency": "CNY", "billing_unit": "task"},
-            "selected_reason": "worker-b GPU 0 is exclusive and has the lowest estimated rent",
+            "selected_reason": "compute-1 GPU 0 is exclusive and has the lowest estimated rent",
             "algorithm_version": "router-test",
             "decision_trace_id": "trace-meta-001",
         },
@@ -1080,7 +1124,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
 
 @pytest.mark.asyncio
 async def test_routing_result_terminal_only_dag_does_not_create_instance(client, db_session):
-    for idx, hostname in enumerate(["terminal-a", "terminal-b"], start=1):
+    for idx, hostname in enumerate(["h10", "h11"], start=1):
         response = await client.post(
             "/api/nodes",
             json={
@@ -1108,8 +1152,8 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="terminal-only-routing",
-        source_name="terminal-a",
-        destination_name="terminal-b",
+        source_name="h10",
+        destination_name="h11",
         runtime_config={
             "business_task": {"task_type": "terminal_connectivity"},
             "platform_deployment": {"deployable_roles": []},
@@ -1120,8 +1164,8 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
             "job_id": "terminal-only-routing",
             "order_id": "terminal-only-routing",
             "nodes": [
-                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-a"},
-                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-b"},
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "h10"},
+                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "h11"},
             ],
             "edges": [{"from": "source", "to": "sink", "data_mb": 1, "bandwidth_mbps": 10}],
         },
@@ -1135,7 +1179,7 @@ async def test_routing_result_terminal_only_dag_does_not_create_instance(client,
         {
             "strategy": "resource_guarantee",
             "placements": [],
-            "metadata": {"path": ["terminal-a", "terminal-b"]},
+            "metadata": {"path": ["h10", "h11"]},
         },
     )
     assert response.status_code == 200, response.text
@@ -1257,7 +1301,7 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
     source_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "terminal-without-agent",
+            "hostname": "h3",
             "agent_address": "http://127.0.0.1:8301",
             "management_ip": "10.11.0.1",
             "business_ip": "10.11.1.1",
@@ -1270,11 +1314,11 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
     sink_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "worker-sink",
+            "hostname": "h4",
             "agent_address": "http://127.0.0.1:8302",
             "management_ip": "10.11.0.2",
             "business_ip": "10.11.1.2",
-            "node_kind": "worker",
+            "node_kind": "terminal",
             "is_schedulable": True,
             "is_routable": True,
         },
@@ -1283,7 +1327,7 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "worker-compute",
+            "hostname": "compute-1",
             "agent_address": "http://127.0.0.1:8303",
             "management_ip": "10.11.0.3",
             "business_ip": "10.11.1.3",
@@ -1305,7 +1349,7 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
                     "name": "source",
                     "image": "busybox:latest",
                     "command": "sleep 3600",
-                    "node_id": sink_response.json()["id"],
+                    "node_id": source_response.json()["id"],
                 },
                 {
                     "client_id": "compute",
@@ -1330,8 +1374,8 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="endpoint-validation-routing",
-        source_name="terminal-without-agent",
-        destination_name="worker-sink",
+        source_name="h3",
+        destination_name="h4",
         runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
         routing_status=RoutingStatus.PENDING.value,
         status=OrderStatus.PENDING,
@@ -1339,9 +1383,9 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
             "job_id": "endpoint-validation-routing",
             "order_id": "endpoint-validation-routing",
             "nodes": [
-                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "terminal-without-agent"},
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "h3"},
                 {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
-                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "worker-sink"},
+                {"task_node_id": "sink", "task_role": "sink", "task_node_type": "terminal", "fixed_topology_node_id": "h4"},
             ],
             "edges": [{"from": "source", "to": "compute"}, {"from": "compute", "to": "sink"}],
         },
@@ -1355,7 +1399,7 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-compute", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
         },
     )
@@ -1364,15 +1408,15 @@ async def test_deployable_endpoint_must_be_schedulable_unless_route_only(client,
 
 
 @pytest.mark.asyncio
-async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(client, db_session):
+async def test_routing_result_allows_terminal_nodes_as_fixed_source_and_sink(client, db_session):
     source_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "worker-source",
+            "hostname": "h5",
             "agent_address": "http://127.0.0.1:8401",
             "management_ip": "10.12.0.1",
             "business_ip": "10.12.1.1",
-            "node_kind": "worker",
+            "node_kind": "terminal",
             "is_schedulable": True,
             "is_routable": True,
         },
@@ -1381,7 +1425,7 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "worker-compute-2",
+            "hostname": "compute-2",
             "agent_address": "http://127.0.0.1:8402",
             "management_ip": "10.12.0.2",
             "business_ip": "10.12.1.2",
@@ -1394,11 +1438,11 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
     sink_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "worker-sink-2",
+            "hostname": "h6",
             "agent_address": "http://127.0.0.1:8403",
             "management_ip": "10.12.0.3",
             "business_ip": "10.12.1.3",
-            "node_kind": "worker",
+            "node_kind": "terminal",
             "is_schedulable": True,
             "is_routable": True,
         },
@@ -1442,8 +1486,8 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="worker-endpoint-routing",
-        source_name="worker-source",
-        destination_name="worker-sink-2",
+        source_name="h5",
+        destination_name="h6",
         business_start_time=start,
         business_end_time=start + timedelta(minutes=5),
         runtime_config={
@@ -1460,14 +1504,14 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
                     "task_node_id": "source",
                     "task_role": "source",
                     "task_node_type": "terminal",
-                    "fixed_topology_node_id": "worker-source",
+                    "fixed_topology_node_id": "h5",
                 },
                 {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
                 {
                     "task_node_id": "sink",
                     "task_role": "sink",
                     "task_node_type": "terminal",
-                    "fixed_topology_node_id": "worker-sink-2",
+                    "fixed_topology_node_id": "h6",
                 },
             ],
             "edges": [{"from": "source", "to": "compute"}, {"from": "compute", "to": "sink"}],
@@ -1482,7 +1526,7 @@ async def test_routing_result_allows_worker_nodes_as_fixed_source_and_sink(clien
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-compute-2", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
             ],
         },
     )
@@ -1506,7 +1550,7 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     source_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "endpoint-source",
+            "hostname": "h7",
             "agent_address": "http://127.0.0.1:8201",
             "management_ip": "10.10.0.1",
             "business_ip": "10.10.1.1",
@@ -1518,7 +1562,7 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "compute-dest",
+            "hostname": "compute-3",
             "agent_address": "http://127.0.0.1:8202",
             "management_ip": "10.10.0.2",
             "business_ip": "10.10.1.2",
@@ -1552,8 +1596,8 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="terminal-to-compute-routing",
-        source_name="endpoint-source",
-        destination_name="compute-dest",
+        source_name="h7",
+        destination_name="compute-3",
         business_start_time=start,
         business_end_time=start + timedelta(minutes=5),
         runtime_config={
@@ -1566,8 +1610,8 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
             "job_id": "terminal-to-compute-routing",
             "order_id": "terminal-to-compute-routing",
             "nodes": [
-                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "endpoint-source"},
-                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker", "fixed_topology_node_id": "compute-dest"},
+                {"task_node_id": "source", "task_role": "source", "task_node_type": "terminal", "fixed_topology_node_id": "h7"},
+                {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker", "fixed_topology_node_id": "compute-3"},
             ],
             "edges": [{"from": "source", "to": "compute", "data_mb": 1, "bandwidth_mbps": 10}],
         },
@@ -1581,7 +1625,7 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "compute-dest", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-3", "gpu_device": "0"},
             ],
         },
     )
@@ -1597,8 +1641,8 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     assert compute_node.node_id == compute_node_id
     assert compute_node.gpu_id == "0"
     assert compute_node.env["TASK_ROLE"] == "compute"
-    assert compute_node.env["SOURCE_NAME"] == "endpoint-source"
-    assert compute_node.env["DESTINATION_NAME"] == "compute-dest"
+    assert compute_node.env["SOURCE_NAME"] == "h7"
+    assert compute_node.env["DESTINATION_NAME"] == "compute-3"
     assert compute_node.env["GPU_DEVICE"] == "0"
     assert compute_node.env["DEPLOYABLE_ROLES"] == "compute"
     assert compute_node.env["PEER_WAIT_TIMEOUT_SEC"] == "3600"
@@ -1611,9 +1655,9 @@ async def test_routing_result_two_node_dag_materializes_only_compute_node(client
     assert binding["binding_source"] == "routing_dag"
     assert binding["src_external"] is True
     assert binding["dst_external"] is False
-    assert binding["src_host"] == "endpoint-source"
+    assert binding["src_host"] == "h7"
     assert binding["src_ip"] == "10.10.1.1"
-    assert binding["dst_host"] == "compute-dest"
+    assert binding["dst_host"] == "compute-3"
     assert binding["dst_ip"] == "10.10.1.2"
     assert isinstance(binding["dst_port"], int)
     assert binding["dst_access_url"] == f"http://10.10.1.2:{binding['dst_port']}"
@@ -1624,7 +1668,7 @@ async def test_compute_only_external_sink_binding_uses_callback_url(client, db_s
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "callback-compute",
+            "hostname": "compute-1",
             "agent_address": "http://127.0.0.1:8304",
             "management_ip": "10.12.0.2",
             "business_ip": "10.12.1.2",
@@ -1707,7 +1751,7 @@ async def test_compute_only_external_sink_binding_uses_callback_url(client, db_s
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "callback-compute", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
         },
     )
@@ -1734,12 +1778,11 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     source_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "h-binding-source",
+            "hostname": "h8",
             "agent_address": "http://127.0.0.1:8401",
             "management_ip": "10.13.0.1",
             "business_ip": "10.13.1.1",
             "node_kind": "terminal",
-            "topology_node_id": "h18001001",
             "is_schedulable": False,
             "is_routable": True,
         },
@@ -1748,12 +1791,11 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     sink_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "h-binding-sink",
+            "hostname": "h9",
             "agent_address": "http://127.0.0.1:8403",
             "management_ip": "10.13.0.3",
             "business_ip": "10.13.1.3",
             "node_kind": "terminal",
-            "topology_node_id": "h18005003",
             "is_schedulable": False,
             "is_routable": True,
         },
@@ -1762,7 +1804,7 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "binding-compute",
+            "hostname": "compute-2",
             "agent_address": "http://127.0.0.1:8402",
             "management_ip": "10.13.0.2",
             "business_ip": "10.13.1.2",
@@ -1798,8 +1840,8 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="compute-only-topology-id-routing",
-        source_name="h-binding-source",
-        destination_name="h-binding-sink",
+        source_name="h8",
+        destination_name="h9",
         business_start_time=start,
         business_end_time=start + timedelta(minutes=5),
         runtime_config={
@@ -1816,16 +1858,14 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
                     "task_node_id": "source",
                     "task_role": "source",
                     "task_node_type": "terminal",
-                    "fixed_topology_node_id": "h18001001",
-                    "topology_alias": "h-binding-source",
+                    "fixed_topology_node_id": "h8",
                 },
                 {"task_node_id": "compute", "task_role": "compute", "task_node_type": "worker"},
                 {
                     "task_node_id": "sink",
                     "task_role": "sink",
                     "task_node_type": "terminal",
-                    "fixed_topology_node_id": "h18005003",
-                    "topology_alias": "h-binding-sink",
+                    "fixed_topology_node_id": "h9",
                     "business_port": 9000,
                 },
             ],
@@ -1844,7 +1884,7 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "binding-compute", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-2", "gpu_device": "0"},
             ],
         },
     )
@@ -1852,11 +1892,11 @@ async def test_compute_only_bindings_resolve_fixed_topology_node_ids(client, db_
     bindings = response.json()["network_bindings"]
     source_binding = next(item for item in bindings if item["from"] == "source")
     sink_binding = next(item for item in bindings if item["to"] == "sink")
-    assert source_binding["src_topology_node_id"] == "h18001001"
-    assert source_binding["src_host"] == "h-binding-source"
+    assert source_binding["src_topology_node_id"] == "h8"
+    assert source_binding["src_host"] == "h8"
     assert source_binding["src_ip"] == "10.13.1.1"
-    assert sink_binding["dst_topology_node_id"] == "h18005003"
-    assert sink_binding["dst_host"] == "h-binding-sink"
+    assert sink_binding["dst_topology_node_id"] == "h9"
+    assert sink_binding["dst_host"] == "h9"
     assert sink_binding["dst_ip"] == "10.13.1.3"
     assert sink_binding["dst_port"] == 9000
     assert sink_binding["dst_access_url"] == "http://10.13.1.3:9000"
@@ -1867,12 +1907,11 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
     await client.post(
         "/api/nodes",
         json={
-            "hostname": "user-source-fixed",
+            "hostname": "h10",
             "agent_address": "http://127.0.0.1:8451",
             "management_ip": "10.14.0.1",
             "business_ip": "10.14.1.1",
             "node_kind": "terminal",
-            "topology_node_id": "h18001001",
             "is_schedulable": False,
             "is_routable": True,
         },
@@ -1880,12 +1919,11 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
     await client.post(
         "/api/nodes",
         json={
-            "hostname": "user-sink-fixed",
+            "hostname": "h11",
             "agent_address": "http://127.0.0.1:8453",
             "management_ip": "10.14.0.3",
             "business_ip": "10.14.1.3",
             "node_kind": "terminal",
-            "topology_node_id": "h18005003",
             "is_schedulable": False,
             "is_routable": True,
         },
@@ -1893,7 +1931,7 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
     compute_response = await client.post(
         "/api/nodes",
         json={
-            "hostname": "compute-fixed-only",
+            "hostname": "compute-1",
             "agent_address": "http://127.0.0.1:8452",
             "management_ip": "10.14.0.2",
             "business_ip": "10.14.1.2",
@@ -1927,8 +1965,8 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
     order = TaskOrder(
         template_id=template_response.json()["id"],
         name="compute-only-ignore-router-endpoints",
-        source_name="user-source-fixed",
-        destination_name="user-sink-fixed",
+        source_name="h10",
+        destination_name="h11",
         business_start_time=start,
         business_end_time=start + timedelta(minutes=5),
         runtime_config={
@@ -1941,12 +1979,12 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
             "job_id": "compute-only-ignore-router-endpoints",
             "order_id": "compute-only-ignore-router-endpoints",
             "nodes": [
-                {"task_node_id": "source", "task_role": "source", "fixed_topology_node_id": "h18001001"},
+                {"task_node_id": "source", "task_role": "source", "fixed_topology_node_id": "h10"},
                 {"task_node_id": "compute", "task_role": "compute"},
                 {
                     "task_node_id": "sink",
                     "task_role": "sink",
-                    "fixed_topology_node_id": "h18005003",
+                    "fixed_topology_node_id": "h11",
                     "business_port": 9000,
                 },
             ],
@@ -1965,9 +2003,9 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "source", "topology_node_id": "wrong-router-source"},
-                {"task_node_id": "compute", "topology_node_id": "compute-fixed-only", "gpu_device": "0"},
-                {"task_node_id": "sink", "topology_node_id": "wrong-router-sink"},
+                {"task_node_id": "source", "topology_node_id": "h12"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "h13"},
             ],
         },
     )
@@ -1975,11 +2013,11 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
     bindings = response.json()["network_bindings"]
     source_binding = next(item for item in bindings if item["from"] == "source")
     sink_binding = next(item for item in bindings if item["to"] == "sink")
-    assert source_binding["src_topology_node_id"] == "h18001001"
-    assert source_binding["src_host"] == "user-source-fixed"
+    assert source_binding["src_topology_node_id"] == "h10"
+    assert source_binding["src_host"] == "h10"
     assert source_binding["src_ip"] == "10.14.1.1"
-    assert sink_binding["dst_topology_node_id"] == "h18005003"
-    assert sink_binding["dst_host"] == "user-sink-fixed"
+    assert sink_binding["dst_topology_node_id"] == "h11"
+    assert sink_binding["dst_host"] == "h11"
     assert sink_binding["dst_ip"] == "10.14.1.3"
 
 
@@ -2006,12 +2044,12 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     for node in order.routing_input_dag["nodes"]:
         item = dict(node)
         if item["task_node_id"] == "source":
-            item["fixed_topology_node_id"] = "worker-a"
+            item["fixed_topology_node_id"] = "h1"
         elif item["task_node_id"] == "sink":
-            item["fixed_topology_node_id"] = "worker-c"
+            item["fixed_topology_node_id"] = "h2"
         dag_nodes.append(item)
-    order.source_name = "worker-a"
-    order.destination_name = "worker-c"
+    order.source_name = "h1"
+    order.destination_name = "h2"
     order.routing_input_dag = {**order.routing_input_dag, "nodes": dag_nodes}
     await db_session.flush()
 
@@ -2021,9 +2059,9 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
-            "metadata": {"path": ["worker-a", "worker-b", "worker-c"]},
+            "metadata": {"path": ["h1", "compute-1", "h2"]},
         },
     )
     assert response.status_code == 200, response.text
@@ -2038,7 +2076,7 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
     placements = order.runtime_config["routing_result"]["placements"]
     assert [item["task_node_id"] for item in placements] == ["compute", "source", "sink"]
     assert order.runtime_config["routing_result"]["router_placements"] == [
-        {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"}
+        {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"}
     ]
 
 
@@ -2065,7 +2103,7 @@ async def test_routing_result_rejects_legacy_placement_fields(client, db_session
         {
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_indices": ["0"]},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_indices": ["0"]},
             ],
         },
     )
@@ -2113,12 +2151,12 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "source", "topology_node_id": "worker-a"},
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
-                {"task_node_id": "sink", "topology_node_id": "worker-c"},
+                {"task_node_id": "source", "topology_node_id": "h1"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "h2"},
             ],
             "metadata": {
-                "path": ["worker-a", "worker-b", "worker-c"],
+                "path": ["h1", "compute-1", "h2"],
                 "algorithm_version": "router-http-test",
             },
         },
@@ -2132,9 +2170,9 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
     assert len(result_body["network_bindings"]) == 2
     compute_binding = next(item for item in result_body["network_bindings"] if item["to"] == "compute")
     sink_binding = next(item for item in result_body["network_bindings"] if item["to"] == "sink")
-    assert compute_binding["dst_host"] == "worker-b"
+    assert compute_binding["dst_host"] == "compute-1"
     assert isinstance(compute_binding["dst_port"], int)
-    assert sink_binding["dst_host"] == "worker-c"
+    assert sink_binding["dst_host"] == "h2"
 
     start_blocked = await client.post(f"/api/instances/{result_body['instance_id']}/start")
     assert start_blocked.status_code == 409
@@ -2177,7 +2215,7 @@ async def test_routing_order_result_requires_claim(client, db_session):
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
         },
     )
@@ -2208,7 +2246,7 @@ async def test_legacy_order_routing_result_endpoint_is_not_public(client, db_ses
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
         },
     )
@@ -2279,9 +2317,9 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
     payload = {
         "strategy": "resource_guarantee",
         "placements": [
-            {"task_node_id": "source", "topology_node_id": "worker-a"},
-            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
-            {"task_node_id": "sink", "topology_node_id": "worker-c"},
+            {"task_node_id": "source", "topology_node_id": "h1"},
+            {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+            {"task_node_id": "sink", "topology_node_id": "h2"},
         ],
     }
     first_claim = await client.patch(f"/api/routing-orders/{first_id}/claim")
@@ -2317,9 +2355,9 @@ async def test_routing_result_default_benchmark_gpu_participates_in_conflict_che
     payload_without_gpu = {
         "strategy": "resource_guarantee",
         "placements": [
-            {"task_node_id": "source", "topology_node_id": "worker-a"},
-            {"task_node_id": "compute", "topology_node_id": "worker-b"},
-            {"task_node_id": "sink", "topology_node_id": "worker-c"},
+            {"task_node_id": "source", "topology_node_id": "h1"},
+            {"task_node_id": "compute", "topology_node_id": "compute-1"},
+            {"task_node_id": "sink", "topology_node_id": "h2"},
         ],
     }
     first_claim = await client.patch(f"/api/routing-orders/{first_id}/claim")
@@ -2369,7 +2407,7 @@ async def test_routing_result_rejects_soft_deleted_order(client, db_session):
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
             ],
         },
     )
@@ -2403,9 +2441,9 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "source", "topology_node_id": "worker-a"},
-                {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
-                {"task_node_id": "sink", "topology_node_id": "worker-c"},
+                {"task_node_id": "source", "topology_node_id": "h1"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "h2"},
             ],
             "external_routing_id": "route-release-001",
             "metadata": {"algorithm_version": "release-test"},
@@ -2425,7 +2463,7 @@ async def test_delete_order_emits_and_acks_routing_resource_release_event(client
     assert len(events) == 1
     assert events[0]["order_id"] == order_id
     assert events[0]["job_id"] == order_id
-    assert events[0]["node_hostname"] == "worker-b"
+    assert events[0]["node_hostname"] == "compute-1"
     assert events[0]["resource_kind"] == "gpu"
     assert events[0]["resource_id"] == "0"
     assert events[0]["reason"] == "delete_order"
@@ -2468,9 +2506,9 @@ async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu
         json={
             "strategy": "resource_guarantee",
             "placements": [
-                {"task_node_id": "source", "topology_node_id": "worker-a"},
-                {"task_node_id": "compute", "topology_node_id": "worker-b"},
-                {"task_node_id": "sink", "topology_node_id": "worker-c"},
+                {"task_node_id": "source", "topology_node_id": "h1"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1"},
+                {"task_node_id": "sink", "topology_node_id": "h2"},
             ],
             "external_routing_id": "route-default-gpu-release-001",
         },
@@ -2487,7 +2525,7 @@ async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu
     assert events_response.status_code == 200
     events = events_response.json()
     assert len(events) == 1
-    assert events[0]["node_hostname"] == "worker-b"
+    assert events[0]["node_hostname"] == "compute-1"
     assert events[0]["resource_kind"] == "gpu"
     assert events[0]["resource_id"] == "0"
 
@@ -2618,7 +2656,7 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session, mon
 
     node_rows = await client.get("/api/nodes")
     assert node_rows.status_code == 200
-    worker_b = next(node for node in node_rows.json() if node["hostname"] == "worker-b")
+    worker_b = next(node for node in node_rows.json() if node["hostname"] == "compute-1")
     update_response = await client.put(f"/api/nodes/{worker_b['id']}", json={"is_routable": False})
     assert update_response.status_code == 200
 
@@ -2669,11 +2707,11 @@ async def test_batch_auto_route_skips_unhealthy_agent_nodes(client, db_session, 
     assert catalog_response.status_code == 200
 
     async def fake_probe(nodes):
-        healthy = [node for node in nodes if node.hostname != "worker-b"]
+        healthy = [node for node in nodes if node.hostname != "compute-1"]
         skipped = [
             {"hostname": node.hostname, "reason": "node_agent unreachable"}
             for node in nodes
-            if node.hostname == "worker-b"
+            if node.hostname == "compute-1"
         ]
         return healthy, skipped
 
@@ -2700,7 +2738,7 @@ async def test_batch_auto_route_skips_unhealthy_agent_nodes(client, db_session, 
     body = route_response.json()
     assert body["routed"] == 0
     assert body["skipped_unhealthy_nodes"] == [
-        {"hostname": "worker-b", "reason": "node_agent unreachable"}
+        {"hostname": "compute-1", "reason": "node_agent unreachable"}
     ]
     assert len(body["failed"]) == len(order_ids)
     assert all("No stable baseline compute nodes available" in item["error"] for item in body["failed"])
@@ -2831,6 +2869,7 @@ async def test_admin_can_list_all_benchmark_orders(client, db_session):
 @pytest.mark.asyncio
 async def test_business_task_summary_ignores_orphan_evaluations(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(client, db_session, username="summary-orphan-admin", role=UserRole.ADMIN)
 
     payload = {
         "external_task_id": "intent-summary-orphan",
@@ -2861,7 +2900,7 @@ async def test_business_task_summary_ignores_orphan_evaluations(client, db_sessi
     )
     assert metric_response.status_code == 200
 
-    delete_response = await client.delete(f"/api/orders/{order_id}")
+    delete_response = await client.delete(f"/api/orders/{order_id}", headers=headers)
     assert delete_response.status_code == 200
 
     summary_response = await client.get("/api/business-tasks/summary")
@@ -2872,6 +2911,7 @@ async def test_business_task_summary_ignores_orphan_evaluations(client, db_sessi
 @pytest.mark.asyncio
 async def test_delete_order_purges_evaluation(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
+    headers, _admin = await _auth_headers(client, db_session, username="purge-eval-admin", role=UserRole.ADMIN)
 
     payload = {
         "external_task_id": "intent-purge-eval",
@@ -2902,7 +2942,7 @@ async def test_delete_order_purges_evaluation(client, db_session):
         json={"metric_key": "end_to_end_latency_ms", "metric_value": 150, "unit": "ms"},
     )
 
-    delete_response = await client.delete(f"/api/orders/{order_id}")
+    delete_response = await client.delete(f"/api/orders/{order_id}", headers=headers)
     assert delete_response.status_code == 200
 
     eval_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
@@ -3132,7 +3172,7 @@ async def test_cleanup_order_instances_can_scope_by_benchmark_run_and_task_type(
                 "routing_result": {
                     "strategy": "resource_guarantee",
                     "placements": [
-                        {"task_node_id": "compute", "topology_node_id": "worker-a", "gpu_device": "0"}
+                        {"task_node_id": "compute", "topology_node_id": "h1", "gpu_device": "0"}
                     ],
                 },
             },
@@ -3285,12 +3325,67 @@ async def test_business_task_list_api(client, db_session):
     assert detail["business_task"]["task_type"] == "low_latency_video_pipeline"
     assert detail["routing_result"]["strategy"] == "completion_time_first"
     compute_route = next(item for item in detail["routing_result"]["placements"] if item["task_node_id"] == "compute")
-    assert compute_route["topology_node_id"] == "worker-b"
+    assert compute_route["topology_node_id"] == "compute-1"
     assert detail["instance"]["id"] == instance_id
     assert detail["evaluation"]["business_success"] is True
     placements = {item["role"]: item for item in detail["node_placements"]}
-    assert placements["compute"]["hostname"] == "worker-b"
+    assert placements["compute"]["hostname"] == "compute-1"
     assert placements["compute"]["gpu_id"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_business_task_list_shows_runtime_metric_without_formal_evaluation(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, owner = await _auth_headers(client, db_session, username="list-runtime-metric", role=UserRole.ADMIN)
+    order = TaskOrder(
+        id="order-runtime-metric",
+        template_id=template_id,
+        user_id=owner.id,
+        name="用户模式矩阵运行证据",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        materialized_instance_id="instance-runtime-metric",
+        runtime_config={
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "modality": "高通量计算模态",
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+            },
+            "platform_deployment": {"mode": "user_access_demo", "deployable_roles": ["compute"]},
+        },
+    )
+    instance = TaskInstance(
+        id="instance-runtime-metric",
+        template_id=template_id,
+        name="用户模式矩阵运行证据实例",
+        status="running",
+        source_order_id=order.id,
+    )
+    db_session.add_all([order, instance])
+    await db_session.flush()
+    db_session.add(
+        TaskMetric(
+            instance_id=instance.id,
+            template_id=template_id,
+            metric_key="effective_gflops",
+            metric_value=23.45,
+            unit="GFLOPS",
+            tags={"result": {"effective_gflops": 23.45}},
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/business-tasks", headers=headers, params={"is_benchmark": False})
+
+    assert response.status_code == 200
+    row = next(item for item in response.json()["items"] if item["order_id"] == order.id)
+    assert row["actual_value"] == 23.45
+    assert row["unit"] == "GFLOPS"
+    assert row["business_success"] is None
 
 
 @pytest.mark.asyncio
@@ -3315,14 +3410,14 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
         "strategy": "low_latency_forwarding",
         "selected_strategy": "LATENCY_CONSTRAINED",
         "placements": [
-            {"task_node_id": "compute", "topology_node_id": "worker-b", "gpu_device": "0"},
+            {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
         ],
         "metadata": {
-            "path": ["worker-a", "worker-b", "worker-c"],
-            "selected_reason": "worker-b 在低时延转发策略下链路更短，且 GPU baseline 稳定",
+            "path": ["h1", "compute-1", "h2"],
+            "selected_reason": "compute-1 在低时延转发策略下链路更短，且 GPU baseline 稳定",
             "candidate_scores": [
-                {"topology_node_id": "worker-b", "latency_ms": 18.2, "score": 0.93},
-                {"topology_node_id": "worker-c", "latency_ms": 24.8, "score": 0.81},
+                {"topology_node_id": "compute-1", "latency_ms": 18.2, "score": 0.93},
+                {"topology_node_id": "h2", "latency_ms": 24.8, "score": 0.81},
             ],
             "rent": {"amount": 1.6, "currency": "CNY", "billing_unit": "task"},
         },
@@ -3335,19 +3430,19 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
     decision = detail_response.json()["routing_decision"]
     assert decision["strategy"] == "low_latency_forwarding"
     assert decision["selected_strategy"] == "LATENCY_CONSTRAINED"
-    assert decision["selected_compute"]["topology_node_id"] == "worker-b"
+    assert decision["selected_compute"]["topology_node_id"] == "compute-1"
     assert decision["selected_compute"]["gpu_device"] == "0"
     assert decision["selected_compute"]["baseline"]["metric_key"] == "frame_latency_p90_ms"
     assert decision["selected_compute"]["baseline"]["baseline_value"] == 120.0
-    assert decision["path"] == ["worker-a", "worker-b", "worker-c"]
-    assert decision["selected_reason"].startswith("worker-b")
+    assert decision["path"] == ["h1", "compute-1", "h2"]
+    assert decision["selected_reason"].startswith("compute-1")
     assert decision["candidate_scores"][0]["baseline"]["baseline_value"] == 120.0
     assert decision["metadata"]["rent"]["amount"] == 1.6
     profile = detail_response.json()["node_capability_profile"]
     assert profile["title"] == "算力节点能力画像"
     assert profile["metric_key"] == "frame_latency_p90_ms"
     assert profile["better_direction"] == "lower"
-    assert profile["selected_node"]["hostname"] == "worker-b"
+    assert profile["selected_node"]["hostname"] == "compute-1"
     assert profile["selected_baseline"]["baseline_value"] == 120.0
     assert profile["selected_rank"] == 1
     assert profile["candidate_rows"][0]["selected"] is True

@@ -97,8 +97,8 @@
 
           <h3 class="section-title">拓扑节点与端口</h3>
           <el-table :data="placementRows" size="small" border empty-text="暂无节点放置信息">
-            <el-table-column prop="roleLabel" label="子任务" width="110" />
-            <el-table-column prop="hostname" label="拓扑节点" min-width="150" />
+            <el-table-column prop="roleLabel" label="任务角色" width="110" />
+            <el-table-column prop="hostname" label="部署/接入节点" min-width="150" />
             <el-table-column label="业务面地址" min-width="180">
               <template #default="{ row }">
                 <code v-if="row.business_address">{{ row.business_address }}</code>
@@ -108,7 +108,7 @@
             <el-table-column label="端口" min-width="180">
               <template #default="{ row }">
                 <span v-if="row.portText">{{ row.portText }}</span>
-                <span v-else class="muted">-</span>
+                <span v-else class="muted">{{ portPlaceholder(row) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="GPU" width="110">
@@ -140,7 +140,10 @@
                 <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
                 <span>{{ row.dst_host || '-' }}</span>
                 <code v-if="row.dst_ip && row.dst_port">{{ formatHostPort(row.dst_ip, row.dst_port) }}</code>
-                <code v-else-if="row.dst_ip">{{ formatHost(row.dst_ip) }}</code>
+                <template v-else-if="row.dst_ip">
+                  <code>{{ formatHost(row.dst_ip) }}</code>
+                  <span class="muted">{{ bindingPortPlaceholder(row) }}</span>
+                </template>
                 <code v-else-if="row.dst_access_url">{{ row.dst_access_url }}</code>
                 <span v-else class="muted">{{ row.dst_external ? '外部端点未提供接收地址' : '等待端口分配' }}</span>
               </template>
@@ -149,11 +152,14 @@
               <template #default="{ row }">
                 <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部接收</el-tag>
                 <code v-if="row.dst_access_url">{{ row.dst_access_url }}</code>
-                <span v-else class="muted">-</span>
+                <span v-else class="muted">{{ bindingAccessPlaceholder(row) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="端口名" min-width="140">
-              <template #default="{ row }">{{ namedPortsText(row.dst_named_ports) }}</template>
+              <template #default="{ row }">
+                <span v-if="namedPortsText(row.dst_named_ports)">{{ namedPortsText(row.dst_named_ports) }}</span>
+                <span v-else class="muted">{{ bindingPortPlaceholder(row) }}</span>
+              </template>
             </el-table-column>
             <el-table-column label="带宽需求" width="110">
               <template #default="{ row }">{{ row.bandwidth_mbps ? `${row.bandwidth_mbps} Mbps` : '-' }}</template>
@@ -273,7 +279,16 @@
         </el-tab-pane>
 
         <el-tab-pane label="部署" name="deployment">
-          <template v-if="detail.instance">
+          <el-alert
+            v-if="isInstanceCleaned"
+            class="deployment-notice"
+            title="该工单的容器实例已清理"
+            type="warning"
+            show-icon
+            :closable="false"
+            description="系统已释放远端容器和实例记录，工单、路由结果、业务指标和结果文件仍保留。需要再次查看容器运行细节时，请重新运行任务。"
+          />
+          <template v-else-if="detail.instance">
             <el-descriptions :column="2" border class="detail-desc">
               <el-descriptions-item label="实例 ID"><code>{{ detail.instance.id }}</code></el-descriptions-item>
               <el-descriptions-item label="实例状态">
@@ -291,19 +306,31 @@
           </template>
           <el-alert v-else title="尚未物化部署实例" type="info" show-icon :closable="false" />
 
-          <h3 class="section-title">容器实例节点</h3>
-          <el-table :data="containerPlacementRows" size="small" border empty-text="尚无容器实例节点">
-            <el-table-column prop="roleLabel" label="子任务" width="110" />
-            <el-table-column prop="hostname" label="物理节点" min-width="150" />
-            <el-table-column prop="instance_node_name" label="实例节点" min-width="120" />
+          <h3 class="section-title">容器部署详情</h3>
+          <el-table :data="containerPlacementRows" size="small" border empty-text="尚无容器部署记录">
+            <el-table-column prop="roleLabel" label="任务角色" width="110" />
+            <el-table-column prop="hostname" label="部署节点" min-width="150" />
+            <el-table-column prop="instance_node_name" label="容器角色" min-width="120" />
             <el-table-column label="业务面 IP" min-width="180">
               <template #default="{ row }">
                 <code v-if="row.business_address">{{ row.business_address }}</code>
-                <span v-else class="muted">-</span>
+                <span v-else class="muted">未分配</span>
               </template>
             </el-table-column>
             <el-table-column label="容器端口" min-width="180">
-              <template #default="{ row }">{{ row.portText || '-' }}</template>
+              <template #default="{ row }">
+                <span v-if="row.portText">{{ row.portText }}</span>
+                <span v-else class="muted">未分配</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="容器/镜像信息" min-width="220">
+              <template #default="{ row }">
+                <div class="container-info">
+                  <span>容器名：{{ row.container_name || '未创建' }}</span>
+                  <span>容器ID：{{ row.container_id || '未创建' }}</span>
+                  <span>镜像：{{ row.image || '未记录' }}</span>
+                </div>
+              </template>
             </el-table-column>
             <el-table-column label="GPU" width="110">
               <template #default="{ row }">
@@ -313,11 +340,17 @@
               </template>
             </el-table-column>
             <el-table-column prop="statusLabel" label="状态" width="110" />
+            <el-table-column label="错误信息" min-width="220">
+              <template #default="{ row }">
+                <span v-if="row.error_message" class="error-text">{{ row.error_message }}</span>
+                <span v-else class="muted">无</span>
+              </template>
+            </el-table-column>
           </el-table>
 
           <h3 class="section-title">端口访问</h3>
           <el-table :data="portAccessRows" size="small" border empty-text="暂无可访问端口">
-            <el-table-column prop="nodeName" label="子任务" width="110" />
+            <el-table-column prop="nodeName" label="任务角色" width="110" />
             <el-table-column prop="portName" label="端口名" width="120" />
             <el-table-column label="业务面访问地址" min-width="260">
               <template #default="{ row }"><code>{{ row.url }}</code></template>
@@ -617,13 +650,20 @@ const routingPlacementRows = computed(() => {
   if (!placements) return []
   const rows = []
   if (Array.isArray(placements)) {
-    placements.forEach((placement) => rows.push(normalizePlacementRow(placement.task_node_id, placement)))
+    placements.forEach((placement) => {
+      const role = placement.task_node_id
+      rows.push(normalizePlacementRow(role, {
+        ...networkBindingPlacementEvidence(role),
+        ...placement,
+      }))
+    })
     return rows
   }
   return rows
 })
 
 const placementRows = computed(() => {
+  if (isInstanceCleaned.value) return routingPlacementRows.value
   const byRole = new Map()
   routingPlacementRows.value.forEach((row) => byRole.set(row.roleKey, row))
   nodePlacementRows.value.forEach((row) => byRole.set(row.roleKey, { ...(byRole.get(row.roleKey) || {}), ...row }))
@@ -631,12 +671,15 @@ const placementRows = computed(() => {
 })
 
 const containerPlacementRows = computed(() => (
-  placementRows.value.filter((row) => !['不部署', '外部端点'].includes(row.statusLabel) && row.hostname !== '未部署')
+  isInstanceCleaned.value ? [] : placementRows.value.filter((row) => row.deployable)
 ))
 
 const networkBindingRows = computed(() => {
   const rows = routingResult.value?.network_bindings
-  return Array.isArray(rows) ? rows : []
+  return Array.isArray(rows) ? rows.map((row) => ({
+    ...row,
+    dst_access_url: sanitizeUserAccessUrl(row.dst_access_url),
+  })) : []
 })
 
 const portAccessRows = computed(() => {
@@ -650,14 +693,14 @@ const portAccessRows = computed(() => {
     rows.push({ nodeName: roleLabel(nodeName), portName, url })
   }
   placementRows.value.forEach((row) => {
-    Object.entries(row.portAccessUrls || {}).forEach(([portName, url]) => add(row.roleKey, portName, url))
+    Object.entries(row.portAccessUrls || {}).forEach(([portName, url]) => add(row.roleKey, portName, sanitizeUserAccessUrl(url)))
     Object.entries(row.portValues || {}).forEach(([portName, port]) => {
       if (row.business_address) add(row.roleKey, portName, formatHostPort(row.business_address, port))
     })
   })
   Object.entries(detail.value?.instance?.port_access_urls || {}).forEach(([key, url]) => {
     const [nodeName, portName = 'default'] = String(key).split('/')
-    add(nodeName, portName, url)
+    add(nodeName, portName, sanitizeUserAccessUrl(url))
   })
   return rows
 })
@@ -745,6 +788,11 @@ const deploymentModeText = computed(() => {
   if (detail.value?.is_benchmark) return '可控测评部署'
   return ''
 })
+const isInstanceCleaned = computed(() => (
+  detail.value?.materialized_instance_id
+  && detail.value?.instance_exists === false
+  && !detail.value?.instance
+))
 const deployableRolesText = computed(() => {
   if (!deployableRoles.value) return '默认按路由角色部署'
   if (!deployableRoles.value.length) return '暂不启动平台容器'
@@ -816,9 +864,18 @@ const capabilityCandidateRows = computed(() => {
     rankText: row.rank ? `第 ${row.rank}` : '-',
     nodeName: row.node_name || row.hostname || row.topology_node_id || '-',
     baselineText: formatBaseline(row.baseline),
-    gpuText: row.gpu_model ? `${row.gpu_model} × ${row.gpu_count || 1}` : (row.gpu_count ? `GPU × ${row.gpu_count}` : '未记录'),
+    gpuText: formatGpuCapability(row),
   }))
 })
+
+function formatGpuCapability(row) {
+  const count = row?.gpu_count
+  const model = row?.gpu_model
+  if (model && count != null) return `${model} × ${count}`
+  if (model) return `${model}，数量未记录`
+  if (count != null) return `GPU × ${count}`
+  return '未记录'
+}
 
 function normalizePlacementRow(role, placement) {
   const roleKey = String(role || '').toLowerCase() || 'unknown'
@@ -831,14 +888,38 @@ function normalizePlacementRow(role, placement) {
     roleKey,
     roleLabel: roleLabel(roleKey),
     instance_node_name: item.instance_node_name || item.template_node_name || roleKey,
-    hostname: item.topology_node_id || (deployable ? '未部署' : '外部端点'),
+    hostname: item.hostname || item.topology_node_id || (deployable ? '未部署' : '外部端点'),
     business_address: item.business_address || item.business_ipv6 || item.business_ip || '',
+    deployable,
+    container_id: item.container_id || '',
+    container_name: item.container_name || '',
+    image: item.image || '',
+    error_message: item.error_message || '',
     gpu,
     requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline'].includes(taskType.value),
     portValues,
     portAccessUrls,
     portText: namedPortsText(portValues),
+    status: item.status || '',
     statusLabel: item.skip_deploy || !deployable ? '外部端点' : nodeStatusLabel(item.status),
+  }
+}
+
+function networkBindingPlacementEvidence(role) {
+  const roleKey = String(role || '').toLowerCase()
+  const binding = networkBindingRows.value.find((row) => String(row.to || '').toLowerCase() === roleKey)
+  if (!binding) return {}
+  const portValues = binding.dst_named_ports && Object.keys(binding.dst_named_ports).length
+    ? binding.dst_named_ports
+    : (binding.dst_port ? { [roleKey || 'service']: binding.dst_port } : {})
+  const portAccessUrls = binding.dst_access_url
+    ? Object.fromEntries(Object.keys(portValues).map((name) => [name, binding.dst_access_url]))
+    : {}
+  return {
+    hostname: binding.dst_host,
+    business_address: binding.dst_ip,
+    port_values: portValues,
+    port_access_urls: portAccessUrls,
   }
 }
 
@@ -865,12 +946,42 @@ function formatHost(host) {
 
 function formatHostPort(host, port) {
   if (!host || port == null || port === '') return '-'
-  return `${formatHost(host)}:${port}`
+  return `http://${formatHost(host)}:${port}`
 }
 
 function namedPortsText(value) {
   if (!value || !Object.keys(value).length) return ''
   return Object.entries(value).map(([name, port]) => `${name}:${port}`).join(' / ')
+}
+
+function portPlaceholder(row) {
+  if (!row?.deployable) return '不部署'
+  if (isDeploymentFailed(row)) return '部署失败未分配'
+  return '等待部署分配'
+}
+
+function bindingAccessPlaceholder(row) {
+  if (row?.dst_external) return '外部端点未提供接收地址'
+  const role = String(row?.to || '').toLowerCase()
+  const placement = placementRows.value.find(item => item.roleKey === role)
+  return portPlaceholder(placement || { deployable: isRoleDeployable(role) })
+}
+
+function bindingPortPlaceholder(row) {
+  if (row?.dst_external) return '-'
+  const role = String(row?.to || '').toLowerCase()
+  const placement = placementRows.value.find(item => item.roleKey === role)
+  return portPlaceholder(placement || { deployable: isRoleDeployable(role) })
+}
+
+function isDeploymentFailed(row) {
+  const instanceFailed = detail.value?.instance?.status === 'failed'
+  return instanceFailed || row?.status === 'failed' || row?.statusLabel === '失败'
+}
+
+function sanitizeUserAccessUrl(value) {
+  if (!value) return ''
+  return String(value).replace(/\/callback\/?$/, '/').replace(/\/$/, '')
 }
 
 function hasGpuValue(value) {
@@ -1079,7 +1190,7 @@ function nodeStatusLabel(value) {
   margin: 18px 0 8px;
   font-size: 14px;
   font-weight: 700;
-  color: var(--text-primary, #1f2937);
+  color: #0f172a;
 }
 
 .detail-desc {
@@ -1505,7 +1616,19 @@ function nodeStatusLabel(value) {
 }
 
 .muted {
-  color: #475569;
+  color: #334155;
+}
+
+.container-info {
+  display: grid;
+  gap: 2px;
+  color: #334155;
+  line-height: 1.45;
+}
+
+.error-text {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .warning-text {
@@ -1530,5 +1653,7 @@ function nodeStatusLabel(value) {
 
 code {
   font-size: 12px;
+  color: #0f172a;
+  font-weight: 600;
 }
 </style>

@@ -108,6 +108,36 @@ async def test_update_node_validates_management_ip():
 
 
 @pytest.mark.asyncio
+async def test_list_nodes_official_only_excludes_stale_intent_nodes(client):
+    for index, (hostname, node_kind) in enumerate(
+        [
+            ("h1", "terminal"),
+            ("compute-1", "worker"),
+            ("intent-stale-1", "worker"),
+        ],
+        start=1,
+    ):
+        response = await client.post(
+            "/api/nodes",
+            json={
+                "hostname": hostname,
+                "agent_address": f"http://{hostname}:8001",
+                "management_ip": f"10.0.0.{index}",
+                "business_ip": f"10.0.1.{index}",
+                "node_kind": node_kind,
+                "is_schedulable": True,
+                "is_routable": True,
+            },
+        )
+        assert response.status_code == 200
+
+    response = await client.get("/api/nodes", params={"official_only": True})
+
+    assert response.status_code == 200
+    assert [node["hostname"] for node in response.json()] == ["compute-1", "h1"]
+
+
+@pytest.mark.asyncio
 async def test_list_node_orphans_filters_known_container_names(monkeypatch):
     node = Node(
         hostname="worker-a",

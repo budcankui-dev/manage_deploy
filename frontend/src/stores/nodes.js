@@ -6,10 +6,10 @@ export const useNodesStore = defineStore('nodes', () => {
   const nodes = ref([])
   const loading = ref(false)
 
-  async function fetchNodes() {
+  async function fetchNodes(params = {}) {
     loading.value = true
     try {
-      const { data } = await nodesApi.list()
+      const { data } = await nodesApi.list(params)
       nodes.value = data
     } finally {
       loading.value = false
