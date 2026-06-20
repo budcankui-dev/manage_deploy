@@ -152,18 +152,6 @@
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column label="业务指标" min-width="140">
-            <template #default="{ row }">
-              {{ formatMetricValue(row.actual_value) }} / {{ formatMetricValue(row.target_value) }} {{ row.unit || '' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="达标" width="90">
-            <template #default="{ row }">
-              <el-tag v-if="row.business_success === true" type="success" size="small">达标</el-tag>
-              <el-tag v-else-if="row.business_success === false" type="danger" size="small">未达标</el-tag>
-              <span v-else>待评估</span>
-            </template>
-          </el-table-column>
           <el-table-column label="调度开始" min-width="150">
             <template #default="{ row }">
               {{ row.scheduled_start_time ? formatTime(row.scheduled_start_time) : '-' }}
@@ -575,7 +563,6 @@ import {
   modalityLabel,
   taskTypeLabel,
   describeDataProfile,
-  formatMetricValue,
 } from '@/constants/businessTaskDisplay'
 import {
   isOfficialComputeNodeName,
