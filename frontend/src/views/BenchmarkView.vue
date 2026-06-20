@@ -183,6 +183,16 @@
             >
               {{ evaluationFlowBusy ? '测评运行中' : '运行测评' }}
             </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :loading="benchmarkStopLoading"
+              :disabled="!canStopBenchmarkRun"
+              @click="stopCurrentBenchmarkRun"
+            >
+              停止本轮测评
+            </el-button>
             <el-button size="small" plain :disabled="routeLoading || startLoading" @click="refreshBenchmarkPage">刷新</el-button>
           </div>
         </div>
@@ -514,6 +524,7 @@ const resultRefreshing = ref(false)
 const restoringRunSession = ref(false)
 const benchmarkRunSession = ref(readBenchmarkRunSession())
 const controlledStartStatus = ref('')
+const benchmarkStopLoading = ref(false)
 const dashboardUpdatedAt = ref('')
 const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
@@ -554,6 +565,7 @@ const executionForm = reactive({
 })
 let resumeTimer = null
 let visibilityHandler = null
+const stoppedBenchmarkRunKeys = new Set()
 const settingsForm = reactive({
   benchmark_routing_mode: 'internal_auto',
   expert_mode: true,
@@ -736,6 +748,11 @@ const benchmarkRunHasActiveWork = computed(() => {
     orderStats.value.routed > 0 ||
     orderStats.value.waitingRoute > 0
 })
+
+const canStopBenchmarkRun = computed(() =>
+  Boolean(currentBenchmarkRunId.value && orders.value.length && !benchmarkRunCompleted.value)
+    && !benchmarkStopLoading.value
+)
 
 const currentRunSessionActive = computed(() =>
   isSameBenchmarkRun(activeBenchmarkRunSession.value, taskType.value, currentBenchmarkRunId.value)
@@ -1288,6 +1305,15 @@ function clearActiveBenchmarkRunnerKey(key) {
   }
 }
 
+function markBenchmarkRunStopped(runKey = currentBenchmarkRunKey()) {
+  if (!runKey) return
+  stoppedBenchmarkRunKeys.add(runKey)
+}
+
+function isBenchmarkRunStopped(runKey = currentBenchmarkRunKey()) {
+  return Boolean(runKey && stoppedBenchmarkRunKeys.has(runKey))
+}
+
 function scheduleResumeBenchmarkRun(delay = 0) {
   if (resumeTimer) {
     clearTimeout(resumeTimer)
@@ -1580,6 +1606,40 @@ async function deleteSelectedOrders() {
   }
 }
 
+async function stopCurrentBenchmarkRun() {
+  if (!currentBenchmarkRunId.value) {
+    ElMessage.warning('请先选择一个测评轮次。')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '将停止当前测评轮次中未完成的工单，释放已启动的容器和实例；已完成的结果证据会保留。继续吗？',
+      '停止本轮测评',
+      { type: 'warning', confirmButtonText: '停止测评', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const runKey = currentBenchmarkRunKey()
+  benchmarkStopLoading.value = true
+  markBenchmarkRunStopped(runKey)
+  controlledStartStatus.value = '正在停止当前测评轮次并释放运行实例...'
+  clearCurrentBenchmarkRunSession()
+  clearActiveBenchmarkRunnerKey(runKey)
+  try {
+    const { data } = await ordersApi.stopBenchmarkRun({
+      benchmark_run_id: currentBenchmarkRunId.value,
+      task_type: taskType.value,
+      is_benchmark: true,
+    })
+    showBatchOperationResult(data, (count) => `已处理 ${count} 个测评工单`)
+    await Promise.all([loadOrders(), loadSummary()])
+    controlledStartStatus.value = '当前测评轮次已停止；如需重新测评，可删除本轮工单后重新创建并运行。'
+  } finally {
+    benchmarkStopLoading.value = false
+  }
+}
+
 async function doAutoRoute() {
   routeLoading.value = true
   try {
@@ -1657,6 +1717,10 @@ async function doStartAll() {
   try {
     let latest = null
     for (let round = 1; round <= 180; round += 1) {
+      if (isBenchmarkRunStopped(runnerKey)) {
+        controlledStartStatus.value = '当前测评轮次已停止。'
+        break
+      }
       const { data } = await ordersApi.startControlledRouted({
         benchmark_run_id: currentBenchmarkRunId.value,
         task_type: taskType.value,

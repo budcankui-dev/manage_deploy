@@ -20,10 +20,13 @@
         </el-select>
         <template v-if="selectedIds.length">
           <span class="selection-summary">已选 {{ selectedIds.length }}</span>
-          <el-button size="small" type="primary" plain @click="handleBatchStart">启动</el-button>
-          <el-button size="small" type="warning" plain @click="handleBatchStop">停止</el-button>
-          <el-button size="small" type="danger" plain @click="handleBatchDelete">删除</el-button>
+          <el-button size="small" type="primary" plain :disabled="batchOperating" @click="handleBatchStart">启动</el-button>
+          <el-button size="small" type="warning" plain :disabled="batchOperating" @click="handleBatchStop">停止</el-button>
+          <el-button size="small" type="danger" plain :loading="batchOperating" @click="handleBatchDelete">删除</el-button>
         </template>
+        <el-button size="small" plain :disabled="!paginatedInstances.length || batchOperating" @click="selectCurrentPage">选择当前页</el-button>
+        <el-button size="small" plain :disabled="!filteredInstances.length || batchOperating" @click="selectAllFiltered">选择全部</el-button>
+        <el-button size="small" plain :disabled="!selectedIds.length || batchOperating" @click="clearSelection">清空选择</el-button>
         <el-button type="primary" @click="openCreateDialog">新建实例</el-button>
       </div>
     </header>
@@ -300,6 +303,7 @@ const pendingEditPayload = ref(null)
 const selectedIds = ref([])
 const currentPage = ref(1)
 const pageSize = ref(8)
+const batchOperating = ref(false)
 
 const instancesStore = useInstancesStore()
 const templatesStore = useTemplatesStore()
@@ -426,6 +430,15 @@ function toggleSelected(id) {
 
 function clearSelection() {
   selectedIds.value = []
+}
+
+function selectCurrentPage() {
+  const ids = paginatedInstances.value.map((item) => item.id).filter(Boolean)
+  selectedIds.value = Array.from(new Set([...selectedIds.value, ...ids]))
+}
+
+function selectAllFiltered() {
+  selectedIds.value = filteredInstances.value.map((item) => item.id).filter(Boolean)
 }
 
 function initMacroValues(defs, existing = {}) {
@@ -719,6 +732,8 @@ async function confirmDelete(instance) {
 }
 
 async function handleBatchStart() {
+  if (!selectedIds.value.length) return
+  batchOperating.value = true
   try {
     const result = await instancesStore.batchStart(selectedIds.value)
     if (Object.keys(result.failed || {}).length) {
@@ -729,10 +744,14 @@ async function handleBatchStart() {
     clearSelection()
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '批量启动失败'))
+  } finally {
+    batchOperating.value = false
   }
 }
 
 async function handleBatchStop() {
+  if (!selectedIds.value.length) return
+  batchOperating.value = true
   try {
     const result = await instancesStore.batchStop(selectedIds.value)
     if (Object.keys(result.failed || {}).length) {
@@ -743,12 +762,20 @@ async function handleBatchStop() {
     clearSelection()
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '批量停止失败'))
+  } finally {
+    batchOperating.value = false
   }
 }
 
 async function handleBatchDelete() {
+  if (!selectedIds.value.length) return
   try {
-    await ElMessageBox.confirm(`确认删除选中的 ${selectedIds.value.length} 个实例吗？`, '批量删除', { type: 'warning' })
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selectedIds.value.length} 个实例吗？该操作会清理远端容器和实例记录。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除实例', cancelButtonText: '取消' }
+    )
+    batchOperating.value = true
     const result = await instancesStore.batchDelete(selectedIds.value)
     if (Object.keys(result.failed || {}).length) {
       const firstFailure = normalizeErrorMessage(Object.values(result.failed)[0], '删除实例失败')
@@ -760,6 +787,8 @@ async function handleBatchDelete() {
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(getErrorMessage(error, '批量删除失败'))
+  } finally {
+    batchOperating.value = false
   }
 }
 

@@ -1431,7 +1431,7 @@ async def materialize_pending_orders(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not _is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Admin role required")
     rows = await db.execute(
         select(TaskOrder).where(TaskOrder.status == OrderStatus.PENDING).order_by(TaskOrder.created_at.asc())
@@ -2304,6 +2304,87 @@ class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
     wait_seconds: int = Field(default=0, ge=0, le=30)
 
 
+@router.post("/benchmark/stop", response_model=BatchOperationResponse)
+async def stop_benchmark_run(
+    request: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """停止当前测评轮次的未完成运行，释放容器，保留已完成证据。"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    orders, failed = await _resolve_batch_orders(db, request, current_user)
+    task_scheduler = TaskScheduler()
+    succeeded: list[str] = []
+
+    for order in orders:
+        try:
+            # 已评估/已完成的工单保留作为验收证据，不反向改状态。
+            if order.status == OrderStatus.COMPLETED:
+                succeeded.append(order.id)
+                continue
+
+            if not order.materialized_instance_id:
+                order.status = OrderStatus.CANCELLED
+                order.routing_status = RoutingStatus.CANCELLED.value
+                if order.routing_request_id:
+                    routing_row = await db.execute(
+                        select(RoutingRequest).where(RoutingRequest.id == order.routing_request_id)
+                    )
+                    routing = routing_row.scalar_one_or_none()
+                    if routing:
+                        routing.status = RoutingRequestStatus.CANCELLED
+                await emit_release_events_for_order(
+                    db,
+                    order,
+                    reason="stop_benchmark_run",
+                    metadata={"benchmark_run_id": request.benchmark_run_id, "cancel_unmaterialized": True},
+                )
+                succeeded.append(order.id)
+                continue
+
+            result = await db.execute(
+                select(TaskInstance)
+                .options(selectinload(TaskInstance.nodes))
+                .where(TaskInstance.id == order.materialized_instance_id)
+            )
+            instance = result.scalar_one_or_none()
+            if not instance:
+                if order.status == OrderStatus.MATERIALIZED:
+                    order.status = OrderStatus.CANCELLED
+                    order.error_message = order.error_message or "测评已停止，关联实例不存在"
+                succeeded.append(order.id)
+                continue
+
+            await task_scheduler.cancel_all_schedules(instance.id)
+            if instance.status not in (TaskStatus.STOPPED, TaskStatus.PENDING):
+                executor = DAGExecutor(db)
+                success, error = await executor.execute_dag_stop(instance.id)
+                if not success:
+                    raise RuntimeError(error or "停止实例失败")
+
+            cleanup_warnings = await cleanup_instance_runtime(db, instance)
+            if cleanup_warnings:
+                raise RuntimeError(f"容器清理失败：{'；'.join(cleanup_warnings)}")
+
+            await emit_release_events_for_order(
+                db,
+                order,
+                reason="stop_benchmark_run",
+                metadata={"instance_id": instance.id, "benchmark_run_id": request.benchmark_run_id},
+            )
+            await purge_instance_artifacts_preserve_evidence(db, instance.id)
+            if order.status == OrderStatus.MATERIALIZED:
+                order.status = OrderStatus.CANCELLED
+                order.error_message = order.error_message or "测评已手动停止"
+            succeeded.append(order.id)
+        except Exception as exc:
+            failed[order.id] = str(exc)
+
+    await db.commit()
+    return BatchOperationResponse(succeeded=succeeded, failed=failed)
+
+
 @router.post("/batch-auto-route")
 async def batch_auto_route(
     payload: BenchmarkRunScopedRequest | None = None,
@@ -2455,6 +2536,7 @@ async def _controlled_benchmark_orders(
     current_user: User,
 ) -> list[TaskOrder]:
     query = select(TaskOrder).where(
+        TaskOrder.status == OrderStatus.MATERIALIZED.value,
         TaskOrder.routing_status.in_(
             [
                 RoutingStatus.COMPLETED.value,

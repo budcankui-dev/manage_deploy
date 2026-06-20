@@ -127,6 +127,7 @@ export const ordersApi = {
     data,
     withTimeout(BENCHMARK_FLOW_TIMEOUT)
   ),
+  stopBenchmarkRun: (data = {}) => api.post('/orders/benchmark/stop', data, withTimeout(LONG_RUNNING_TIMEOUT)),
   recalculateBenchmark: (data = {}) => api.post('/orders/benchmark/recalculate', data, withTimeout(LONG_RUNNING_TIMEOUT)),
   cleanupInstances: (payload) => api.post(
     '/orders/batch/cleanup-instances',

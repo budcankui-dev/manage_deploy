@@ -3289,6 +3289,115 @@ async def test_cleanup_order_instances_rejects_active_instance(client, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, admin = await _auth_headers(client, db_session, username="stop-benchmark-admin", role=UserRole.ADMIN)
+    pending_order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="pending benchmark order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        runtime_config={
+            "benchmark": {"run_id": "stop-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+    )
+    running_order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="running benchmark order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "stop-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+        materialized_instance_id="stop-run-instance",
+    )
+    completed_order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="completed benchmark order",
+        status=OrderStatus.COMPLETED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "stop-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+        materialized_instance_id="completed-stop-run-instance",
+    )
+    running_instance = TaskInstance(
+        id="stop-run-instance",
+        template_id=template_id,
+        name="running benchmark instance",
+        status=TaskStatus.RUNNING,
+    )
+    completed_instance = TaskInstance(
+        id="completed-stop-run-instance",
+        template_id=template_id,
+        name="completed benchmark instance",
+        status=TaskStatus.STOPPED,
+    )
+    db_session.add_all([pending_order, running_order, completed_order, running_instance, completed_instance])
+    await db_session.commit()
+
+    stopped_instances = []
+
+    class FakeExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_stop(self, instance_id):
+            stopped_instances.append(instance_id)
+            return True, None
+
+        async def remove_node(self, node):
+            return True, None
+
+    monkeypatch.setattr(orders_api, "DAGExecutor", FakeExecutor)
+
+    response = await client.post(
+        "/api/orders/benchmark/stop",
+        headers=headers,
+        json={"benchmark_run_id": "stop-run", "task_type": "high_throughput_matmul", "is_benchmark": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["succeeded"]) == {pending_order.id, running_order.id, completed_order.id}
+    assert body["failed"] == {}
+    assert stopped_instances == ["stop-run-instance"]
+
+    refreshed_pending = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == pending_order.id))
+    ).scalar_one()
+    refreshed_running = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == running_order.id))
+    ).scalar_one()
+    refreshed_completed = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == completed_order.id))
+    ).scalar_one()
+    removed_running_instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == running_instance.id))
+    ).scalar_one_or_none()
+    remaining_completed_instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == completed_instance.id))
+    ).scalar_one_or_none()
+    assert refreshed_pending.status == OrderStatus.CANCELLED
+    assert refreshed_pending.routing_status == RoutingStatus.CANCELLED.value
+    assert refreshed_running.status == OrderStatus.CANCELLED
+    assert removed_running_instance is None
+    assert refreshed_completed.status == OrderStatus.COMPLETED
+    assert remaining_completed_instance is not None
+
+
+@pytest.mark.asyncio
 async def test_user_batch_delete_orders_only_deletes_owned_orders(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-owner")
