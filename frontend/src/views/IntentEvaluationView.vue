@@ -70,6 +70,14 @@
     />
 
     <section class="stat-grid">
+      <el-card class="stat-card current-round-card">
+        <span class="stat-label">当前评测轮次</span>
+        <strong>{{ currentRoundCard.id }}</strong>
+        <small class="report-summary">
+          <span>{{ currentRoundCard.status }}</span>
+          <span>{{ currentRoundCard.time }}</span>
+        </small>
+      </el-card>
       <el-card class="stat-card">
         <span class="stat-label">固定数据集</span>
         <strong>{{ dataset.total || 0 }}</strong>
@@ -639,6 +647,29 @@ const displayReportSummary = computed(() => {
     ratio: `${completed}/${total}`,
     date: '新一轮评测完成后自动更新',
     id: `当前轮次 ${status.evaluation_id || '-'}`,
+  }
+})
+const currentRoundCard = computed(() => {
+  if (isOnlineEvaluationRunning.value) {
+    const status = onlineStatus.value || {}
+    return {
+      id: status.evaluation_id || '-',
+      status: onlineProgressText.value,
+      time: '运行中，完成后自动更新结果',
+    }
+  }
+  const report = officialReport.value
+  if (!report) {
+    return {
+      id: '-',
+      status: '暂无当前轮次',
+      time: '点击上方按钮后生成',
+    }
+  }
+  return {
+    id: report.evaluation_id || report.batch_job_id || report.batch_id || '-',
+    status: `${report.correct ?? 0}/${report.total ?? 0} · ${formatAccuracy(report)}`,
+    time: formatDateText(report.generated_at) || '-',
   }
 })
 const officialSourceLabel = computed(() => {
@@ -1652,7 +1683,7 @@ onUnmounted(() => {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -1671,6 +1702,16 @@ onUnmounted(() => {
 .stat-card strong {
   font-size: 28px;
   color: #1d2b38;
+}
+
+.current-round-card {
+  border-color: rgba(31, 113, 185, 0.28);
+  background: linear-gradient(180deg, #f4f9ff 0%, #ffffff 100%);
+}
+
+.current-round-card strong {
+  font-size: 20px;
+  word-break: break-all;
 }
 
 .stat-card strong.ok {

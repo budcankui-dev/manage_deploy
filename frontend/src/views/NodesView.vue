@@ -58,13 +58,13 @@
                   <el-icon><Edit /></el-icon>
                   编辑
                 </el-dropdown-item>
-                <el-dropdown-item @click="syncResources(node)">
+                <el-dropdown-item :disabled="!nodeSupportsAgentActions(node)" @click="syncResources(node)">
                   <el-icon><Refresh /></el-icon>
-                  同步资源
+                  {{ nodeSupportsAgentActions(node) ? '同步资源' : '同步资源（需 Node Agent）' }}
                 </el-dropdown-item>
-                <el-dropdown-item @click="openOrphanDialog(node)">
+                <el-dropdown-item :disabled="!nodeSupportsAgentActions(node)" @click="openOrphanDialog(node)">
                   <el-icon><Warning /></el-icon>
-                  孤儿容器
+                  {{ nodeSupportsAgentActions(node) ? '孤儿容器' : '孤儿容器（需 Node Agent）' }}
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="confirmDelete(node)">
                   <el-icon><Delete /></el-icon>
@@ -356,6 +356,10 @@ function nodeKindTagType(kind) {
   return types[kind] || 'info'
 }
 
+function nodeSupportsAgentActions(node) {
+  return ['worker', 'terminal'].includes(String(node.node_kind || 'worker').toLowerCase()) && Boolean(node.agent_address)
+}
+
 function defaultForm() {
   return {
     hostname: '',
@@ -410,6 +414,10 @@ function formatRuntime(node) {
 }
 
 async function syncResources(node) {
+  if (!nodeSupportsAgentActions(node)) {
+    ElMessage.info('管理节点不运行 Node Agent，无需同步容器资源。')
+    return
+  }
   try {
     await syncNodeResources(node.id)
     ElMessage.success(`${node.hostname} 资源信息已同步`)

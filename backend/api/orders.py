@@ -361,6 +361,30 @@ def _prefer_gpu_nodes(nodes: list[NodeModel]) -> list[NodeModel]:
     return with_gpu or nodes
 
 
+def _rank_compute_nodes_by_baseline(
+    nodes: list[NodeModel],
+    baselines_by_node_id: dict[str, NodeBaseline],
+) -> list[NodeModel]:
+    """Use any measured baseline, but prefer stable/GPU/stronger nodes first."""
+    if not nodes:
+        return []
+    sample_baseline = next(iter(baselines_by_node_id.values()), None)
+    reverse_metric = _baseline_better_direction(
+        sample_baseline.metric_key if sample_baseline else None,
+        sample_baseline.operator if sample_baseline else None,
+    ) == "higher"
+
+    def score(node: NodeModel) -> tuple[int, int, float, str]:
+        baseline = baselines_by_node_id.get(node.id)
+        stable_rank = 0 if baseline and _baseline_is_stable(baseline.raw_values) else 1
+        gpu_rank = 0 if int(node.gpu_count or 0) > 0 else 1
+        value = float(baseline.baseline_value if baseline else 0)
+        metric_rank = -value if reverse_metric else value
+        return (stable_rank, gpu_rank, metric_rank, node.hostname or "")
+
+    return sorted(nodes, key=score)
+
+
 async def _deployable_endpoint_nodes(db: AsyncSession) -> list[NodeModel]:
     rows = await db.execute(
         select(NodeModel)
@@ -2207,7 +2231,7 @@ class BenchmarkRunScopedRequest(BaseModel):
 
 
 class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
-    max_parallel: int = Field(default=2, ge=1, le=10)
+    max_parallel: int = Field(default=3, ge=1, le=10)
     per_compute_slot_limit: int = Field(default=1, ge=1, le=4)
     cleanup_evaluated: bool = True
     retry_failed: bool = False
@@ -2256,7 +2280,7 @@ async def batch_auto_route(
                 raise RuntimeError("Benchmark order missing task_type")
             routing_pool = pools_by_task_type.get(order_task_type)
             if not routing_pool or not routing_pool["compute"]:
-                raise RuntimeError(f"No stable baseline compute nodes available for {order_task_type}")
+                raise RuntimeError(f"No baseline compute nodes available for {order_task_type}")
             picked = _pick_benchmark_nodes(routing_pool, order)
             await _do_auto_route(db, order, picked)
             routed += 1
@@ -2818,18 +2842,21 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
     if not schedulable:
         raise HTTPException(status_code=400, detail="No healthy schedulable nodes available")
 
-    stable_compute: list[NodeModel] = []
+    compute_candidates: list[NodeModel] = []
     if task_type:
         baselines = (
             await db.execute(select(NodeBaseline).where(NodeBaseline.task_type == task_type))
         ).scalars().all()
-        stable_node_ids = {b.node_id for b in baselines if _baseline_is_stable(b.raw_values)}
-        stable_compute = [
+        baselines_by_node_id: dict[str, NodeBaseline] = {}
+        for baseline in baselines:
+            baselines_by_node_id.setdefault(baseline.node_id, baseline)
+        baseline_node_ids = set(baselines_by_node_id)
+        compute_candidates = [
             node
             for node in schedulable
-            if node.id in stable_node_ids and _node_can_host_compute(node)
+            if node.id in baseline_node_ids and _node_can_host_compute(node)
         ]
-        stable_compute = _prefer_gpu_nodes(stable_compute)
+        compute_candidates = _rank_compute_nodes_by_baseline(compute_candidates, baselines_by_node_id)
 
     terminal_nodes = [
         node for node in schedulable if _node_can_host_benchmark_endpoint(node)
@@ -2841,7 +2868,7 @@ async def _benchmark_routing_pool(db: AsyncSession, task_type: str | None) -> di
         )
     return {
         "terminal": terminal_nodes,
-        "compute": stable_compute,
+        "compute": compute_candidates,
         "skipped_unhealthy_nodes": skipped_unhealthy_nodes,
     }
 
@@ -2856,11 +2883,29 @@ def _pick_fixed_or_random_endpoint(
     return random.choice(terminal_nodes)
 
 
+def _benchmark_order_index(order: TaskOrder | None) -> int:
+    if not order:
+        return 0
+    config = order.runtime_config or {}
+    benchmark = config.get("benchmark") if isinstance(config, dict) else None
+    run_id = str(benchmark.get("run_id") or "") if isinstance(benchmark, dict) else ""
+    name = str(order.name or "")
+    if run_id and name.startswith(f"benchmark-") and name.endswith(tuple(str(i) for i in range(10))):
+        suffix = name.rsplit("-", 1)[-1]
+        if suffix.isdigit():
+            return max(0, int(suffix) - 1)
+    try:
+        return abs(hash(order.id or "")) % 10_000
+    except Exception:
+        return 0
+
+
 def _pick_benchmark_nodes(pool: dict[str, list[NodeModel]], order: TaskOrder | None = None) -> dict[str, NodeModel]:
-    compute_candidates = _prefer_gpu_nodes([node for node in pool["compute"] if _node_can_host_compute(node)])
+    compute_candidates = [node for node in pool["compute"] if _node_can_host_compute(node)]
     if not compute_candidates:
         raise RuntimeError("No compute-capable nodes available")
-    compute = random.choice(compute_candidates)
+    index = _benchmark_order_index(order)
+    compute = compute_candidates[index % len(compute_candidates)]
     terminal = pool["terminal"] or compute_candidates
     return {
         "source": _pick_fixed_or_random_endpoint(terminal, order.source_name if order else None),
@@ -2891,7 +2936,7 @@ async def auto_route_order(
     task_type = _benchmark_task_type(order)
     routing_pool = await _benchmark_routing_pool(db, task_type)
     if not routing_pool["compute"]:
-        raise HTTPException(status_code=400, detail="No stable baseline compute nodes available")
+        raise HTTPException(status_code=400, detail="No baseline compute nodes available")
 
     picked = _pick_benchmark_nodes(routing_pool, order)
     await _do_auto_route(db, order, picked)

@@ -36,7 +36,7 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "task_resource_overrides": {},
     "benchmark_execution_defaults": {
         "default_task_count": 30,
-        "max_parallel": 2,
+        "max_parallel": 3,
         "per_compute_slot_limit": 1,
     },
     "notes": "标准模式用于常规运行；调试模式用于联调、排障和快速回归。",

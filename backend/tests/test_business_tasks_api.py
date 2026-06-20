@@ -157,6 +157,38 @@ async def _seed_stable_baselines(db_session, node_ids, task_type: str = "high_th
     await db_session.flush()
 
 
+async def _create_terminal_node(client, hostname: str, idx: int):
+    response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": hostname,
+            "agent_address": f"http://127.0.2.{idx}:8001",
+            "management_ip": f"10.2.0.{idx}",
+            "business_ip": f"10.2.1.{idx}",
+            "node_kind": "terminal",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _create_compute_node(client, hostname: str, idx: int):
+    response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": hostname,
+            "agent_address": f"http://127.0.3.{idx}:8001",
+            "management_ip": f"10.3.0.{idx}",
+            "business_ip": f"10.3.1.{idx}",
+            "node_kind": "worker",
+            "gpu_count": 1,
+            "gpu_model": "Test GPU",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 async def _set_runtime_settings(db_session, **overrides):
     value = {
         "environment_mode": "production",
@@ -2801,6 +2833,182 @@ async def test_batch_auto_route_can_scope_by_task_type(client, db_session, monke
 
 
 @pytest.mark.asyncio
+async def test_batch_benchmark_rotates_endpoint_pairs_when_not_fixed(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    for idx, hostname in enumerate(["h3", "h4", "h5"], start=3):
+        await _create_terminal_node(client, hostname, idx)
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-endpoint-rotation-user")
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 6,
+            "benchmark_run_id": "endpoint-rotation-run",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    order_ids = response.json()["order_ids"]
+    orders = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id.in_(order_ids)))
+    ).scalars().all()
+    source_names = {order.source_name for order in orders}
+    destination_names = {order.destination_name for order in orders}
+    assert len(source_names) > 1
+    assert len(destination_names) > 1
+    assert all(name.startswith("h") for name in source_names | destination_names)
+    assert all(order.source_name != order.destination_name for order in orders)
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_allows_unstable_baseline_compute_as_low_priority(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    async def all_agents_healthy(nodes):
+        return list(nodes), []
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", all_agents_healthy)
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    compute_2 = await _create_compute_node(client, "compute-2", 2)
+    headers, _user = await _auth_headers(client, db_session, username="unstable-baseline-compute-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+    db_session.add(
+        NodeBaseline(
+            node_id=compute_2["id"],
+            task_type="high_throughput_matmul",
+            metric_key="effective_gflops",
+            baseline_value=240.0,
+            operator=">=",
+            unit="GFLOPS",
+            run_count=3,
+            raw_values=[120.0, 240.0, 360.0],
+        )
+    )
+    await db_session.flush()
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 1,
+            "benchmark_run_id": "unstable-baseline-compute-run",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    order_id = create_response.json()["order_ids"][0]
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "unstable-baseline-compute-run", "task_type": "high_throughput_matmul"},
+    )
+
+    assert route_response.status_code == 200, route_response.text
+    assert route_response.json()["routed"] == 1
+    detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
+    assert detail_response.status_code == 200
+    compute_route = next(
+        item for item in detail_response.json()["routing_result"]["placements"]
+        if item["task_node_id"] == "compute"
+    )
+    assert compute_route["topology_node_id"] == "compute-2"
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_rotates_compute_candidates(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    async def all_agents_healthy(nodes):
+        return list(nodes), []
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", all_agents_healthy)
+
+    node_ids, template_id = await _seed_business_fixture(client)
+    compute_2 = await _create_compute_node(client, "compute-2", 2)
+    compute_3 = await _create_compute_node(client, "compute-3", 3)
+    await _seed_stable_baselines(
+        db_session,
+        [node_ids[1], compute_2["id"], compute_3["id"]],
+        "high_throughput_matmul",
+    )
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-compute-rotation-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 6,
+            "benchmark_run_id": "compute-rotation-run",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    order_ids = create_response.json()["order_ids"]
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "compute-rotation-run", "task_type": "high_throughput_matmul"},
+    )
+
+    assert route_response.status_code == 200, route_response.text
+    assert route_response.json()["routed"] == 6
+    detail_responses = [
+        await client.get(f"/api/orders/{order_id}", headers=headers)
+        for order_id in order_ids
+    ]
+    compute_nodes = {
+        next(
+            item for item in response.json()["routing_result"]["placements"]
+            if item["task_node_id"] == "compute"
+        )["topology_node_id"]
+        for response in detail_responses
+    }
+    assert len(compute_nodes) > 1
+    assert compute_nodes <= {"compute-1", "compute-2", "compute-3"}
+
+
+@pytest.mark.asyncio
 async def test_controlled_benchmark_does_not_retry_failed_instance_by_default(client, db_session, monkeypatch):
     import api.orders as orders_api
 
@@ -3137,7 +3345,7 @@ async def test_batch_auto_route_skips_non_routable_nodes(client, db_session, mon
     route_body = route_response.json()
     assert route_body["routed"] == 0
     assert len(route_body["failed"]) == len(order_ids)
-    assert all("No stable baseline compute nodes available" in item["error"] for item in route_body["failed"])
+    assert all("No baseline compute nodes available" in item["error"] for item in route_body["failed"])
 
 
 @pytest.mark.asyncio
@@ -3197,7 +3405,7 @@ async def test_batch_auto_route_skips_unhealthy_agent_nodes(client, db_session, 
         {"hostname": "compute-1", "reason": "node_agent unreachable"}
     ]
     assert len(body["failed"]) == len(order_ids)
-    assert all("No stable baseline compute nodes available" in item["error"] for item in body["failed"])
+    assert all("No baseline compute nodes available" in item["error"] for item in body["failed"])
 
 
 @pytest.mark.asyncio

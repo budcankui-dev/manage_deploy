@@ -204,6 +204,20 @@
         </div>
         <p>{{ routeModeDescription }}</p>
       </div>
+      <div class="execution-control-row">
+        <span class="control-label">并发任务数</span>
+        <el-input-number
+          v-model="executionForm.max_parallel"
+          :min="1"
+          :max="computeBaselineCount || 3"
+          controls-position="right"
+          size="small"
+          :disabled="evaluationFlowBusy"
+        />
+        <span class="control-hint">
+          默认按可用计算节点分批执行；同一 GPU 同时只运行 1 个测评任务，超过可用槽位会自动等待。
+        </span>
+      </div>
       <div class="status-grid">
         <div class="status-cell waiting">
           <div class="status-num">{{ executionStats.waitingRoute }}</div>
@@ -535,7 +549,7 @@ const benchmarkForm = reactive({
   work_units: 45000,
 })
 const executionForm = reactive({
-  max_parallel: 2,
+  max_parallel: 3,
   per_compute_slot_limit: 1,
 })
 let resumeTimer = null
@@ -547,7 +561,7 @@ const settingsForm = reactive({
   show_routing_dag_json: false,
   benchmark_execution_defaults: {
     default_task_count: formalEvaluationCount,
-    max_parallel: 2,
+    max_parallel: 3,
     per_compute_slot_limit: 1,
   },
 })
@@ -623,22 +637,12 @@ const excludedNodeRows = computed(() =>
   nodes.value.filter(n => isOfficialTerminalNodeName(n.hostname) || (isOfficialComputeNodeName(n.hostname) && !isComputeNode(n)))
 )
 
-const defaultEndpointPair = computed(() => {
-  const endpoints = nodes.value
-    .filter(n => n.is_schedulable !== false && isOfficialTerminalNodeName(n.hostname) && String(n.node_kind || '').toLowerCase() === 'terminal')
-    .map(n => n.hostname)
-  return {
-    source_name: endpoints.includes('h1') ? 'h1' : '',
-    destination_name: endpoints.includes('h2') ? 'h2' : '',
-  }
-})
-
 const missingBaselineCount = computed(() =>
-  nodeBaselineRows.value.filter(row => row.baseline_value == null || row.stable === false).length
+  nodeBaselineRows.value.filter(row => row.baseline_value == null).length
 )
 
-const stableBaselineCount = computed(() =>
-  nodeBaselineRows.value.filter(row => row.baseline_value != null && row.stable === true).length
+const computeBaselineCount = computed(() =>
+  nodeBaselineRows.value.filter(row => row.baseline_value != null).length
 )
 
 const orderStats = computed(() => {
@@ -1114,7 +1118,7 @@ function normalizeBenchmarkExecutionDefaults(value) {
   const incoming = value && typeof value === 'object' ? value : {}
   return {
     default_task_count: clampInteger(incoming.default_task_count, formalEvaluationCount, 1, 30),
-    max_parallel: clampInteger(incoming.max_parallel, 2, 1, 10),
+    max_parallel: clampInteger(incoming.max_parallel, 3, 1, 10),
     per_compute_slot_limit: clampInteger(incoming.per_compute_slot_limit, 1, 1, 4),
   }
 }
@@ -1440,7 +1444,6 @@ async function createBatch(options = {}) {
       count: benchmarkForm.count,
       benchmark_run_id: runId,
       data_profile: buildBenchmarkDataProfile(),
-      ...defaultEndpointPair.value,
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条测评工单`)
@@ -1727,13 +1730,13 @@ async function startFullFlow() {
   markBenchmarkRunSession('creating')
   try {
     await loadAll()
-    if (stableBaselineCount.value <= 0) {
+    if (computeBaselineCount.value <= 0) {
       clearCurrentBenchmarkRunSession()
-      ElMessage.warning('当前任务类型没有可用于路由的稳定基线节点，请先完成 Step 1。')
+      ElMessage.warning('当前任务类型没有已测试基线的计算节点，请先完成 Step 1。')
       return
     }
     if (missingBaselineCount.value > 0) {
-      ElMessage.info(`有 ${missingBaselineCount.value} 个节点缺少稳定基线，本轮将只使用稳定基线节点。`)
+      ElMessage.info(`有 ${missingBaselineCount.value} 个计算节点缺少基线，本轮将使用已有基线节点；波动大的节点会低优先级参与。`)
     }
     await createBatch({ runId, keepSession: true })
     markBenchmarkRunSession(routeMode.value === 'external' ? 'waiting_route' : 'running')

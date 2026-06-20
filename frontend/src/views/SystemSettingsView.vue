@@ -62,7 +62,16 @@
             <h3>业务测评执行</h3>
             <div class="execution-defaults">
               <label>
-                <span>同一GPU并发数</span>
+                <span>默认并发任务数</span>
+                <el-input-number
+                  v-model="form.benchmark_execution_defaults.max_parallel"
+                  :min="1"
+                  :max="10"
+                  controls-position="right"
+                />
+              </label>
+              <label>
+                <span>单节点槽位上限</span>
                 <el-input-number
                   v-model="form.benchmark_execution_defaults.per_compute_slot_limit"
                   :min="1"
@@ -72,7 +81,7 @@
               </label>
             </div>
             <p class="form-hint">
-              系统按节点资源、路由结果和当前占用情况控制同一 GPU 的并发，避免资源争用影响基线判定。测评工单数量和分批执行策略由系统按验收口径自动处理。
+              业务测评页默认使用该并发数分批执行；系统会按节点资源、路由结果和当前占用情况等待空闲槽位，避免资源争用影响基线判定。
             </p>
           </el-card>
 
@@ -367,7 +376,7 @@ const DEFAULT_TASK_RESOURCE_OVERRIDES = {
 
 const DEFAULT_BENCHMARK_EXECUTION_DEFAULTS = {
   default_task_count: 30,
-  max_parallel: 2,
+  max_parallel: 3,
   per_compute_slot_limit: 1,
 }
 
