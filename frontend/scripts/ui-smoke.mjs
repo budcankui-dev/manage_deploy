@@ -47,6 +47,7 @@ async function login(page, role) {
   let response = await postJson('/auth/login', loginPayload)
 
   if (!response.ok && role === 'admin') {
+    await postJson('/auth/users', { ...loginPayload, role: 'admin' }).catch(() => null)
     await postJson('/auth/bootstrap', { ...loginPayload, role: 'admin' })
     response = await postJson('/auth/login', loginPayload)
   }

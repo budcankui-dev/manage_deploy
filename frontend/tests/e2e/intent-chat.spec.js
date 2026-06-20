@@ -41,7 +41,8 @@ async function forceRuleParser(request) {
 }
 
 async function loginUserByApi(request, suffix = Date.now().toString(36)) {
-  const user = process.env.E2E_USER_USERNAME || `intent-user-${suffix}`
+  const userPrefix = process.env.E2E_USER_USERNAME || 'intent-user'
+  const user = `${userPrefix}-${suffix}`
   const userPassword = process.env.E2E_USER_PASSWORD || '123456'
   let login = await request.post('/api/auth/login', {
     data: { username: user, password: userPassword },
@@ -240,8 +241,8 @@ test('intent chat parses video task and submits order', async ({ page, request }
   const panel = page.locator('.intent-panel')
   await expect(panel.locator('.intent-summary-row', { hasText: '任务类型' }).getByText('视频AI推理任务')).toBeVisible()
   await expect(panel.locator('.intent-summary-row', { hasText: '所属模态' }).getByText('低时延转发模态')).toBeVisible()
-  await expect(panel.locator('.intent-summary-row', { hasText: '分辨率' }).getByText('720p')).toBeVisible()
-  await expect(panel.locator('.intent-summary-row', { hasText: '总帧数' }).getByText('100')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '输入视频规格' }).getByText('720p / 30fps')).toBeVisible()
+  await expect(panel.locator('.intent-summary-row', { hasText: '本次抽检帧数' }).getByText('100 帧')).toBeVisible()
 
   await page.getByRole('button', { name: '确认提交任务' }).first().click()
   await expect(page.locator('.confirm-card').getByText('任务已提交')).toBeVisible({ timeout: 20_000 })
@@ -273,10 +274,10 @@ test('intent chat keeps incomplete video draft unsubmitted and compactly shows n
   await page.goto('/intent-chat')
   await expect(page.getByPlaceholder(/描述您的计算任务需求/)).toBeVisible()
   await expect(page.getByRole('button', { name: /可用节点/ })).toBeVisible()
-  await expect(page.getByText(/运营商节点：/)).toBeHidden()
+  await expect(page.getByText(/终端节点：/)).toBeHidden()
 
   await page.getByRole('button', { name: /可用节点/ }).click()
-  await expect(page.getByText(/运营商节点：/)).toBeVisible()
+  await expect(page.getByText(/终端节点：/)).toBeVisible()
   await expect(page.getByText(/计算节点：/)).toBeVisible()
   await expect(page.getByText(/不作为源\/目的输入/)).toBeVisible()
 

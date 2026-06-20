@@ -11,6 +11,7 @@
     "test:route-recovery": "node scripts/test-routeChunkRecovery.mjs",
     "ui:smoke": "node scripts/ui-smoke.mjs",
     "test:e2e": "playwright test",
+    "test:stable": "npm run build && npm run test:display && npm run test:route-recovery && npm run test:benchmark-session && npm run ui:smoke && playwright test --workers=1",
     "test:e2e:headed": "HEADED_UI=1 PLAYWRIGHT_SLOW_MO_MS=300 playwright test --headed"
   },
   "dependencies": {
