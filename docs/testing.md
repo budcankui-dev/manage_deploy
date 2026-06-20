@@ -239,6 +239,8 @@ PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 8
 
 期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。正式验收建议使用并发 8、单条最多重试 5 次、失败间隔 5 秒的参数；在当前固定数据集规模下，正常应在 10 多分钟内完成。若评测中断，可追加 `--resume` 续跑已完成样本。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
 
+正式展示以管理节点页面为准。`reports/intent_eval_online.json` 是文件产物，不写入 MySQL；本地 `127.0.0.1` 运行出的报告不会自动出现在管理节点页面。准备让验收方或用户查看时，应在管理节点页面运行评测，或显式同步本地 `reports/intent_eval_online.json`、`reports/intent_eval_online.status.json` 和对应 `reports/intent_eval_runs/*.json` 到 `/home/bupt/manage_deploy/reports/` 后再刷新 `http://10.112.244.94:8182/intent-evaluation`。
+
 ## 用户端意图对话闭环
 
 页面入口：
