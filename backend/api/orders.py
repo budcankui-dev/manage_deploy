@@ -203,6 +203,31 @@ async def _cleanup_materialized_order_instance(
     return instance
 
 
+async def _detach_order_references_before_delete(db: AsyncSession, order: TaskOrder) -> None:
+    """Detach conversational/routing references that would block physical order deletion."""
+    conversation_by_id: dict[str, Conversation] = {}
+    if order.conversation_id:
+        conversation_row = await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
+        conversation = conversation_row.scalar_one_or_none()
+        if conversation:
+            conversation_by_id[conversation.id] = conversation
+
+    conversation_rows = await db.execute(
+        select(Conversation).where(Conversation.materialized_order_id == order.id)
+    )
+    for conversation in conversation_rows.scalars().all():
+        conversation_by_id[conversation.id] = conversation
+
+    for conversation in conversation_by_id.values():
+        if conversation.materialized_order_id == order.id:
+            conversation.materialized_order_id = None
+        conversation.status = ConversationStatus.CANCELLED
+
+    routing_rows = await db.execute(select(RoutingRequest).where(RoutingRequest.order_id == order.id))
+    for routing in routing_rows.scalars().all():
+        routing.order_id = None
+
+
 async def _resolve_batch_orders(
     db: AsyncSession,
     request: BatchOperationRequest,
@@ -1107,15 +1132,7 @@ async def delete_order(
         reason="delete_order",
         metadata={"instance_id": order.materialized_instance_id},
     )
-    if order.conversation_id:
-        conversation_row = await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))
-        conversation = conversation_row.scalar_one_or_none()
-        if conversation and conversation.materialized_order_id == order.id:
-            conversation.status = ConversationStatus.CANCELLED
-            conversation.materialized_order_id = None
-    routing_rows = await db.execute(select(RoutingRequest).where(RoutingRequest.order_id == order.id))
-    for routing in routing_rows.scalars().all():
-        routing.order_id = None
+    await _detach_order_references_before_delete(db, order)
     await purge_order_instances_by_source_order(db, order.id)
     await purge_order_instance_artifacts(db, order.materialized_instance_id)
     await db.delete(order)
@@ -1185,6 +1202,7 @@ async def batch_delete_orders(
                 reason="delete_order",
                 metadata={"instance_id": order.materialized_instance_id, "batch": True},
             )
+            await _detach_order_references_before_delete(db, order)
             await purge_order_instances_by_source_order(db, order.id)
             await purge_order_instance_artifacts(db, order.materialized_instance_id)
             await db.delete(order)

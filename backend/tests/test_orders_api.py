@@ -467,6 +467,61 @@ async def test_admin_batch_delete_materialized_order_cleans_instance_before_dele
 
 
 @pytest.mark.asyncio
+async def test_admin_batch_delete_detaches_conversation_order_reference(client, db_session, monkeypatch):
+    _owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-conversation-owner")
+    admin_headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="batch-delete-conversation-admin",
+        role=UserRole.ADMIN,
+    )
+    order = await _create_order(db_session, "batch-delete-conversation-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    conversation = Conversation(
+        id="conversation-batch-delete-order",
+        user_id=owner.id,
+        status=ConversationStatus.SUBMITTED,
+        materialized_order_id=order.id,
+    )
+    draft = IntentDraft(
+        id="draft-batch-delete-order",
+        conversation_id=conversation.id,
+    )
+    routing = RoutingRequest(
+        id="routing-batch-delete-order",
+        conversation_id=conversation.id,
+        order_id=order.id,
+        intent_draft_id=draft.id,
+        strategy="resource_guarantee",
+        status="completed",
+    )
+    db_session.add_all([conversation, draft, routing])
+    await db_session.commit()
+
+    async def fake_cancel_all_schedules(self, _instance_id):
+        return None
+
+    monkeypatch.setattr("api.orders.TaskScheduler.cancel_all_schedules", fake_cancel_all_schedules)
+
+    response = await client.post(
+        "/api/orders/batch/delete",
+        headers=admin_headers,
+        json={"order_ids": [order.id]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == [order.id]
+    assert response.json()["failed"] == {}
+    order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    assert order_row.scalar_one_or_none() is None
+    conversation_row = await db_session.execute(select(Conversation).where(Conversation.id == conversation.id))
+    updated_conversation = conversation_row.scalar_one()
+    assert updated_conversation.status == ConversationStatus.CANCELLED.value
+    assert updated_conversation.materialized_order_id is None
+    routing_row = await db_session.execute(select(RoutingRequest).where(RoutingRequest.id == routing.id))
+    assert routing_row.scalar_one().order_id is None
+
+
+@pytest.mark.asyncio
 async def test_admin_batch_delete_keeps_order_when_runtime_cleanup_fails(client, db_session, monkeypatch):
     _owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-fail-owner")
     admin_headers, _admin = await _auth_headers(client, db_session, username="batch-delete-fail-admin", role=UserRole.ADMIN)

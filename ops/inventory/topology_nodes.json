@@ -19,10 +19,10 @@
       "business_ip": "10.112.38.25",
       "acceptance_management_ip": "172.16.0.101",
       "acceptance_business_ip": "172.16.0.101",
-      "acceptance_business_ipv6": "3012:3::405e:c4cc:af49:e459",
+      "acceptance_business_ipv6": "3012:3::6e49:e736:feb7:22cd",
       "acceptance_business_ipv6_candidates": [
-        "3012:3::405e:c4cc:af49:e459",
-        "3012:3::6e49:e736:feb7:22cd"
+        "3012:3::6e49:e736:feb7:22cd",
+        "3012:3::53be:afcc:fcf8:e99e"
       ],
       "management_iface": "enp7s0",
       "business_iface": "enx9c69d3680773",
