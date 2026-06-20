@@ -17,8 +17,13 @@
           <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
           <el-option label="视频AI推理任务" value="low_latency_video_pipeline" />
         </el-select>
-        <el-button type="primary" :loading="fullFlowLoading || settingsLoading" @click="startFullFlow">
-          开始完整测试流程
+        <el-button
+          type="primary"
+          :loading="benchmarkFlowBusy || settingsLoading"
+          :disabled="benchmarkFlowBusy || settingsLoading"
+          @click="startFullFlow"
+        >
+          {{ benchmarkFlowBusy ? '测评运行中' : '开始完整测试流程' }}
         </el-button>
       </div>
     </section>
@@ -143,7 +148,14 @@
             <span>有效帧</span>
             <el-input-number v-model="benchmarkForm.measured_frames" :min="10" :max="300" controls-position="right" />
           </template>
-          <el-button type="primary" :loading="batchCreateLoading" @click="createBatch">创建测评工单</el-button>
+            <el-button
+              type="primary"
+              :loading="batchCreateLoading"
+              :disabled="benchmarkFlowBusy"
+              @click="createBatch"
+            >
+              创建测评工单
+            </el-button>
         </div>
         <div class="pending-pill">
           当前待分配工单：<strong>{{ pendingWorkCount }}</strong> 个
@@ -162,10 +174,16 @@
             <div class="step-desc">实时查看待分配、已分配、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
-            <el-button size="small" type="primary" :loading="routeLoading || startLoading || settingsLoading" @click="runEvaluationFlow">
-              运行测评
+            <el-button
+              size="small"
+              type="primary"
+              :loading="evaluationFlowBusy || settingsLoading"
+              :disabled="evaluationFlowBusy || settingsLoading"
+              @click="runEvaluationFlow"
+            >
+              {{ evaluationFlowBusy ? '测评运行中' : '运行测评' }}
             </el-button>
-            <el-button size="small" plain @click="loadOrders">刷新</el-button>
+            <el-button size="small" plain :disabled="routeLoading || startLoading" @click="refreshBenchmarkPage">刷新</el-button>
           </div>
         </div>
       </template>
@@ -209,7 +227,7 @@
         </div>
       </div>
       <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会根据节点资源、路由结果和当前占用情况分批执行。</p>
-      <p v-if="controlledStartStatus" class="status-note strong-note">{{ controlledStartStatus }}</p>
+      <p v-if="executionStatusText" class="status-note strong-note">{{ executionStatusText }}</p>
     </el-card>
 
     <el-card class="step-card evidence-card">
@@ -241,7 +259,7 @@
             >
               {{ selectedOrderIds.length ? '删除选中工单' : '删除本轮工单' }}
             </el-button>
-            <el-button size="small" plain @click="loadOrders">刷新工单列表</el-button>
+            <el-button size="small" plain :disabled="routeLoading || startLoading" @click="refreshBenchmarkPage">刷新工单列表</el-button>
           </div>
         </div>
       </template>
@@ -408,7 +426,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi, baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
@@ -440,6 +458,12 @@ import {
   isOfficialTerminalNodeName,
   officialNodeSort,
 } from '@/constants/topologyNodes'
+import {
+  clearBenchmarkRunSession,
+  isSameBenchmarkRun,
+  readBenchmarkRunSession,
+  writeBenchmarkRunSession,
+} from '@/utils/benchmarkRunSession'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
 const route = useRoute()
@@ -473,6 +497,8 @@ const settingsLoading = ref(false)
 const startLoading = ref(false)
 const fullFlowLoading = ref(false)
 const resultRefreshing = ref(false)
+const restoringRunSession = ref(false)
+const benchmarkRunSession = ref(readBenchmarkRunSession())
 const controlledStartStatus = ref('')
 const dashboardUpdatedAt = ref('')
 const detailDrawerVisible = ref(false)
@@ -512,6 +538,8 @@ const executionForm = reactive({
   max_parallel: 2,
   per_compute_slot_limit: 1,
 })
+let resumeTimer = null
+let visibilityHandler = null
 const settingsForm = reactive({
   benchmark_routing_mode: 'internal_auto',
   expert_mode: true,
@@ -541,6 +569,8 @@ const routeModeDescription = computed(() => {
   }
   return '当前轮次由系统自动完成节点放置并执行测评闭环；页面重点展示工单、部署和业务结果证据。'
 })
+
+const activeBenchmarkRunSession = computed(() => benchmarkRunSession.value)
 
 const currentTaskConfig = computed(() =>
   taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
@@ -673,6 +703,78 @@ const pendingWorkCount = computed(() => {
     return Math.max(0, (aggregate.count || 0) - (aggregate.evaluated_count || 0))
   }
   return orderStats.value.waitingRoute + orderStats.value.routed
+})
+
+const hasBenchmarkWork = computed(() =>
+  Boolean(currentBenchmarkRunId.value && orders.value.length)
+)
+
+const benchmarkRunCompleted = computed(() => {
+  if (!hasBenchmarkWork.value) return false
+  const aggregate = summaryAggregate.value
+  const total = Number(aggregate?.count || orders.value.length || 0)
+  if (!total) return false
+  const evaluated = Number(aggregate?.evaluated_count || 0)
+  const failed = Number(orderStats.value.failed || 0)
+  return evaluated + failed >= total
+})
+
+const benchmarkRunHasActiveWork = computed(() => {
+  if (!hasBenchmarkWork.value || benchmarkRunCompleted.value) return false
+  return orderStats.value.running > 0 ||
+    orderStats.value.routed > 0 ||
+    orderStats.value.waitingRoute > 0
+})
+
+const currentRunSessionActive = computed(() =>
+  isSameBenchmarkRun(activeBenchmarkRunSession.value, taskType.value, currentBenchmarkRunId.value)
+)
+
+const currentRunSessionRunning = computed(() =>
+  currentRunSessionActive.value && activeBenchmarkRunSession.value?.phase === 'running'
+)
+
+const currentRunSessionCreating = computed(() =>
+  currentRunSessionActive.value && activeBenchmarkRunSession.value?.phase === 'creating'
+)
+
+const currentRunSessionWaitingRoute = computed(() =>
+  currentRunSessionActive.value && activeBenchmarkRunSession.value?.phase === 'waiting_route'
+)
+
+const currentRunSessionBlocksCreation = computed(() =>
+  currentRunSessionActive.value &&
+    !benchmarkRunCompleted.value &&
+    ['creating', 'waiting_route', 'running'].includes(activeBenchmarkRunSession.value?.phase)
+)
+
+const evaluationFlowBusy = computed(() =>
+  routeLoading.value ||
+    startLoading.value ||
+    restoringRunSession.value ||
+    currentRunSessionCreating.value ||
+    (currentRunSessionRunning.value && benchmarkRunHasActiveWork.value)
+)
+
+const benchmarkFlowBusy = computed(() =>
+  fullFlowLoading.value ||
+    batchCreateLoading.value ||
+    evaluationFlowBusy.value ||
+    currentRunSessionBlocksCreation.value
+)
+
+const executionStatusText = computed(() => {
+  if (controlledStartStatus.value) return controlledStartStatus.value
+  if (currentRunSessionCreating.value) {
+    return '正在创建当前测评轮次，离开页面后再次进入会保持锁定，请勿重复启动。'
+  }
+  if (currentRunSessionWaitingRoute.value) {
+    return '当前测评轮次已创建，正在等待节点分配完成，请勿重复创建。'
+  }
+  if (currentRunSessionRunning.value && benchmarkRunHasActiveWork.value) {
+    return '当前测评轮次正在执行，离开页面后再次进入会继续刷新进度，请勿重复启动。'
+  }
+  return ''
 })
 
 const successPercent = computed(() =>
@@ -1094,6 +1196,86 @@ async function refreshAcceptanceResult(options = {}) {
   }
 }
 
+function markBenchmarkRunSession(phase = 'running') {
+  if (!currentBenchmarkRunId.value) return
+  benchmarkRunSession.value = writeBenchmarkRunSession({
+    taskType: taskType.value,
+    benchmarkRunId: currentBenchmarkRunId.value,
+    phase,
+  })
+}
+
+function clearCurrentBenchmarkRunSession() {
+  if (!currentBenchmarkRunId.value) return
+  clearBenchmarkRunSession(taskType.value, currentBenchmarkRunId.value)
+  benchmarkRunSession.value = readBenchmarkRunSession()
+}
+
+function syncBenchmarkRunSession() {
+  benchmarkRunSession.value = readBenchmarkRunSession()
+}
+
+function currentBenchmarkRunKey() {
+  if (!currentBenchmarkRunId.value) return ''
+  return `${taskType.value}:${currentBenchmarkRunId.value}`
+}
+
+function activeBenchmarkRunnerKey() {
+  try {
+    return window.__manageDeployBenchmarkRunnerKey || ''
+  } catch {
+    return ''
+  }
+}
+
+function setActiveBenchmarkRunnerKey(key) {
+  try {
+    window.__manageDeployBenchmarkRunnerKey = key
+  } catch {
+    // Ignore non-browser test environments.
+  }
+}
+
+function clearActiveBenchmarkRunnerKey(key) {
+  try {
+    if (!window.__manageDeployBenchmarkRunnerKey || window.__manageDeployBenchmarkRunnerKey === key) {
+      window.__manageDeployBenchmarkRunnerKey = ''
+    }
+  } catch {
+    // Ignore non-browser test environments.
+  }
+}
+
+function scheduleResumeBenchmarkRun(delay = 0) {
+  if (resumeTimer) {
+    clearTimeout(resumeTimer)
+  }
+  resumeTimer = window.setTimeout(() => {
+    resumeTimer = null
+    resumeBenchmarkRunIfNeeded()
+  }, delay)
+}
+
+async function refreshBenchmarkPage() {
+  await Promise.all([loadOrders(), loadSummary()])
+  syncBenchmarkRunSession()
+  reconcileBenchmarkRunSessionAfterLoad()
+  if (currentRunSessionActive.value && !benchmarkRunCompleted.value) {
+    scheduleResumeBenchmarkRun(0)
+  }
+}
+
+function reconcileBenchmarkRunSessionAfterLoad() {
+  if (!currentRunSessionActive.value) return
+  if (benchmarkRunCompleted.value) {
+    clearCurrentBenchmarkRunSession()
+    return
+  }
+  if (currentRunSessionCreating.value && orders.value.length) {
+    markBenchmarkRunSession(routeMode.value === 'external' ? 'waiting_route' : 'running')
+  }
+}
+
 function newBenchmarkRunId() {
   const now = new Date()
   const pad = value => String(value).padStart(2, '0')
@@ -1137,6 +1319,8 @@ async function loadAll() {
   } else {
     await loadSummary()
   }
+  syncBenchmarkRunSession()
+  reconcileBenchmarkRunSessionAfterLoad()
 }
 
 async function runSingleBaseline(row) {
@@ -1200,10 +1384,15 @@ function normalizeBatchBaselineError(error) {
   return text.length > 100 ? `${text.slice(0, 100)}...` : text
 }
 
-async function createBatch() {
+async function createBatch(options = {}) {
+  const runId = options.runId || newBenchmarkRunId()
+  const keepSession = Boolean(options.keepSession)
+  if (!options.runId) {
+    setCurrentBenchmarkRunId(runId)
+    markBenchmarkRunSession('creating')
+  }
   batchCreateLoading.value = true
   try {
-    const runId = newBenchmarkRunId()
     const { data } = await ordersApi.batchBenchmark({
       task_type: taskType.value,
       count: benchmarkForm.count,
@@ -1214,7 +1403,13 @@ async function createBatch() {
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条测评工单`)
     await Promise.all([loadOrders(), loadSummary()])
+    if (!keepSession) {
+      clearCurrentBenchmarkRunSession()
+    }
     return data
+  } catch (error) {
+    clearCurrentBenchmarkRunSession()
+    throw error
   } finally {
     batchCreateLoading.value = false
   }
@@ -1381,7 +1576,24 @@ async function doStartAll() {
     ElMessage.warning('请先创建或选择一个测评轮次，再启动执行。')
     return null
   }
+  if (startLoading.value || restoringRunSession.value) {
+    controlledStartStatus.value = '当前测评轮次正在执行，请等待进度刷新。'
+    return null
+  }
+  const runnerKey = currentBenchmarkRunKey()
+  const activeRunner = activeBenchmarkRunnerKey()
+  if (activeRunner === runnerKey && !startLoading.value) {
+    markBenchmarkRunSession('running')
+    controlledStartStatus.value = '当前测评轮次已在后台执行，页面会自动刷新进度，请勿重复启动。'
+    return null
+  }
+  if (activeRunner && activeRunner !== runnerKey) {
+    ElMessage.warning('已有其他测评轮次正在执行，请等待其完成后再启动新的测评。')
+    return null
+  }
   startLoading.value = true
+  setActiveBenchmarkRunnerKey(runnerKey)
+  markBenchmarkRunSession('running')
   controlledStartStatus.value = '正在按小批次运行测评任务...'
   try {
     let latest = null
@@ -1404,33 +1616,71 @@ async function doStartAll() {
 
       if (total > 0 && evaluated >= total) {
         ElMessage.success(`本轮 ${evaluated} 个测评任务已全部完成评估`)
+        clearCurrentBenchmarkRunSession()
         break
       }
       if (!started && !active && !Number(data.pending_to_start || 0)) {
         ElMessage.warning('当前没有可继续启动的测评任务，请检查失败原因或重新路由。')
+        clearCurrentBenchmarkRunSession()
         break
       }
       await sleep(started ? 2500 : 5000)
     }
     await Promise.all([loadOrders(), loadSummary()])
+    if (benchmarkRunCompleted.value) {
+      clearCurrentBenchmarkRunSession()
+    }
     return latest
   } finally {
     startLoading.value = false
+    clearActiveBenchmarkRunnerKey(runnerKey)
+  }
+}
+
+async function resumeBenchmarkRunIfNeeded() {
+  syncBenchmarkRunSession()
+  if (!currentRunSessionRunning.value || restoringRunSession.value || startLoading.value || routeLoading.value) return
+  if (activeBenchmarkRunnerKey() === currentBenchmarkRunKey()) {
+    controlledStartStatus.value = '当前测评轮次已在后台执行，页面会自动刷新进度，请勿重复启动。'
+    await Promise.all([loadOrders(), loadSummary()])
+    if (currentRunSessionRunning.value && !benchmarkRunCompleted.value) {
+      scheduleResumeBenchmarkRun(5000)
+    }
+    return
+  }
+  await Promise.all([loadOrders(), loadSummary()])
+  reconcileBenchmarkRunSessionAfterLoad()
+  if (!currentRunSessionRunning.value) return
+  if (benchmarkRunCompleted.value || !benchmarkRunHasActiveWork.value) {
+    clearCurrentBenchmarkRunSession()
+    return
+  }
+  restoringRunSession.value = true
+  controlledStartStatus.value = '检测到当前测评轮次仍在执行，已自动恢复进度刷新与分批推进。'
+  try {
+    await doStartAll()
+  } finally {
+    restoringRunSession.value = false
   }
 }
 
 async function startFullFlow() {
-  await loadAll()
-  if (stableBaselineCount.value <= 0) {
-    ElMessage.warning('当前任务类型没有可用于路由的稳定基线节点，请先完成 Step 1。')
-    return
-  }
-  if (missingBaselineCount.value > 0) {
-    ElMessage.info(`有 ${missingBaselineCount.value} 个节点缺少稳定基线，本轮将只使用稳定基线节点。`)
-  }
   fullFlowLoading.value = true
+  const runId = newBenchmarkRunId()
+  setCurrentBenchmarkRunId(runId)
+  markBenchmarkRunSession('creating')
   try {
-    await createBatch()
+    await loadAll()
+    if (stableBaselineCount.value <= 0) {
+      clearCurrentBenchmarkRunSession()
+      ElMessage.warning('当前任务类型没有可用于路由的稳定基线节点，请先完成 Step 1。')
+      return
+    }
+    if (missingBaselineCount.value > 0) {
+      ElMessage.info(`有 ${missingBaselineCount.value} 个节点缺少稳定基线，本轮将只使用稳定基线节点。`)
+    }
+    await createBatch({ runId, keepSession: true })
+    markBenchmarkRunSession(routeMode.value === 'external' ? 'waiting_route' : 'running')
     if (routeMode.value === 'external') {
       await refreshExternalRoutingStatus()
       ElMessage.info('已创建工单，请等待节点分配完成后再点击运行测评。')
@@ -1461,8 +1711,34 @@ watch(taskType, async () => {
   } else {
     await loadSummary()
   }
+  syncBenchmarkRunSession()
+  reconcileBenchmarkRunSessionAfterLoad()
+  if (currentRunSessionActive.value) {
+    scheduleResumeBenchmarkRun(0)
+  }
 })
-onMounted(loadAll)
+onMounted(async () => {
+  await loadAll()
+  scheduleResumeBenchmarkRun(0)
+  visibilityHandler = () => {
+    if (document.visibilityState === 'visible') {
+      syncBenchmarkRunSession()
+      scheduleResumeBenchmarkRun(0)
+    }
+  }
+  document.addEventListener('visibilitychange', visibilityHandler)
+})
+
+onUnmounted(() => {
+  if (resumeTimer) {
+    clearTimeout(resumeTimer)
+    resumeTimer = null
+  }
+  if (visibilityHandler) {
+    document.removeEventListener('visibilitychange', visibilityHandler)
+    visibilityHandler = null
+  }
+})
 </script>
 
 <style scoped>

@@ -7,6 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:display": "node scripts/test-businessTaskDisplay.mjs",
+    "test:benchmark-session": "node scripts/test-benchmarkRunSession.mjs",
     "test:route-recovery": "node scripts/test-routeChunkRecovery.mjs",
     "ui:smoke": "node scripts/ui-smoke.mjs",
     "test:e2e": "playwright test",
