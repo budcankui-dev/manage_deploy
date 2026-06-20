@@ -69,15 +69,22 @@
       title="当前数据集已更新，历史评测报告不会作为当前准确率展示。请重新运行意图参数解析准确率评测。"
     />
 
-    <section class="stat-grid">
-      <el-card class="stat-card current-round-card">
-        <span class="stat-label">当前评测轮次</span>
+    <section class="round-banner">
+      <div>
+        <span>当前展示评测轮次</span>
         <strong>{{ currentRoundCard.id }}</strong>
-        <small class="report-summary">
-          <span>{{ currentRoundCard.status }}</span>
-          <span>{{ currentRoundCard.time }}</span>
-        </small>
-      </el-card>
+      </div>
+      <div>
+        <span>轮次状态</span>
+        <strong>{{ currentRoundCard.status }}</strong>
+      </div>
+      <div>
+        <span>生成/更新时间</span>
+        <strong>{{ currentRoundCard.time }}</strong>
+      </div>
+    </section>
+
+    <section class="stat-grid">
       <el-card class="stat-card">
         <span class="stat-label">固定数据集</span>
         <strong>{{ dataset.total || 0 }}</strong>
@@ -1683,9 +1690,42 @@ onUnmounted(() => {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 16px;
+}
+
+.round-banner {
+  display: grid;
+  grid-template-columns: 2fr 1.4fr 1.2fr;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(31, 113, 185, 0.26);
+  background:
+    radial-gradient(circle at 6% 18%, rgba(31, 113, 185, 0.14), transparent 30%),
+    linear-gradient(135deg, #f4f9ff 0%, #ffffff 74%);
+  box-shadow: 0 14px 32px rgba(38, 73, 106, 0.08);
+}
+
+.round-banner div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.round-banner span {
+  color: #52708c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.round-banner strong {
+  color: #12263a;
+  font-size: 20px;
+  word-break: break-all;
 }
 
 .stat-card :deep(.el-card__body) {
@@ -2322,6 +2362,7 @@ onUnmounted(() => {
   }
 
   .stat-grid,
+  .round-banner,
   .case-bars,
   .json-grid,
   .sample-json-grid,

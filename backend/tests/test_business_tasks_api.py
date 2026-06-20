@@ -3289,6 +3289,121 @@ async def test_cleanup_order_instances_rejects_active_instance(client, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_user_batch_delete_orders_only_deletes_owned_orders(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-owner")
+    _other_headers, other = await _auth_headers(client, db_session, username="batch-delete-other")
+    owned_order = TaskOrder(
+        user_id=owner.id,
+        template_id=template_id,
+        name="owned order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
+    )
+    other_order = TaskOrder(
+        user_id=other.id,
+        template_id=template_id,
+        name="other order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
+    )
+    db_session.add_all([owned_order, other_order])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders/batch/delete",
+        headers=owner_headers,
+        json={"order_ids": [owned_order.id, other_order.id]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["succeeded"] == [owned_order.id]
+    assert body["failed"][other_order.id] == "Access denied"
+    deleted = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == owned_order.id))
+    ).scalar_one_or_none()
+    remaining = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == other_order.id))
+    ).scalar_one_or_none()
+    assert deleted is None
+    assert remaining is not None
+
+
+@pytest.mark.asyncio
+async def test_stop_order_runtime_preserves_order_and_evidence(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, owner = await _auth_headers(client, db_session, username="stop-runtime-owner")
+    order = TaskOrder(
+        user_id=owner.id,
+        template_id=template_id,
+        name="runtime order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={"business_task": {"task_type": "high_throughput_matmul"}},
+        materialized_instance_id="stop-runtime-instance",
+    )
+    instance = TaskInstance(
+        id="stop-runtime-instance",
+        template_id=template_id,
+        name="runtime instance",
+        status=TaskStatus.RUNNING,
+    )
+    evaluation = BusinessObjectiveEvaluation(
+        instance_id=instance.id,
+        task_type="high_throughput_matmul",
+        metric_key="effective_gflops",
+        actual_value=100.0,
+        target_value=80.0,
+        unit="GFLOPS",
+        business_success=True,
+    )
+    db_session.add_all([order, instance, evaluation])
+    await db_session.commit()
+
+    class FakeExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_stop(self, instance_id):
+            assert instance_id == "stop-runtime-instance"
+            return True, None
+
+        async def remove_node(self, node):
+            return True, None
+
+    monkeypatch.setattr(orders_api, "DAGExecutor", FakeExecutor)
+
+    response = await client.post(
+        f"/api/orders/{order.id}/stop-runtime",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stopped"] is True
+    refreshed_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    ).scalar_one()
+    removed_instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
+    ).scalar_one_or_none()
+    preserved_eval = (
+        await db_session.execute(
+            select(BusinessObjectiveEvaluation).where(BusinessObjectiveEvaluation.instance_id == instance.id)
+        )
+    ).scalar_one_or_none()
+    assert refreshed_order.status == OrderStatus.COMPLETED
+    assert refreshed_order.materialized_instance_id == instance.id
+    assert removed_instance is None
+    assert preserved_eval is not None
+
+
+@pytest.mark.asyncio
 async def test_batch_auto_route_skips_non_routable_nodes(client, db_session, monkeypatch):
     import api.orders as orders_api
 

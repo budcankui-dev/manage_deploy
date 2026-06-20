@@ -111,6 +111,7 @@ export const ordersApi = {
   get: (id) => api.get(`/orders/${id}`),
   create: (data) => api.post('/orders', data),
   delete: (id) => api.delete(`/orders/${id}`),
+  stopRuntime: (id) => api.post(`/orders/${id}/stop-runtime`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
   batchDelete: (payload) => api.post(
     '/orders/batch/delete',
     Array.isArray(payload) ? { order_ids: payload } : payload

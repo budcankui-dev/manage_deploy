@@ -3,7 +3,19 @@
     <aside class="orders-list-panel">
       <div class="panel-header">
         <span class="panel-title">我的工单</span>
-        <el-button size="small" @click="loadOrders" :loading="listLoading">刷新</el-button>
+        <div class="panel-actions">
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="!selectedOrderIds.length"
+            :loading="batchDeleteLoading"
+            @click="batchDeleteOrders"
+          >
+            批量删除
+          </el-button>
+          <el-button size="small" @click="loadOrders" :loading="listLoading">刷新</el-button>
+        </div>
       </div>
 
       <div v-if="listLoading" class="list-loading">
@@ -11,23 +23,55 @@
         <span>加载中...</span>
       </div>
       <el-empty v-else-if="!orders.length" description="暂无工单" :image-size="60" />
-      <div v-else class="order-items">
-        <div
-          v-for="order in orders"
-          :key="orderId(order)"
-          class="order-item"
-          :class="{ active: orderId(order) === selectedOrderId }"
-          @click="selectOrder(order)"
-        >
-          <div class="order-item-name">{{ taskTypeLabel(order.task_type) || '业务工单' }}</div>
-          <div class="order-item-meta">
-            <el-tag :type="statusTagType(order.status || order.order_status, order)" size="small">
-              {{ formatStatus(order.status || order.order_status, order) }}
-            </el-tag>
-            <span class="order-item-time">{{ formatTime(order.created_at) }}</span>
-          </div>
-        </div>
-      </div>
+      <el-table
+        v-else
+        :data="orders"
+        class="orders-table"
+        size="small"
+        row-key="id"
+        :show-header="false"
+        highlight-current-row
+        @selection-change="handleSelectionChange"
+        @row-click="selectOrder"
+      >
+        <el-table-column type="selection" width="36" />
+        <el-table-column min-width="190">
+          <template #default="{ row }">
+            <div class="order-item-name">{{ taskTypeLabel(row.task_type) || '业务工单' }}</div>
+            <div class="order-item-meta">
+              <el-tag :type="statusTagType(row.status || row.order_status, row)" size="small">
+                {{ formatStatus(row.status || row.order_status, row) }}
+              </el-tag>
+              <span class="order-item-time">{{ formatTime(row.created_at) }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="74" align="right">
+          <template #default="{ row }">
+            <el-dropdown trigger="click" @click.stop>
+              <el-button size="small" text type="primary" @click.stop>操作</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="selectOrder(row)">查看详情</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canStopOrder(row)"
+                    @click="stopOrder(row)"
+                  >
+                    停止运行
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canCancelOrder(row)"
+                    @click="cancelOrder(row)"
+                  >
+                    取消工单
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="deleteOrder(row)">删除工单</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+        </el-table-column>
+      </el-table>
     </aside>
 
     <main class="order-detail-area">
@@ -39,12 +83,22 @@
           <span class="detail-toolbar-title">任务工单详情</span>
           <div class="detail-actions">
             <el-button
-              v-if="detail?.status === 'pending'"
+              v-if="canStopOrder(detail)"
+              type="primary"
+              plain
+              size="small"
+              :loading="stopLoading"
+              @click="stopOrder(detail)"
+            >
+              停止运行
+            </el-button>
+            <el-button
+              v-if="canCancelOrder(detail)"
               type="warning"
               plain
               size="small"
               :loading="cancelLoading"
-              @click="cancelOrder"
+              @click="cancelOrder(detail)"
             >
               取消工单
             </el-button>
@@ -54,7 +108,7 @@
               plain
               size="small"
               :loading="deleteLoading"
-              @click="deleteOrder"
+              @click="deleteOrder(detail)"
             >
               删除工单
             </el-button>
@@ -82,10 +136,13 @@ const orders = ref([])
 const selectedOrderId = ref('')
 const detail = ref(null)
 const resultObjects = ref([])
+const selectedOrderIds = ref([])
 const listLoading = ref(false)
 const detailLoading = ref(false)
 const cancelLoading = ref(false)
 const deleteLoading = ref(false)
+const stopLoading = ref(false)
+const batchDeleteLoading = ref(false)
 const detailTab = ref('business')
 
 function orderId(order) {
@@ -94,6 +151,10 @@ function orderId(order) {
 
 function shortId(value) {
   return value ? String(value).slice(0, 12) : '-'
+}
+
+function handleSelectionChange(rows) {
+  selectedOrderIds.value = rows.map(orderId).filter(Boolean)
 }
 
 async function loadOrders() {
@@ -135,8 +196,33 @@ async function selectOrder(order) {
   }
 }
 
-async function cancelOrder() {
-  if (!selectedOrderId.value) return
+function canCancelOrder(order) {
+  return order?.status === 'pending' || order?.order_status === 'pending'
+}
+
+function canStopOrder(order) {
+  const status = order?.deployment_status || order?.instance_status
+  return Boolean(
+    (order?.materialized_instance_id || order?.instance_id || order?.instance_exists) &&
+    ['starting', 'running', 'scheduled', 'stopping'].includes(String(status || ''))
+  )
+}
+
+function showBatchOperationResult(data, successText) {
+  const succeeded = data?.succeeded || []
+  const failed = data?.failed || {}
+  const failedCount = Object.keys(failed).length
+  if (failedCount) {
+    ElMessage.warning(`${successText(succeeded.length)}，${failedCount} 个失败`)
+    return false
+  }
+  ElMessage.success(successText(succeeded.length))
+  return true
+}
+
+async function cancelOrder(order = null) {
+  const targetOrderId = orderId(order) || selectedOrderId.value
+  if (!targetOrderId) return
   try {
     await ElMessageBox.confirm('确定取消此工单？', '确认取消', {
       confirmButtonText: '取消工单',
@@ -149,10 +235,12 @@ async function cancelOrder() {
 
   cancelLoading.value = true
   try {
-    await ordersApi.cancel(selectedOrderId.value)
+    await ordersApi.cancel(targetOrderId)
     ElMessage.success('工单已取消')
     await loadOrders()
-    await selectOrder({ id: selectedOrderId.value })
+    if (selectedOrderId.value === targetOrderId) {
+      await selectOrder({ id: targetOrderId })
+    }
   } catch {
     ElMessage.error('取消失败')
   } finally {
@@ -160,8 +248,41 @@ async function cancelOrder() {
   }
 }
 
-async function deleteOrder() {
-  if (!selectedOrderId.value) return
+async function stopOrder(order = null) {
+  const targetOrderId = orderId(order) || selectedOrderId.value
+  if (!targetOrderId) return
+  try {
+    await ElMessageBox.confirm(
+      '停止运行会停止并清理该工单当前部署的容器，工单、路由结果和已上报结果会保留。继续吗？',
+      '确认停止运行',
+      {
+        confirmButtonText: '停止运行',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  stopLoading.value = true
+  try {
+    await ordersApi.stopRuntime(targetOrderId)
+    ElMessage.success('任务运行已停止')
+    await loadOrders()
+    if (selectedOrderId.value === targetOrderId) {
+      await selectOrder({ id: targetOrderId })
+    }
+  } catch {
+    ElMessage.error('停止运行失败')
+  } finally {
+    stopLoading.value = false
+  }
+}
+
+async function deleteOrder(order = null) {
+  const targetOrderId = orderId(order) || selectedOrderId.value
+  if (!targetOrderId) return
   try {
     await ElMessageBox.confirm(
       '删除工单前会先停止并清理该工单关联的部署实例；如果容器清理失败，工单不会被删除。继续吗？',
@@ -179,16 +300,53 @@ async function deleteOrder() {
 
   deleteLoading.value = true
   try {
-    await ordersApi.delete(selectedOrderId.value)
+    await ordersApi.delete(targetOrderId)
     ElMessage.success('工单已删除')
-    selectedOrderId.value = ''
-    detail.value = null
-    resultObjects.value = []
+    if (selectedOrderId.value === targetOrderId) {
+      selectedOrderId.value = ''
+      detail.value = null
+      resultObjects.value = []
+    }
     await loadOrders()
   } catch {
     ElMessage.error('删除失败')
   } finally {
     deleteLoading.value = false
+  }
+}
+
+async function batchDeleteOrders() {
+  if (!selectedOrderIds.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除选中的 ${selectedOrderIds.value.length} 个工单及其关联实例，删除后不可恢复，继续吗？`,
+      '确认批量删除',
+      {
+        confirmButtonText: '批量删除',
+        cancelButtonText: '返回',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  batchDeleteLoading.value = true
+  try {
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    const allOk = showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
+    if (allOk && selectedOrderIds.value.includes(selectedOrderId.value)) {
+      selectedOrderId.value = ''
+      detail.value = null
+      resultObjects.value = []
+    }
+    selectedOrderIds.value = []
+    await loadOrders()
+  } catch {
+    ElMessage.error('批量删除失败')
+  } finally {
+    batchDeleteLoading.value = false
   }
 }
 
@@ -271,6 +429,14 @@ onMounted(loadOrders)
   flex-shrink: 0;
 }
 
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .panel-title {
   font-size: 15px;
   font-weight: 600;
@@ -286,31 +452,14 @@ onMounted(loadOrders)
   color: var(--text-secondary);
 }
 
-.order-items {
+.orders-table {
   flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  min-height: 0;
+  overflow: auto;
 }
 
-.order-item {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--bg-tertiary);
+.orders-table :deep(.el-table__row) {
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.order-item:hover {
-  border-color: var(--el-color-primary-light-5);
-}
-
-.order-item.active {
-  border-color: var(--accent-primary);
-  background: rgba(37, 99, 235, 0.06);
 }
 
 .order-item-name {

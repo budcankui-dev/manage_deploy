@@ -70,18 +70,9 @@
                   controls-position="right"
                 />
               </label>
-              <label>
-                <span>单节点槽位上限</span>
-                <el-input-number
-                  v-model="form.benchmark_execution_defaults.per_compute_slot_limit"
-                  :min="1"
-                  :max="4"
-                  controls-position="right"
-                />
-              </label>
             </div>
             <p class="form-hint">
-              业务测评页默认使用该并发数分批执行；系统会按节点资源、路由结果和当前占用情况等待空闲槽位，避免资源争用影响基线判定。
+              业务测评页默认使用该并发数分批执行；系统会按节点资源、路由结果和当前占用情况自动等待，避免资源争用影响基线判定。
             </p>
           </el-card>
 

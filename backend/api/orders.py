@@ -261,22 +261,38 @@ async def _detach_order_references_before_delete(db: AsyncSession, order: TaskOr
 async def _resolve_batch_orders(
     db: AsyncSession,
     request: BatchOperationRequest,
+    current_user: User | None = None,
 ) -> tuple[list[TaskOrder], dict[str, str]]:
     """Resolve explicit order IDs or a benchmark run scope for batch operations."""
     if request.order_ids:
         rows = await db.execute(select(TaskOrder).where(TaskOrder.id.in_(request.order_ids)))
-        order_by_id = {order.id: order for order in rows.scalars().all()}
+        order_by_id = {
+            order.id: order
+            for order in rows.scalars().all()
+            if order.deleted_at is None
+        }
         missing = {
             order_id: "Order not found"
             for order_id in request.order_ids
             if order_id not in order_by_id
         }
-        return [order_by_id[order_id] for order_id in request.order_ids if order_id in order_by_id], missing
+        visible_orders: list[TaskOrder] = []
+        for order_id in request.order_ids:
+            order = order_by_id.get(order_id)
+            if not order:
+                continue
+            if current_user is not None and not _is_admin_user(current_user) and order.user_id != current_user.id:
+                missing[order_id] = "Access denied"
+                continue
+            visible_orders.append(order)
+        return visible_orders, missing
 
     if not request.benchmark_run_id:
         raise HTTPException(status_code=400, detail="order_ids or benchmark_run_id is required")
 
-    query = select(TaskOrder)
+    query = select(TaskOrder).where(TaskOrder.deleted_at.is_(None))
+    if current_user is not None:
+        query = _apply_order_visibility(query, current_user)
     if request.is_benchmark is not None:
         query = query.where(TaskOrder.is_benchmark == request.is_benchmark)
     else:
@@ -1244,10 +1260,10 @@ async def batch_delete_orders(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Admin role required")
     succeeded: list[str] = []
-    orders, failed = await _resolve_batch_orders(db, request)
+    if not _is_admin_user(current_user) and not request.order_ids:
+        raise HTTPException(status_code=403, detail="普通用户只能批量删除自己选中的工单")
+    orders, failed = await _resolve_batch_orders(db, request, current_user)
     task_scheduler = TaskScheduler()
     for order in orders:
         try:
@@ -1278,10 +1294,10 @@ async def batch_cleanup_order_instances(
     current_user: User = Depends(get_current_user),
 ):
     """清理工单关联实例，保留工单、路由结果、评估结果和结果对象作为验收证据。"""
-    if current_user.role != UserRole.ADMIN:
+    if not _is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Admin role required")
     succeeded: list[str] = []
-    orders, failed = await _resolve_batch_orders(db, request)
+    orders, failed = await _resolve_batch_orders(db, request, current_user)
     task_scheduler = TaskScheduler()
 
     for order in orders:
@@ -1320,6 +1336,56 @@ async def batch_cleanup_order_instances(
 
     await db.commit()
     return BatchOperationResponse(succeeded=succeeded, failed=failed)
+
+
+@router.post("/{order_id}/stop-runtime")
+async def stop_order_runtime(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """停止并清理工单当前部署实例，保留工单、路由结果、评估和结果证据。"""
+    row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    order = row.scalar_one_or_none()
+    if not order or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _ensure_order_owner_or_admin(order, current_user)
+
+    if not order.materialized_instance_id:
+        return {"message": "当前工单没有已部署实例", "stopped": False}
+
+    result = await db.execute(
+        select(TaskInstance)
+        .options(selectinload(TaskInstance.nodes))
+        .where(TaskInstance.id == order.materialized_instance_id)
+    )
+    instance = result.scalar_one_or_none()
+    if not instance:
+        if order.status == OrderStatus.MATERIALIZED:
+            order.status = OrderStatus.COMPLETED
+        await db.commit()
+        return {"message": "运行实例已不存在，已保留工单证据", "stopped": False}
+
+    executor = DAGExecutor(db)
+    if instance.status not in (TaskStatus.STOPPED, TaskStatus.PENDING):
+        success, error = await executor.execute_dag_stop(instance.id)
+        if not success:
+            raise HTTPException(status_code=500, detail=error or "停止实例失败")
+
+    await emit_release_events_for_order(
+        db,
+        order,
+        reason="stop_order_runtime",
+        metadata={"instance_id": instance.id, "preserve_order": True},
+    )
+    cleanup_warnings = await cleanup_instance_runtime(db, instance)
+    if cleanup_warnings:
+        raise HTTPException(status_code=409, detail=f"容器清理失败：{'；'.join(cleanup_warnings)}")
+    await purge_instance_artifacts_preserve_evidence(db, instance.id)
+    if order.status == OrderStatus.MATERIALIZED:
+        order.status = OrderStatus.COMPLETED
+    await db.commit()
+    return {"message": "任务运行已停止，工单证据已保留", "stopped": True}
 
 
 @router.post("/{order_id}/materialize", response_model=dict)

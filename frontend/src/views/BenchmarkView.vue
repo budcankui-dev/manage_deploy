@@ -209,13 +209,13 @@
         <el-input-number
           v-model="executionForm.max_parallel"
           :min="1"
-          :max="computeBaselineCount || 3"
+          :max="10"
           controls-position="right"
           size="small"
           :disabled="evaluationFlowBusy"
         />
         <span class="control-hint">
-          默认按可用计算节点分批执行；同一 GPU 同时只运行 1 个测评任务，超过可用槽位会自动等待。
+          默认按可用计算资源分批执行；资源暂不可用时会自动等待，不会强行占用。
         </span>
       </div>
       <div class="status-grid">

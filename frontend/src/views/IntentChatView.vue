@@ -85,6 +85,16 @@
         <div class="orders-panel-toolbar">
           <span class="orders-panel-title">我的工单</span>
           <div class="orders-toolbar-right">
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="!selectedOrderIds.length"
+              :loading="batchOrderDeleteLoading"
+              @click="deleteSelectedOrders"
+            >
+              批量删除
+            </el-button>
             <el-select v-model="orderStatusFilter" placeholder="全部" clearable size="small" style="width: 130px">
               <el-option label="全部" value="" />
               <el-option label="待分配" value="pending" />
@@ -105,7 +115,9 @@
           size="small"
           class="orders-table"
           @row-click="(row) => openOrderDetail(row)"
+          @selection-change="handleOrderSelectionChange"
         >
+          <el-table-column type="selection" width="44" fixed="left" />
           <el-table-column label="任务 ID" width="110">
             <template #default="{ row }">
               <el-tooltip v-if="row.order_id" :content="row.order_id" placement="top">
@@ -171,6 +183,16 @@
             <template #default="{ row }">
               <div class="order-row-actions">
                 <el-button size="small" @click.stop="openOrderDetail(row)">详情</el-button>
+                <el-button
+                  v-if="canStopOrder(row)"
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="orderActionLoading === `stop:${row.order_id || row.id}`"
+                  @click.stop="stopSelectedOrder(row)"
+                >
+                  停止
+                </el-button>
                 <el-button
                   v-if="canCancelOrder(row)"
                   size="small"
@@ -427,6 +449,37 @@
               {{ formatOrderStatus(selectedOrderDetail.status) }}
             </el-tag>
           </div>
+          <div v-if="selectedOrderDetail" class="drawer-actions">
+            <el-button
+              v-if="canStopOrder(selectedOrderDetail)"
+              size="small"
+              type="primary"
+              plain
+              :loading="orderActionLoading === `stop:${selectedOrderId}`"
+              @click="stopSelectedOrder(selectedOrderDetail)"
+            >
+              停止运行
+            </el-button>
+            <el-button
+              v-if="canCancelOrder(selectedOrderDetail)"
+              size="small"
+              type="warning"
+              plain
+              :loading="orderActionLoading === `cancel:${selectedOrderId}`"
+              @click="cancelSelectedOrder(selectedOrderDetail)"
+            >
+              取消工单
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :loading="orderActionLoading === `delete:${selectedOrderId}`"
+              @click="deleteSelectedOrder(selectedOrderDetail)"
+            >
+              删除工单
+            </el-button>
+          </div>
         </div>
       </template>
       <div v-if="orderDetailLoading" class="orders-loading">
@@ -547,9 +600,11 @@ const ordersLoading = ref(false)
 const showOrders = ref(false)
 const orderDrawerVisible = ref(false)
 const selectedOrderId = ref(null)
+const selectedOrderIds = ref([])
 const selectedOrderDetail = ref(null)
 const orderDetailLoading = ref(false)
 const orderActionLoading = ref('')
+const batchOrderDeleteLoading = ref(false)
 const orderStatusFilter = ref('')
 const orderDetailTab = ref('business')
 const orderResultObjects = ref([])
@@ -1042,8 +1097,20 @@ function getOrderId(order) {
   return order?.id || order?.order_id || ''
 }
 
+function handleOrderSelectionChange(rows) {
+  selectedOrderIds.value = rows.map(getOrderId).filter(Boolean)
+}
+
 function canCancelOrder(order) {
   return getOrderStatus(order) === 'pending'
+}
+
+function canStopOrder(order) {
+  const deploymentStatus = order?.deployment_status || order?.instance_status || order?.instance?.status
+  return Boolean(
+    (order?.materialized_instance_id || order?.instance_id || order?.instance_exists || order?.instance?.id) &&
+    ['starting', 'running', 'scheduled', 'stopping'].includes(String(deploymentStatus || ''))
+  )
 }
 
 function formatTaskStatus(status) {
@@ -1245,6 +1312,41 @@ async function cancelSelectedOrder(order = null) {
   }
 }
 
+async function stopSelectedOrder(order = null) {
+  const targetOrderId = getOrderId(order) || selectedOrderId.value
+  if (!targetOrderId || orderActionLoading.value) return
+  try {
+    await ElMessageBox.confirm(
+      '停止运行会停止并清理该工单当前部署的容器，工单、路由结果和已上报结果会保留。继续吗？',
+      '确认停止运行',
+      {
+        confirmButtonText: '停止运行',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  orderActionLoading.value = `stop:${targetOrderId}`
+  try {
+    await ordersApi.stopRuntime(targetOrderId)
+    ElMessage.success('任务运行已停止')
+    await loadOrders()
+    if (selectedOrderId.value === targetOrderId) {
+      await refreshSelectedOrderDetail()
+    }
+    if (conversation.value?.materialized_order_id === targetOrderId) {
+      await loadConversation(conversation.value.id)
+    }
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '停止运行失败'))
+  } finally {
+    orderActionLoading.value = ''
+  }
+}
+
 async function deleteSelectedOrder(order = null) {
   if (orderActionLoading.value) return
   const deletingOrderId = getOrderId(order) || selectedOrderId.value
@@ -1282,6 +1384,50 @@ async function deleteSelectedOrder(order = null) {
     ElMessage.error(extractErrorMessage(err, '删除失败'))
   } finally {
     orderActionLoading.value = ''
+  }
+}
+
+async function deleteSelectedOrders() {
+  if (!selectedOrderIds.value.length || batchOrderDeleteLoading.value) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除选中的 ${selectedOrderIds.value.length} 个工单及其关联实例，删除后不可恢复，继续吗？`,
+      '确认批量删除',
+      {
+        confirmButtonText: '批量删除',
+        cancelButtonText: '返回',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  batchOrderDeleteLoading.value = true
+  try {
+    const deletingIds = [...selectedOrderIds.value]
+    const { data } = await ordersApi.batchDelete(deletingIds)
+    const succeeded = data?.succeeded || []
+    const failed = data?.failed || {}
+    const failedCount = Object.keys(failed).length
+    if (failedCount) {
+      ElMessage.warning(`已删除 ${succeeded.length} 个工单，${failedCount} 个失败`)
+    } else {
+      ElMessage.success(`已删除 ${succeeded.length} 个工单`)
+    }
+    if (selectedOrderId.value && succeeded.includes(selectedOrderId.value)) {
+      orderDrawerVisible.value = false
+      selectedOrderId.value = null
+      selectedOrderDetail.value = null
+      orderResultObjects.value = []
+    }
+    selectedOrderIds.value = []
+    await loadOrders()
+  } catch (err) {
+    ElMessage.error(extractErrorMessage(err, '批量删除失败'))
+  } finally {
+    batchOrderDeleteLoading.value = false
   }
 }
 
