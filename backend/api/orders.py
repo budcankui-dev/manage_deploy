@@ -2534,9 +2534,13 @@ async def _controlled_benchmark_orders(
     db: AsyncSession,
     payload: BenchmarkRunScopedRequest | None,
     current_user: User,
+    *,
+    include_completed: bool = False,
 ) -> list[TaskOrder]:
     query = select(TaskOrder).where(
-        TaskOrder.status == OrderStatus.MATERIALIZED.value,
+        TaskOrder.status.in_([OrderStatus.MATERIALIZED.value, OrderStatus.COMPLETED.value])
+        if include_completed
+        else TaskOrder.status == OrderStatus.MATERIALIZED.value,
         TaskOrder.routing_status.in_(
             [
                 RoutingStatus.COMPLETED.value,
@@ -2696,19 +2700,35 @@ async def start_controlled_routed_benchmark_orders(
     keeping order/evaluation evidence.
     """
     payload = payload or ControlledBenchmarkStartRequest()
-    orders = await _controlled_benchmark_orders(db, payload, current_user)
+    run_orders = await _controlled_benchmark_orders(db, payload, current_user, include_completed=True)
+    orders = [order for order in run_orders if order.status == OrderStatus.MATERIALIZED]
+    startable_instance_ids = {
+        order.materialized_instance_id
+        for order in orders
+        if order.materialized_instance_id
+    }
     recalc_succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(
         db,
-        orders,
+        run_orders,
         missing_metric_is_failure=False,
     )
     if recalc_succeeded:
         await db.flush()
-    instance_map = await _instances_for_orders(db, orders)
-    eval_map = await _latest_evaluations_by_instance(
+    run_instance_map = await _instances_for_orders(db, run_orders)
+    instance_map = {
+        instance_id: instance
+        for instance_id, instance in run_instance_map.items()
+        if instance_id in startable_instance_ids
+    }
+    run_eval_map = await _latest_evaluations_by_instance(
         db,
-        [order.materialized_instance_id for order in orders if order.materialized_instance_id],
+        [order.materialized_instance_id for order in run_orders if order.materialized_instance_id],
     )
+    eval_map = {
+        instance_id: evaluation
+        for instance_id, evaluation in run_eval_map.items()
+        if instance_id in startable_instance_ids
+    }
 
     cleaned: list[str] = []
     failed: dict[str, str] = dict(recalc_failed)
@@ -2727,7 +2747,12 @@ async def start_controlled_routed_benchmark_orders(
                 failed[order.id] = f"cleanup evaluated instance failed: {exc}"
         if cleaned:
             await db.commit()
-            instance_map = await _instances_for_orders(db, orders)
+            run_instance_map = await _instances_for_orders(db, run_orders)
+            instance_map = {
+                instance_id: instance
+                for instance_id, instance in run_instance_map.items()
+                if instance_id in startable_instance_ids
+            }
 
     active_by_slot: defaultdict[str, int] = defaultdict(int)
     active_orders = 0
@@ -2800,23 +2825,27 @@ async def start_controlled_routed_benchmark_orders(
     if payload.wait_seconds:
         await asyncio.sleep(payload.wait_seconds)
 
+    run_instance_map = await _instances_for_orders(db, run_orders)
     eval_map = await _latest_evaluations_by_instance(
         db,
-        [order.materialized_instance_id for order in orders if order.materialized_instance_id],
+        [order.materialized_instance_id for order in run_orders if order.materialized_instance_id],
     )
     success_count = sum(1 for evaluation in eval_map.values() if evaluation.business_success)
     evaluated_count = len(eval_map)
     pending_to_start = 0
-    for order in orders:
+    active_orders = 0
+    for order in run_orders:
         instance_id = order.materialized_instance_id
         if not instance_id or instance_id in eval_map:
             continue
-        instance = instance_map.get(instance_id)
-        if instance is None or instance.status not in (TaskStatus.RUNNING, TaskStatus.STARTING):
+        instance = run_instance_map.get(instance_id)
+        if instance and instance.status in (TaskStatus.RUNNING, TaskStatus.STARTING):
+            active_orders += 1
+        elif order.status == OrderStatus.MATERIALIZED:
             pending_to_start += 1
 
     return {
-        "total": len(orders),
+        "total": len(run_orders),
         "evaluated": evaluated_count,
         "success": success_count,
         "active": active_orders,

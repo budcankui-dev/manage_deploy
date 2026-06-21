@@ -3243,6 +3243,131 @@ async def test_controlled_benchmark_claims_instance_and_dispatches_background_st
 
 
 @pytest.mark.asyncio
+async def test_controlled_benchmark_reports_whole_run_after_completed_cleanup(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-whole-run-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+
+    run_id = "whole-run-count"
+
+    def runtime_config(idx: int) -> dict:
+        return {
+            "benchmark": {"run_id": run_id},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+                "routing_strategy": "resource_guarantee",
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            },
+            "routing_result": {
+                "strategy": "resource_guarantee",
+                "placements": [
+                    {"task_node_id": "source", "topology_node_id": "h1"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                    {"task_node_id": "sink", "topology_node_id": "h2"},
+                ],
+            },
+        }
+
+    completed_orders = [
+        TaskOrder(
+            user_id=user.id,
+            template_id=template_id,
+            name=f"completed benchmark order {idx}",
+            status=OrderStatus.COMPLETED,
+            routing_status=RoutingStatus.COMPLETED.value,
+            runtime_config=runtime_config(idx),
+            is_benchmark=True,
+            materialized_instance_id=f"completed-whole-run-{idx}",
+        )
+        for idx in range(18)
+    ]
+    pending_orders = [
+        TaskOrder(
+            user_id=user.id,
+            template_id=template_id,
+            name=f"pending benchmark order {idx}",
+            status=OrderStatus.MATERIALIZED,
+            routing_status=RoutingStatus.COMPLETED.value,
+            runtime_config=runtime_config(idx + 18),
+            is_benchmark=True,
+            materialized_instance_id=f"pending-whole-run-{idx}",
+        )
+        for idx in range(12)
+    ]
+    pending_instances = [
+        TaskInstance(
+            id=f"pending-whole-run-{idx}",
+            template_id=template_id,
+            name=f"pending whole run instance {idx}",
+            status=TaskStatus.PENDING,
+            deployment_mode=DeploymentMode.IMMEDIATE,
+        )
+        for idx in range(12)
+    ]
+    evaluations = [
+        BusinessObjectiveEvaluation(
+            instance_id=f"completed-whole-run-{idx}",
+            task_type="high_throughput_matmul",
+            routing_strategy="resource_guarantee",
+            metric_key="effective_gflops",
+            actual_value=240,
+            target_value=200,
+            operator=">=",
+            unit="GFLOPS",
+            business_success=True,
+        )
+        for idx in range(18)
+    ]
+    db_session.add_all(completed_orders + pending_orders + pending_instances + evaluations)
+    await db_session.flush()
+
+    async def ok_preflight(*args, **kwargs):
+        class Result:
+            ok = True
+            conflicts = []
+
+        return Result()
+
+    dispatched = []
+
+    def fake_background_start(instance_id):
+        dispatched.append(instance_id)
+
+    monkeypatch.setattr(orders_api, "_preflight_instance_plan", ok_preflight)
+    monkeypatch.setattr(orders_api, "_schedule_background_benchmark_start", fake_background_start)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={
+            "benchmark_run_id": run_id,
+            "task_type": "high_throughput_matmul",
+            "max_parallel": 10,
+            "per_compute_slot_limit": 1,
+            "cleanup_evaluated": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 30
+    assert body["evaluated"] == 18
+    assert body["success"] == 18
+    assert body["started"] == 1
+    assert body["active"] == 1
+    assert body["pending_to_start"] == 11
+    assert body["failed"] == {}
+    assert dispatched == ["pending-whole-run-0"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_order_instances_rejects_active_instance(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     headers, admin = await _auth_headers(client, db_session, username="active-cleanup-admin", role=UserRole.ADMIN)
