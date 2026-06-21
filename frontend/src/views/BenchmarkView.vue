@@ -129,7 +129,13 @@
       <div class="pressure-row">
         <div class="pressure-form">
           <span>任务数</span>
-          <el-input-number v-model="benchmarkForm.count" :min="1" :max="30" controls-position="right" />
+          <el-input-number
+            v-model="benchmarkForm.count"
+            :min="1"
+            :max="30"
+            controls-position="right"
+            @update:model-value="markBenchmarkCountTouched"
+          />
           <template v-if="taskType === 'high_throughput_matmul'">
             <span>矩阵</span>
             <el-input-number v-model="benchmarkForm.matrix_size" :min="256" :step="256" controls-position="right" />
@@ -223,6 +229,7 @@
           controls-position="right"
           size="small"
           :disabled="evaluationFlowBusy"
+          @update:model-value="markExecutionFormTouched"
         />
         <span class="control-hint">
           默认按可用计算资源分批执行；资源暂不可用时会自动等待，不会强行占用。
@@ -559,10 +566,12 @@ const benchmarkForm = reactive({
   measured_frames: 30,
   work_units: 45000,
 })
+const benchmarkCountTouched = ref(false)
 const executionForm = reactive({
   max_parallel: 3,
   per_compute_slot_limit: 1,
 })
+const executionFormTouched = ref(false)
 let resumeTimer = null
 let visibilityHandler = null
 const stoppedBenchmarkRunKeys = new Set()
@@ -1140,6 +1149,14 @@ function normalizeBenchmarkExecutionDefaults(value) {
   }
 }
 
+function markExecutionFormTouched() {
+  executionFormTouched.value = true
+}
+
+function markBenchmarkCountTouched() {
+  benchmarkCountTouched.value = true
+}
+
 async function loadNodes() {
   nodesLoading.value = true
   try {
@@ -1159,9 +1176,13 @@ async function loadSystemSettings() {
     settingsForm.show_internal_controls = data?.show_internal_controls ?? false
     settingsForm.show_routing_dag_json = data?.show_routing_dag_json ?? false
     settingsForm.benchmark_execution_defaults = normalizeBenchmarkExecutionDefaults(data?.benchmark_execution_defaults)
-    benchmarkForm.count = settingsForm.benchmark_execution_defaults.default_task_count
-    executionForm.max_parallel = settingsForm.benchmark_execution_defaults.max_parallel
-    executionForm.per_compute_slot_limit = settingsForm.benchmark_execution_defaults.per_compute_slot_limit
+    if (!benchmarkCountTouched.value && !batchCreateLoading.value && !fullFlowLoading.value) {
+      benchmarkForm.count = settingsForm.benchmark_execution_defaults.default_task_count
+    }
+    if (!executionFormTouched.value && !startLoading.value && !fullFlowLoading.value) {
+      executionForm.max_parallel = settingsForm.benchmark_execution_defaults.max_parallel
+      executionForm.per_compute_slot_limit = settingsForm.benchmark_execution_defaults.per_compute_slot_limit
+    }
   } finally {
     settingsLoading.value = false
   }
@@ -1322,6 +1343,13 @@ function scheduleResumeBenchmarkRun(delay = 0) {
     resumeTimer = null
     resumeBenchmarkRunIfNeeded()
   }, delay)
+}
+
+function cancelResumeBenchmarkRun() {
+  if (resumeTimer) {
+    clearTimeout(resumeTimer)
+    resumeTimer = null
+  }
 }
 
 async function refreshBenchmarkPage() {
@@ -1623,6 +1651,7 @@ async function stopCurrentBenchmarkRun() {
   const runKey = currentBenchmarkRunKey()
   benchmarkStopLoading.value = true
   markBenchmarkRunStopped(runKey)
+  cancelResumeBenchmarkRun()
   controlledStartStatus.value = '正在停止当前测评轮次并释放运行实例...'
   clearCurrentBenchmarkRunSession()
   clearActiveBenchmarkRunnerKey(runKey)
@@ -1631,10 +1660,14 @@ async function stopCurrentBenchmarkRun() {
       benchmark_run_id: currentBenchmarkRunId.value,
       task_type: taskType.value,
       is_benchmark: true,
-    })
+    }, { silentError: true })
     showBatchOperationResult(data, (count) => `已处理 ${count} 个测评工单`)
     await Promise.all([loadOrders(), loadSummary()])
     controlledStartStatus.value = '当前测评轮次已停止；如需重新测评，可删除本轮工单后重新创建并运行。'
+  } catch {
+    await Promise.all([loadOrders(), loadSummary()]).catch(() => {})
+    controlledStartStatus.value = '已停止前端自动推进；停止请求未完成，请刷新状态后重试停止或清理本轮实例。'
+    ElMessage.warning('已停止前端自动推进，但后端停止请求未完成，请刷新后重试。')
   } finally {
     benchmarkStopLoading.value = false
   }
@@ -1714,6 +1747,10 @@ async function doStartAll() {
   setActiveBenchmarkRunnerKey(runnerKey)
   markBenchmarkRunSession('running')
   controlledStartStatus.value = '正在按小批次运行测评任务...'
+  const runId = currentBenchmarkRunId.value
+  const runTaskType = taskType.value
+  const maxParallel = clampInteger(executionForm.max_parallel, settingsForm.benchmark_execution_defaults.max_parallel, 1, 10)
+  const perComputeSlotLimit = clampInteger(executionForm.per_compute_slot_limit, settingsForm.benchmark_execution_defaults.per_compute_slot_limit, 1, 4)
   try {
     let latest = null
     for (let round = 1; round <= 180; round += 1) {
@@ -1721,13 +1758,24 @@ async function doStartAll() {
         controlledStartStatus.value = '当前测评轮次已停止。'
         break
       }
-      const { data } = await ordersApi.startControlledRouted({
-        benchmark_run_id: currentBenchmarkRunId.value,
-        task_type: taskType.value,
-        max_parallel: executionForm.max_parallel,
-        per_compute_slot_limit: executionForm.per_compute_slot_limit,
-        cleanup_evaluated: true,
-      })
+      let data
+      try {
+        const response = await ordersApi.startControlledRouted({
+          benchmark_run_id: runId,
+          task_type: runTaskType,
+          max_parallel: maxParallel,
+          per_compute_slot_limit: perComputeSlotLimit,
+          cleanup_evaluated: true,
+        }, { silentError: true })
+        data = response.data
+      } catch (error) {
+        if (isBenchmarkRunStopped(runnerKey)) {
+          controlledStartStatus.value = '当前测评轮次已停止。'
+          break
+        }
+        controlledStartStatus.value = '测评推进请求失败，请检查当前轮次状态后重试运行或停止本轮测评。'
+        throw error
+      }
       latest = data
       await Promise.all([loadOrders(), loadSummary()])
       const total = Number(data.total || summaryAggregate.value?.count || 0)

@@ -122,12 +122,16 @@ export const ordersApi = {
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
   batchAutoRoute: (data = {}) => api.post('/orders/batch-auto-route', data),
   startAllRouted: (data = {}) => api.post('/orders/start-all-routed', data),
-  startControlledRouted: (data = {}) => api.post(
+  startControlledRouted: (data = {}, config = {}) => api.post(
     '/orders/start-controlled-routed',
     data,
-    withTimeout(BENCHMARK_FLOW_TIMEOUT)
+    { ...withTimeout(BENCHMARK_FLOW_TIMEOUT), ...config }
   ),
-  stopBenchmarkRun: (data = {}) => api.post('/orders/benchmark/stop', data, withTimeout(LONG_RUNNING_TIMEOUT)),
+  stopBenchmarkRun: (data = {}, config = {}) => api.post(
+    '/orders/benchmark/stop',
+    data,
+    { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }
+  ),
   recalculateBenchmark: (data = {}) => api.post('/orders/benchmark/recalculate', data, withTimeout(LONG_RUNNING_TIMEOUT)),
   cleanupInstances: (payload) => api.post(
     '/orders/batch/cleanup-instances',
