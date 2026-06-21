@@ -14,7 +14,21 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INVENTORY="${INVENTORY:-${ROOT}/ops/inventory/topology_nodes.json}"
-REGISTRY="${PRIVATE_REGISTRY:-10.112.244.94:5000}"
+NETWORK_PROFILE="${NETWORK_PROFILE:-acceptance}"
+case "${NETWORK_PROFILE}" in
+  current|dev|development|campus)
+    PROFILE_REGISTRY="10.112.244.94:5000"
+    ;;
+  acceptance|accept|prod|production)
+    NETWORK_PROFILE="acceptance"
+    PROFILE_REGISTRY="172.16.0.254:5000"
+    ;;
+  *)
+    echo "Unsupported NETWORK_PROFILE=${NETWORK_PROFILE}; expected current or acceptance" >&2
+    exit 2
+    ;;
+esac
+REGISTRY="${PRIVATE_REGISTRY:-${PROFILE_REGISTRY}}"
 NODE_AGENT_IMAGE="${NODE_AGENT_IMAGE:-${REGISTRY}/node-agent:dev}"
 ALIYUN_MIRROR="${ALIYUN_MIRROR:-}"
 
@@ -33,7 +47,8 @@ Options:
 
 Environment:
   INVENTORY            Inventory JSON path. Default: ops/inventory/topology_nodes.json
-  PRIVATE_REGISTRY     Private registry host:port. Default: 10.112.244.94:5000
+  NETWORK_PROFILE      acceptance -> 172.16 management addresses; current -> 10.112 fallback addresses.
+  PRIVATE_REGISTRY     Private registry host:port. Default follows NETWORK_PROFILE.
   NODE_AGENT_IMAGE     Node Agent image. Default: $PRIVATE_REGISTRY/node-agent:dev
   ALIYUN_MIRROR        Optional Docker registry mirror URL.
   SSHPASS              Optional password for sshpass mode. Prefer SSH keys when possible.
@@ -56,16 +71,22 @@ if [[ "${VERIFY_ONLY}" == "0" && "${CONFIGURE_DOCKER}" == "0" && "${DEPLOY_AGENT
 fi
 
 mapfile -t NODES < <(
-  python3 - "$INVENTORY" <<'PY'
+  python3 - "$INVENTORY" "$NETWORK_PROFILE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+profile = sys.argv[2]
 for item in data.get("terminal_nodes", []):
+    management_ip = item.get("management_ip")
+    if profile == "acceptance":
+        management_ip = item.get("acceptance_management_ip") or management_ip
+    if not management_ip:
+        raise SystemExit(f"{item.get('hostname') or item!r} missing management_ip for {profile}")
     print("\t".join([
         item["hostname"],
-        item["management_ip"],
+        management_ip,
         str(item.get("ssh_port", 22)),
         item.get("ssh_user", "switchpc1"),
         str(item.get("agent_port", 8001)),
@@ -95,17 +116,23 @@ fi
 
 if [[ "${CONFIGURE_DOCKER}" == "1" ]]; then
   sudo mkdir -p /etc/docker
-  python3 - <<'PY' | sudo tee /etc/docker/daemon.json >/dev/null
+  cat >/tmp/manage_deploy_update_daemon.py <<'PY'
 import json
+import shutil
+import time
+import sys
 from pathlib import Path
 
 path = Path("/etc/docker/daemon.json")
 data = {}
 if path.exists():
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        data = {}
+    text = path.read_text().strip()
+    if text:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            print(f"Invalid {path}: {exc}. Refuse to overwrite Docker daemon config.", file=sys.stderr)
+            raise SystemExit(21)
 mirror = "${ALIYUN_MIRROR}"
 registry = "${REGISTRY}"
 if mirror:
@@ -115,8 +142,14 @@ if mirror:
 insecure = data.setdefault("insecure-registries", [])
 if registry not in insecure:
     insecure.append(registry)
-print(json.dumps(data, indent=2, ensure_ascii=False))
+if path.exists():
+    backup = path.with_name(f"daemon.json.bak.{time.strftime('%Y%m%d%H%M%S')}")
+    shutil.copy2(path, backup)
+tmp = path.with_name("daemon.json.tmp")
+tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+tmp.replace(path)
 PY
+  sudo python3 /tmp/manage_deploy_update_daemon.py
   sudo systemctl restart docker
 fi
 

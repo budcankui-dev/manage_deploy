@@ -45,6 +45,14 @@ class Target:
     iface: str | None = None
 
 
+@dataclass(frozen=True)
+class Source:
+    name: str
+    ssh_args: str
+    login_kind: str = "key"
+    password: str | None = None
+
+
 class RemoteProbeError(RuntimeError):
     def __init__(self, returncode: int, stderr: str):
         super().__init__(stderr.strip() or f"remote probe failed with exit code {returncode}")
@@ -54,6 +62,19 @@ class RemoteProbeError(RuntimeError):
 
 def _load_inventory(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_password(path: Path | None) -> str | None:
+    if not path:
+        return None
+    text = path.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if "SSH password:" in line:
+            value = line.split(":", 1)[1].strip()
+            if value:
+                return value
+    stripped = text.strip()
+    return stripped or None
 
 
 def _management_targets(inventory: dict) -> list[Target]:
@@ -143,6 +164,23 @@ def _source_ssh_args(item: dict[str, Any], *, profile: str, connect_timeout: int
     )
 
 
+def _source_for_item(
+    item: dict[str, Any],
+    *,
+    profile: str,
+    connect_timeout: int,
+    password: str | None,
+) -> Source | None:
+    ssh_args = _source_ssh_args(item, profile=profile, connect_timeout=connect_timeout)
+    hostname = item.get("hostname")
+    if not hostname or not ssh_args:
+        return None
+    if password and (item.get("node_kind") == "terminal" or str(hostname).startswith("h")):
+        ssh_args = ssh_args.replace("-o BatchMode=yes ", "")
+        return Source(name=hostname, ssh_args=ssh_args, login_kind="password", password=password)
+    return Source(name=hostname, ssh_args=ssh_args)
+
+
 def _sources_for_scope(
     inventory: dict,
     *,
@@ -150,16 +188,22 @@ def _sources_for_scope(
     scope: str,
     profile: str,
     connect_timeout: int,
-) -> dict[str, str]:
+    password_file: Path | None = None,
+) -> dict[str, Source]:
     if scope == "default":
-        return dict(DEFAULT_SSH_SOURCES)
+        return {name: Source(name=name, ssh_args=ssh) for name, ssh in DEFAULT_SSH_SOURCES.items()}
 
-    sources: dict[str, str] = {}
+    sources: dict[str, Source] = {}
+    password = _load_password(password_file)
     for item in _source_items_for_plane(inventory, plane, scope):
-        hostname = item.get("hostname")
-        ssh_args = _source_ssh_args(item, profile=profile, connect_timeout=connect_timeout)
-        if hostname and ssh_args:
-            sources[hostname] = ssh_args
+        source = _source_for_item(
+            item,
+            profile=profile,
+            connect_timeout=connect_timeout,
+            password=password,
+        )
+        if source:
+            sources[source.name] = source
     return sources
 
 
@@ -248,6 +292,60 @@ def _run_remote(targets: list[Target], *, ssh: str, timeout: int) -> list[tuple[
     return results
 
 
+def _tcl_word(value: str) -> str:
+    return "{" + value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}") + "}"
+
+
+def _expect_script_for_password_source(source: Source, remote_script: str) -> str:
+    if not source.password:
+        raise ValueError("password source requires a password")
+    ssh_parts = ["ssh", *shlex.split(source.ssh_args), remote_script]
+    spawn_line = "spawn " + " ".join(_tcl_word(part) for part in ssh_parts)
+    return "\n".join(
+        [
+            "set timeout 45",
+            f"set password {_tcl_word(source.password)}",
+            spawn_line,
+            "expect {",
+            '  -re {(?i)password:} { send -- "$password\\r"; exp_continue }',
+            "  eof",
+            "}",
+            "catch wait result",
+            "exit [lindex $result 3]",
+        ]
+    )
+
+
+def _run_remote_source(targets: list[Target], *, source: Source, timeout: int) -> list[tuple[Target, bool]]:
+    if source.login_kind != "password":
+        return _run_remote(targets, ssh=source.ssh_args, timeout=timeout)
+
+    by_name = {target.name: target for target in targets}
+    remote_script = _remote_probe_script(targets, timeout=timeout)
+    command = ["/usr/bin/expect", "-c", _expect_script_for_password_source(source, remote_script)]
+    completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if completed.returncode != 0:
+        raise RemoteProbeError(completed.returncode, completed.stderr or completed.stdout)
+
+    results: list[tuple[Target, bool]] = []
+    seen: set[str] = set()
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[0] not in {"OK", "FAIL"}:
+            continue
+        name = parts[1]
+        target = by_name.get(name)
+        if not target:
+            continue
+        seen.add(name)
+        results.append((target, parts[0] == "OK"))
+
+    for target in targets:
+        if target.name not in seen:
+            results.append((target, False))
+    return results
+
+
 def _print_results(title: str, results: list[tuple[Target, bool]]) -> int:
     ok = 0
     fail = 0
@@ -279,10 +377,10 @@ def _print_matrix_source_error(source: str, exc: RemoteProbeError, target_count:
     return target_count
 
 
-def _selected_sources(source_args: list[str] | None) -> dict[str, str]:
+def _selected_sources(source_args: list[str] | None) -> dict[str, Source]:
     if not source_args:
-        return dict(DEFAULT_SSH_SOURCES)
-    sources: dict[str, str] = {}
+        return {name: Source(name=name, ssh_args=ssh) for name, ssh in DEFAULT_SSH_SOURCES.items()}
+    sources: dict[str, Source] = {}
     for item in source_args:
         if "=" not in item:
             raise SystemExit("--source must be NAME=SSH_ARGS, for example compute-1='-p 2345 user@host'")
@@ -291,7 +389,7 @@ def _selected_sources(source_args: list[str] | None) -> dict[str, str]:
         ssh = ssh.strip()
         if not name or not ssh:
             raise SystemExit("--source must include both name and SSH args")
-        sources[name] = ssh
+        sources[name] = Source(name=name, ssh_args=ssh)
     return sources
 
 
@@ -304,6 +402,7 @@ def _run_matrix(
     source_profile: str,
     timeout: int,
     ssh_connect_timeout: int,
+    password_file: Path | None,
     list_sources: bool = False,
 ) -> int:
     failures = 0
@@ -319,18 +418,20 @@ def _run_matrix(
                 scope=source_scope,
                 profile=source_profile,
                 connect_timeout=ssh_connect_timeout,
+                password_file=password_file,
             )
         )
         if not sources:
             raise SystemExit(f"no SSH sources selected for {current_plane} plane")
         print(f"=== {current_plane} matrix ===")
         if list_sources:
-            for source_name, ssh in sources.items():
-                print(f"{source_name:10} {ssh}")
+            for source_name, source in sources.items():
+                suffix = " login=password" if source.login_kind == "password" else ""
+                print(f"{source_name:10} {source.ssh_args}{suffix}")
             continue
-        for source_name, ssh in sources.items():
+        for source_name, source in sources.items():
             try:
-                results = _run_remote(targets, ssh=ssh, timeout=timeout)
+                results = _run_remote_source(targets, source=source, timeout=timeout)
             except RemoteProbeError as exc:
                 failures += _print_matrix_source_error(source_name, exc, len(targets))
                 continue
@@ -396,6 +497,14 @@ def main() -> int:
         action="store_true",
         help="Print generated matrix SSH sources without running ping probes",
     )
+    parser.add_argument(
+        "--password-file",
+        type=Path,
+        help=(
+            "Local ignored file containing terminal SSH password. "
+            "Used only for generated terminal sources in --matrix mode."
+        ),
+    )
     args = parser.parse_args()
 
     inventory = _load_inventory(args.inventory)
@@ -414,6 +523,7 @@ def main() -> int:
                 source_profile=args.source_profile,
                 timeout=args.timeout,
                 ssh_connect_timeout=args.ssh_connect_timeout,
+                password_file=args.password_file,
                 list_sources=args.list_sources,
             )
             else 0

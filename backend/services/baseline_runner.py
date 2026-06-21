@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from services.deployment_profile import image_ref
+
 logger = logging.getLogger(__name__)
 
 # 固定基准测试参数（测试方案规定，不可变）
@@ -28,7 +30,7 @@ BENCHMARK_PROFILES = {
         "metric_key": "effective_gflops",
         "operator": ">=",
         "unit": "GFLOPS",
-        "image": "10.112.244.94:5000/scientific-matmul:dev",
+        "image": image_ref("scientific-matmul"),
         "command": "python3 /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",
@@ -51,7 +53,7 @@ BENCHMARK_PROFILES = {
         "metric_key": "frame_latency_p90_ms",
         "operator": "<=",
         "unit": "ms",
-        "image": "10.112.244.94:5000/low-latency-video:dev",
+        "image": image_ref("low-latency-video"),
         "command": "python /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",

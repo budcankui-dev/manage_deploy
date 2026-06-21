@@ -19,7 +19,7 @@
 ```text
 benchmark_run_id: high_throughput_matmul-20260612095418
 结果: 30 / 30 已评估，30 / 30 达标，业务目标成功率 100.0%
-页面: http://10.112.244.94:8182/benchmark?benchmark_run_id=high_throughput_matmul-20260612095418
+页面: http://172.16.0.254:8182/benchmark?benchmark_run_id=high_throughput_matmul-20260612095418
 ```
 
 视频 AI 推理当前已完成小批量联调轮次 `video-route-pool-check-20260612160633`，4 / 4 可评价且达标，可用于证明固定视频、YOLO 推理、GPU 分配和带框预览链路；正式留档仍需按同一页面流程重新执行不少于 30 个可评价工单的验收轮次。
@@ -68,8 +68,8 @@ docs/roadmap.md
 验证管理面：
 
 ```bash
-curl -sS http://10.112.244.94:8181/docs >/dev/null
-curl -sS http://10.112.244.94:8181/api/nodes | python3 -m json.tool
+curl -sS http://172.16.0.254:8181/docs >/dev/null
+curl -sS http://172.16.0.254:8181/api/nodes | python3 -m json.tool
 ```
 
 启用业务面 IPv6 时，管理节点 `backend/.env` 至少确认：
@@ -90,7 +90,7 @@ ssh manage-admin "grep 'Resolved MANAGER_PUBLIC_URL' /home/bupt/manage_deploy/ba
 期望包含：
 
 ```text
-Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181
+Resolved MANAGER_PUBLIC_URL=http://172.16.0.254:8181
 ```
 
 ## 3. AMD64 Worker 镜像
@@ -99,7 +99,7 @@ Resolved MANAGER_PUBLIC_URL=http://10.112.244.94:8181
 
 ```bash
 ssh manage-admin "cd /home/bupt/manage_deploy && \
-  WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+  WORKER_IMAGE=172.16.0.254:5000/scientific-matmul \
   WORKER_TAG=dev \
   WORKER_PLATFORM=linux/amd64 \
   WORKER_PUSH=1 \
@@ -137,19 +137,19 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
   printf 'FROM localhost:5000/scientific-matmul:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
     >/tmp/Dockerfile.scientific-matmul-ipv6 && \
   docker build -f /tmp/Dockerfile.scientific-matmul-ipv6 \
-    -t 10.112.244.94:5000/scientific-matmul:dev workers && \
-  docker push 10.112.244.94:5000/scientific-matmul:dev"
+    -t 172.16.0.254:5000/scientific-matmul:dev workers && \
+  docker push 172.16.0.254:5000/scientific-matmul:dev"
 ```
 
 视频 worker 同理：
 
 ```bash
 ssh manage-admin "cd /home/bupt/manage_deploy && \
-  printf 'FROM 10.112.244.94:5000/low-latency-video:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
+  printf 'FROM 172.16.0.254:5000/low-latency-video:dev\nCOPY _common/http_server.py /app/_common/http_server.py\n' \
     >/tmp/Dockerfile.low-latency-video-ipv6 && \
   docker build -f /tmp/Dockerfile.low-latency-video-ipv6 \
-    -t 10.112.244.94:5000/low-latency-video:dev workers && \
-  docker push 10.112.244.94:5000/low-latency-video:dev"
+    -t 172.16.0.254:5000/low-latency-video:dev workers && \
+  docker push 172.16.0.254:5000/low-latency-video:dev"
 ```
 
 推送后，三台业务节点必须重新 `docker pull` 对应 tag。Node Agent 不会自动拉取已存在的同名旧 tag。
@@ -158,7 +158,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
 
 ```bash
 ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
-  WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+  WORKER_IMAGE=172.16.0.254:5000/scientific-matmul \
   WORKER_TAG=dev \
   DEMO_BASE_URL=http://127.0.0.1:8181 \
   PYTHONPATH=. \
@@ -172,7 +172,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
 ```bash
 ssh manage-admin "cd /home/bupt/manage_deploy && \
   WORKER_KIND=video \
-  WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+  WORKER_IMAGE=172.16.0.254:5000/low-latency-video \
   WORKER_TAG=dev \
   WORKER_PLATFORM=linux/amd64 \
   WORKER_PUSH=1 \
@@ -183,7 +183,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
 
 ```bash
 ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
-  WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+  WORKER_IMAGE=172.16.0.254:5000/low-latency-video \
   WORKER_TAG=dev \
   DEMO_BASE_URL=http://127.0.0.1:8181 \
   PYTHONPATH=. \
@@ -196,7 +196,7 @@ ssh manage-admin "cd /home/bupt/manage_deploy/backend && \
 
 ```bash
 for host in manage-compute-1 manage-compute-2 manage-compute-3; do
-  ssh "$host" "hostname; docker --version; docker pull 10.112.244.94:5000/scientific-matmul:dev"
+  ssh "$host" "hostname; docker --version; docker pull 172.16.0.254:5000/scientific-matmul:dev"
 done
 ```
 
@@ -204,7 +204,7 @@ done
 
 ```json
 {
-  "insecure-registries": ["10.112.244.94:5000"]
+  "insecure-registries": ["172.16.0.254:5000"]
 }
 ```
 
@@ -217,12 +217,12 @@ done
 真实验收前先跑一次命令行 E2E，禁止设置 `WORKER_SKIP_BUILD=1`，禁止跳过远端镜像/架构/Agent 检查：
 
 ```bash
-BASE_URL=http://10.112.244.94:8181 \
+BASE_URL=http://172.16.0.254:8181 \
 E2E_REMOTE=1 \
-WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_IMAGE=172.16.0.254:5000/scientific-matmul \
 WORKER_TAG=dev \
 E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
-E2E_NODE_AGENT_HOSTS="10.112.38.25 10.112.17.51 10.112.59.209" \
+E2E_NODE_AGENT_HOSTS="172.16.0.101 172.16.0.102 172.16.0.103" \
 MATMUL_MATRIX_SIZE=1024 \
 MATMUL_BATCH_COUNT=50 \
 ./scripts/e2e_matmul_live.sh
@@ -242,7 +242,7 @@ docker logs --tail 50 <sink_container_name>
 
 - `PEER_*_URL` 使用 `http://[2001:...]:port` 方括号 IPv6 URL。
 - `TASK_PEERS_JSON` 中 `business_address` 为 IPv6。
-- `MANAGER_API_BASE=http://10.112.244.94:8181`。
+- `MANAGER_API_BASE=http://172.16.0.254:8181`。
 - sink 日志出现 `SINK_DONE`，业务评估返回 `business_success=true`。
 
 ## 6. 页面验收流程
@@ -250,7 +250,7 @@ docker logs --tail 50 <sink_container_name>
 打开：
 
 ```text
-http://10.112.244.94:8182/benchmark
+http://172.16.0.254:8182/benchmark
 ```
 
 操作顺序：
@@ -274,10 +274,10 @@ http://10.112.244.94:8182/benchmark
 
 ```bash
 RUN_ID="high_throughput_matmul-YYYYMMDDHHMMSS"
-curl -sS "http://10.112.244.94:8181/api/business-tasks/summary?is_benchmark=true&benchmark_run_id=${RUN_ID}" \
+curl -sS "http://172.16.0.254:8181/api/business-tasks/summary?is_benchmark=true&benchmark_run_id=${RUN_ID}" \
   | tee reports/business_objective_summary_$(date +%Y%m%d_%H%M%S).json
 
-curl -sS "http://10.112.244.94:8181/api/orders?is_benchmark=true&benchmark_run_id=${RUN_ID}&limit=100" \
+curl -sS "http://172.16.0.254:8181/api/orders?is_benchmark=true&benchmark_run_id=${RUN_ID}&limit=100" \
   | tee reports/business_objective_orders_${RUN_ID}.json
 ```
 

@@ -18,6 +18,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+sys.path.insert(0, str(BACKEND_DIR))
+
+from services.deployment_profile import deployment_profile
+
 DEFAULT_INVENTORY = ROOT / "ops" / "inventory" / "topology_nodes.json"
 
 
@@ -73,7 +78,7 @@ def _node_payload(
     item: dict[str, Any],
     registry_host: str | None = None,
     *,
-    network_profile: str = "current",
+    network_profile: str = "acceptance",
 ) -> dict[str, Any]:
     management_ip = _profiled_value(item, "management_ip", network_profile)
     if not management_ip:
@@ -121,21 +126,23 @@ def _load_inventory(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Register topology nodes in the manager API")
-    parser.add_argument("--api-base", default=os.environ.get("MANAGER_API_BASE", "http://10.112.244.94:8181"))
+    parser.add_argument(
+        "--network-profile",
+        default=os.environ.get("NETWORK_PROFILE", "acceptance"),
+        help="acceptance/accept/prod uses 172.16 management and 3012 IPv6 fields when present; current/dev/campus uses 10.112 debug addresses",
+    )
+    parser.add_argument("--api-base")
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--include-compute", action="store_true", help="also upsert compute_nodes from inventory")
     parser.add_argument("--include-admin", action="store_true", help="also upsert manager node from inventory")
-    parser.add_argument(
-        "--network-profile",
-        choices=["current", "acceptance"],
-        default=os.environ.get("NETWORK_PROFILE", "current"),
-        help="current uses 10.112 debug addresses; acceptance uses 172.16 management and 3012 IPv6 fields when present",
-    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    profile = deployment_profile(args.network_profile)
+    network_profile = profile.name
+    api_base = (args.api_base or profile.manager_api_base).rstrip("/")
 
     inventory = _load_inventory(args.inventory)
-    registry = os.environ.get("PRIVATE_REGISTRY", "10.112.244.94:5000")
+    registry = profile.registry
     items: list[dict[str, Any]] = list(inventory.get("terminal_nodes") or [])
     if args.include_compute:
         items.extend(inventory.get("compute_nodes") or [])
@@ -146,7 +153,7 @@ def main() -> int:
         print(
             json.dumps(
                 [
-                    _node_payload(item, registry, network_profile=args.network_profile)
+                    _node_payload(item, registry, network_profile=network_profile)
                     for item in items
                 ],
                 ensure_ascii=False,
@@ -155,23 +162,23 @@ def main() -> int:
         )
         return 0
 
-    token = _login(args.api_base.rstrip("/"))
-    nodes = _request("GET", f"{args.api_base.rstrip('/')}/api/nodes", token=token)
+    token = _login(api_base)
+    nodes = _request("GET", f"{api_base}/api/nodes", token=token)
     by_hostname = {item["hostname"]: item for item in nodes}
 
     for item in items:
-        payload = _node_payload(item, registry, network_profile=args.network_profile)
+        payload = _node_payload(item, registry, network_profile=network_profile)
         existing = by_hostname.get(payload["hostname"])
         if existing:
             result = _request(
                 "PUT",
-                f"{args.api_base.rstrip('/')}/api/nodes/{existing['id']}",
+                f"{api_base}/api/nodes/{existing['id']}",
                 token=token,
                 payload=payload,
             )
             action = "updated"
         else:
-            result = _request("POST", f"{args.api_base.rstrip('/')}/api/nodes", token=token, payload=payload)
+            result = _request("POST", f"{api_base}/api/nodes", token=token, payload=payload)
             action = "created"
         print(f"{action}: {result['hostname']} {result.get('management_ip')} {result.get('node_kind')}")
 

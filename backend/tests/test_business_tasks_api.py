@@ -2331,8 +2331,13 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
     assert len(result_body["network_bindings"]) == 2
     compute_binding = next(item for item in result_body["network_bindings"] if item["to"] == "compute")
     sink_binding = next(item for item in result_body["network_bindings"] if item["to"] == "sink")
+    assert compute_binding["src_host"] == "h1"
+    assert isinstance(compute_binding["src_named_ports"]["source"], int)
+    assert compute_binding["src_access_url"] == f"http://10.0.1.1:{compute_binding['src_named_ports']['source']}"
     assert compute_binding["dst_host"] == "compute-1"
     assert isinstance(compute_binding["dst_port"], int)
+    assert sink_binding["src_host"] == "compute-1"
+    assert sink_binding["src_named_ports"] == {"compute": compute_binding["dst_port"]}
     assert sink_binding["dst_host"] == "h2"
 
     start_blocked = await client.post(f"/api/instances/{result_body['instance_id']}/start")

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from enums import NodeKind
 from models import Node as NodeModel, NodeBaseline
+from services.deployment_profile import current_deployment_profile
 from services.topology_catalog import COMPUTE_NODE_ALIASES
 
 router = APIRouter(prefix="/api/baselines", tags=["baselines"])
@@ -31,7 +32,8 @@ def _is_compute_node(node: NodeModel) -> bool:
 def _normalize_baseline_error(exc: Exception) -> str:
     message = str(exc)
     if "server gave HTTP response to HTTPS client" in message:
-        return "节点 Docker 未配置私有镜像仓库 10.112.244.94:5000 为可信 HTTP 仓库，请修复节点 Docker 配置后重测"
+        registry = current_deployment_profile().registry
+        return f"节点 Docker 未配置私有镜像仓库 {registry} 为可信 HTTP 仓库，请修复节点 Docker 配置后重测"
     if "无法从容器日志解析基准测试结果" in message:
         return "容器已启动但未输出基线结果，请检查该节点镜像版本、GPU 后端或容器日志"
     if "500 Internal Server Error" in message:

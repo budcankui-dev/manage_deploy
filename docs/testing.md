@@ -79,7 +79,7 @@ npm run ui:smoke
 
 ```bash
 cd frontend
-UI_SMOKE_BASE_URL=http://10.112.244.94:8182 npm run ui:smoke
+UI_SMOKE_BASE_URL=http://172.16.0.254:8182 npm run ui:smoke
 ```
 
 前端浏览器 E2E：
@@ -175,7 +175,7 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 `WORKER_SKIP_BUILD=1` 只允许在已经确认目标节点可拉取正确 tag、正确 registry、正确 CPU 架构的镜像后使用。远程 AMD64 节点测试前必须验证镜像是 `linux/amd64`，不能复用 macOS Docker Desktop 上默认构建出的本地镜像。
 
-真实拓扑测试时，优先使用 admin-server 私有仓库镜像，例如 `10.112.244.94:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。
+真实拓扑测试时，优先使用验收管理网私有仓库镜像，例如 `172.16.0.254:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。`10.112.244.94:5000` 只作为校园网开发/远程维护回退入口。
 
 期望：
 
@@ -191,7 +191,7 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 页面入口：
 
 ```text
-http://10.112.244.94:8182/benchmark
+http://172.16.0.254:8182/benchmark
 ```
 
 正式验收步骤：
@@ -239,7 +239,7 @@ PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 8
 
 期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。正式验收建议使用并发 8、单条最多重试 5 次、失败间隔 5 秒的参数；在当前固定数据集规模下，正常应在 10 多分钟内完成。若评测中断，可追加 `--resume` 续跑已完成样本。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
 
-正式展示以管理节点页面为准。`reports/intent_eval_online.json` 是文件产物，不写入 MySQL；本地 `127.0.0.1` 运行出的报告不会自动出现在管理节点页面。准备让验收方或用户查看时，应在管理节点页面运行评测，或显式同步本地 `reports/intent_eval_online.json`、`reports/intent_eval_online.status.json` 和对应 `reports/intent_eval_runs/*.json` 到 `/home/bupt/manage_deploy/reports/` 后再刷新 `http://10.112.244.94:8182/intent-evaluation`。
+正式展示以管理节点页面为准。`reports/intent_eval_online.json` 是文件产物，不写入 MySQL；本地 `127.0.0.1` 运行出的报告不会自动出现在管理节点页面。准备让验收方或用户查看时，应在管理节点页面运行评测，或显式同步本地 `reports/intent_eval_online.json`、`reports/intent_eval_online.status.json` 和对应 `reports/intent_eval_runs/*.json` 到 `/home/bupt/manage_deploy/reports/` 后再刷新 `http://172.16.0.254:8182/intent-evaluation`。校园网远程维护阶段可用 `http://10.112.244.94:8182/intent-evaluation` 访问同一管理节点前端。
 
 ## 用户端意图对话闭环
 
@@ -370,7 +370,7 @@ PY
 
 ```bash
 WORKER_KIND=video \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=172.16.0.254:5000/low-latency-video \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \
@@ -381,7 +381,7 @@ WORKER_PUSH=1 \
 
 ```bash
 cd backend
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=172.16.0.254:5000/low-latency-video \
 WORKER_TAG=dev \
 DEMO_BASE_URL=http://127.0.0.1:8181 \
 PYTHONPATH=. \

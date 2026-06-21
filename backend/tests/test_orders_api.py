@@ -349,7 +349,7 @@ async def test_user_delete_materialized_order_cleans_instance_before_deleting(cl
         id="delete-materialized-instance",
         template_id=order.template_id,
         name="delete-materialized-instance",
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.STOPPED,
         source_order_id=order.id,
     )
     order.conversation_id = conversation.id
@@ -393,7 +393,7 @@ async def test_user_delete_materialized_order_keeps_record_when_runtime_cleanup_
         id="delete-cleanup-fails-instance",
         template_id=order.template_id,
         name="delete-cleanup-fails-instance",
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.STOPPED,
         source_order_id=order.id,
     )
     order.materialized_instance_id = instance.id
@@ -424,6 +424,36 @@ async def test_user_delete_materialized_order_keeps_record_when_runtime_cleanup_
 
 
 @pytest.mark.asyncio
+async def test_user_delete_running_materialized_order_requires_stop_first(client, db_session, monkeypatch):
+    headers, owner = await _auth_headers(client, db_session, username="order-delete-running")
+    order = await _create_order(db_session, "delete-running-order", owner=owner, status=OrderStatus.MATERIALIZED)
+    instance = TaskInstance(
+        id="delete-running-instance",
+        template_id=order.template_id,
+        name="delete-running-instance",
+        status=TaskStatus.RUNNING,
+        source_order_id=order.id,
+    )
+    order.materialized_instance_id = instance.id
+    db_session.add(instance)
+    await db_session.commit()
+
+    async def fake_cleanup(*_args, **_kwargs):
+        raise AssertionError("运行中实例必须先停止，不应直接清理容器")
+
+    monkeypatch.setattr("api.orders.cleanup_instance_runtime", fake_cleanup)
+
+    response = await client.delete("/api/orders/delete-running-order", headers=headers)
+
+    assert response.status_code == 409
+    assert "先停止任务后再清理" in response.json()["detail"]
+    order_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order.id))
+    assert order_row.scalar_one_or_none() is not None
+    instance_row = await db_session.execute(select(TaskInstance).where(TaskInstance.id == instance.id))
+    assert instance_row.scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
 async def test_admin_batch_delete_materialized_order_cleans_instance_before_deleting(client, db_session, monkeypatch):
     _owner_headers, owner = await _auth_headers(client, db_session, username="batch-delete-owner")
     admin_headers, _admin = await _auth_headers(client, db_session, username="batch-delete-admin", role=UserRole.ADMIN)
@@ -432,7 +462,7 @@ async def test_admin_batch_delete_materialized_order_cleans_instance_before_dele
         id="batch-delete-materialized-instance",
         template_id=order.template_id,
         name="batch-delete-materialized-instance",
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.STOPPED,
         source_order_id=order.id,
     )
     order.materialized_instance_id = instance.id
@@ -530,7 +560,7 @@ async def test_admin_batch_delete_keeps_order_when_runtime_cleanup_fails(client,
         id="batch-delete-cleanup-fails-instance",
         template_id=order.template_id,
         name="batch-delete-cleanup-fails-instance",
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.STOPPED,
         source_order_id=order.id,
     )
     order.materialized_instance_id = instance.id
@@ -570,7 +600,7 @@ async def test_admin_batch_cleanup_reports_runtime_cleanup_warnings_as_failure(c
         id="batch-cleanup-warning-instance",
         template_id=order.template_id,
         name="batch-cleanup-warning-instance",
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.STOPPED,
         source_order_id=order.id,
     )
     order.materialized_instance_id = instance.id

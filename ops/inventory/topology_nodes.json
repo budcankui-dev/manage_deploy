@@ -37,10 +37,11 @@
       "business_ip": "10.112.17.51",
       "acceptance_management_ip": "172.16.0.102",
       "acceptance_business_ip": "172.16.0.102",
-      "acceptance_business_ipv6": "3012:9::319a:124f:5a8:51e4",
+      "acceptance_business_ipv6": "3012:9::fc36:9ea:22bf:a73",
       "acceptance_business_ipv6_candidates": [
         "3012:9::319a:124f:5a8:51e4",
-        "3012:9::fc36:9ea:22bf:a73"
+        "3012:9::fc36:9ea:22bf:a73",
+        "3012:9::c14e:d12f:1fd6:d2a1"
       ],
       "management_iface": "enp4s0",
       "business_iface": "enx9c69d3680d3d",

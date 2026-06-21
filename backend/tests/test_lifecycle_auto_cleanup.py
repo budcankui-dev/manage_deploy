@@ -397,7 +397,12 @@ async def test_restore_pending_jobs_registers_overdue_running_end_job(db_session
 
 async def _seed_minimum_business_fixture(client):
     node_ids = []
-    for idx, hostname in enumerate(["lc-worker-a", "lc-worker-b", "lc-worker-c"], start=1):
+    node_kinds = {
+        "h1": "terminal",
+        "compute-1": "worker",
+        "h2": "terminal",
+    }
+    for idx, hostname in enumerate(["h1", "compute-1", "h2"], start=1):
         response = await client.post(
             "/api/nodes",
             json={
@@ -405,6 +410,7 @@ async def _seed_minimum_business_fixture(client):
                 "agent_address": f"http://127.0.0.1:803{idx}",
                 "management_ip": f"10.0.0.{20 + idx}",
                 "business_ip": f"10.0.1.{20 + idx}",
+                "node_kind": node_kinds[hostname],
             },
         )
         assert response.status_code == 200
@@ -460,9 +466,9 @@ async def test_business_task_defaults_to_scheduled_with_end_time(client, db_sess
         "routing_result": {
             "strategy": "fastest_completion",
             "placements": [
-                {"task_node_id": "source", "topology_node_id": "lc-worker-a"},
-                {"task_node_id": "compute", "topology_node_id": "lc-worker-b", "gpu_device": "0"},
-                {"task_node_id": "sink", "topology_node_id": "lc-worker-c"},
+                {"task_node_id": "source", "topology_node_id": "h1"},
+                {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                {"task_node_id": "sink", "topology_node_id": "h2"},
             ],
         },
     }

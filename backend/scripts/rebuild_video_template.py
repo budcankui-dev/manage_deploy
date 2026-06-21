@@ -16,12 +16,13 @@ sys.path.insert(0, str(BACKEND_DIR / "scripts"))
 from httpx import AsyncClient
 
 from rebuild_matmul_template import auto_port, get_compute_node_ids
+from services.deployment_profile import image_repo
 
 WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
-WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "10.112.244.94:5000/low-latency-video")
+WORKER_IMAGE = os.environ.get("WORKER_IMAGE", image_repo("low-latency-video"))
 ENDPOINT_WORKER_IMAGE = os.environ.get(
     "VIDEO_ENDPOINT_WORKER_IMAGE",
-    "10.112.244.94:5000/low-latency-video-endpoint",
+    image_repo("low-latency-video-endpoint"),
 )
 
 # Role-specific image overrides let source/sink run on small terminal disks

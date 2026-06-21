@@ -14,15 +14,21 @@ import json
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import requests
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_DIR))
+
+from services.deployment_profile import current_deployment_profile, image_ref
 
 
 TASK_CONFIG = {
     "high_throughput_matmul": {
         "message": "矩阵乘法任务，从 h1 到 h2，256阶矩阵，10批，现在开始跑30分钟，资源保障策略",
-        "endpoint_image": "10.112.244.94:5000/scientific-matmul-endpoint:dev",
+        "endpoint_image_name": "scientific-matmul-endpoint",
         "destination_port": 9000,
         "source_command": "python3 /app/src/source_main.py",
         "metric_key": "effective_gflops",
@@ -42,7 +48,7 @@ TASK_CONFIG = {
     },
     "low_latency_video_pipeline": {
         "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，30fps，低时延转发策略，现在开始跑30分钟",
-        "endpoint_image": "10.112.244.94:5000/low-latency-video-endpoint:dev",
+        "endpoint_image_name": "low-latency-video-endpoint",
         "destination_port": 9100,
         "source_command": "python3 /app/src/source_main.py",
         "metric_key": "frame_latency_p90_ms",
@@ -281,8 +287,9 @@ def _wait_receiver_result(
 
 
 def main() -> int:
+    profile = current_deployment_profile()
     parser = argparse.ArgumentParser(description="compute-only + manual endpoint container E2E")
-    parser.add_argument("--base-url", default="http://10.112.244.94:8181")
+    parser.add_argument("--base-url", default=profile.manager_api_base)
     parser.add_argument("--username", default="user")
     parser.add_argument("--password", default="user")
     parser.add_argument("--task-type", choices=sorted(TASK_CONFIG), default="high_throughput_matmul")
@@ -296,6 +303,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = TASK_CONFIG[args.task_type]
+    endpoint_image = image_ref(str(config["endpoint_image_name"]))
     if args.destination_port is None:
         args.destination_port = int(config["destination_port"])
     base = args.base_url.rstrip("/")
@@ -351,7 +359,7 @@ def main() -> int:
         node=destination_node,
         task_id=demo_task_id,
         node_id="receiver",
-        image=config["endpoint_image"],
+        image=endpoint_image,
         command=f"python3 /app/src/receiver_main.py --port {args.destination_port}",
         env=_receiver_env(destination_node, args.destination_port),
     )
@@ -436,7 +444,7 @@ def main() -> int:
         node=source_node,
         task_id=demo_task_id,
         node_id="source",
-        image=config["endpoint_image"],
+        image=endpoint_image,
         command=config["source_command"],
         env=source_env,
     )

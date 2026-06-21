@@ -108,6 +108,44 @@ async def test_batch_baseline_returns_readable_partial_failures(client, monkeypa
     assert body["failed"] == [
         {
             "node": "compute-2",
-            "error": "节点 Docker 未配置私有镜像仓库 10.112.244.94:5000 为可信 HTTP 仓库，请修复节点 Docker 配置后重测",
+            "error": "节点 Docker 未配置私有镜像仓库 172.16.0.254:5000 为可信 HTTP 仓库，请修复节点 Docker 配置后重测",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_baseline_registry_error_uses_active_profile(client, monkeypatch):
+    monkeypatch.setenv("NETWORK_PROFILE", "acceptance")
+    response = await client.post(
+        "/api/nodes",
+        json={
+            "hostname": "compute-1",
+            "display_name": "compute-1",
+            "agent_address": "http://compute-1:8001",
+            "management_ip": "172.16.0.101",
+            "business_ip": "172.16.0.101",
+            "node_kind": "worker",
+            "is_schedulable": True,
+            "is_routable": True,
+        },
+    )
+    assert response.status_code == 200
+
+    async def fake_run_baseline_on_node(endpoint, task_type, runs):
+        raise RuntimeError('Head "https://172.16.0.254:5000/v2/x": http: server gave HTTP response to HTTPS client')
+
+    monkeypatch.setattr("services.baseline_runner.run_baseline_on_node", fake_run_baseline_on_node)
+
+    response = await client.post(
+        "/api/baselines/batch-run",
+        json={"task_type": "high_throughput_matmul", "runs": 1},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["failed"] == [
+        {
+            "node": "compute-1",
+            "error": "节点 Docker 未配置私有镜像仓库 172.16.0.254:5000 为可信 HTTP 仓库，请修复节点 Docker 配置后重测",
         }
     ]

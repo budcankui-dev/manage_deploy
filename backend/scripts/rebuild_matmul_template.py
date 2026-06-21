@@ -31,15 +31,16 @@ import pymysql
 from httpx import ASGITransport, AsyncClient
 
 from config import settings
+from services.deployment_profile import image_repo
 
 WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
 # WORKER_IMAGE may be overridden for local single-host runs. The default stays
 # registry-qualified because acceptance topology nodes must not depend on a
 # local image cache or Docker Hub access.
-WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "10.112.244.94:5000/scientific-matmul")
+WORKER_IMAGE = os.environ.get("WORKER_IMAGE", image_repo("scientific-matmul"))
 ENDPOINT_WORKER_IMAGE = os.environ.get(
     "MATMUL_ENDPOINT_WORKER_IMAGE",
-    "10.112.244.94:5000/scientific-matmul-endpoint",
+    image_repo("scientific-matmul-endpoint"),
 )
 
 # Role-specific image overrides let source/sink use a small endpoint image

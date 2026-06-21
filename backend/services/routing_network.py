@@ -248,11 +248,14 @@ def _binding_for_roles(
     if not dst_machine and dst_topology:
         dst_machine = machines_by_hostname.get(dst_topology)
 
+    src_port_map = _port_map(src_node) if src_node else {}
     port_map = _port_map(dst_node) if dst_node else {}
     external_dst_port = _dag_node_port(dst_role, dag_nodes) if dst_node is None else None
     if external_dst_port is not None:
         port_map = {"external": external_dst_port}
+    src_ports = sorted(set(src_port_map.values()))
     dst_ports = sorted(set(port_map.values()))
+    primary_src_port = src_ports[0] if src_ports else None
     primary_port = dst_ports[0] if dst_ports else None
     flow = dag_edge.get("flow") if isinstance(dag_edge.get("flow"), dict) else {}
     dst_ip = get_business_address(dst_machine, settings.prefer_business_ipv6) if dst_machine else None
@@ -262,6 +265,10 @@ def _binding_for_roles(
     dst_access_url = (
         _display_url_from_callback_url(dst_callback_url)
         or (format_service_url(dst_ip, primary_port) if dst_ip and primary_port else None)
+    )
+    src_access_url = (
+        _display_url_from_callback_url(src_callback_url)
+        or (format_service_url(src_ip, primary_src_port) if src_ip and primary_src_port else None)
     )
 
     binding = {
@@ -274,6 +281,10 @@ def _binding_for_roles(
         "src_topology_node_id": src_topology,
         "src_host": src_machine.hostname if src_machine else src_topology,
         "src_ip": src_ip,
+        "src_port": primary_src_port,
+        "src_ports": src_ports,
+        "src_named_ports": src_port_map,
+        "src_access_url": src_access_url,
         "dst_topology_node_id": dst_topology,
         "dst_host": dst_machine.hostname if dst_machine else dst_topology,
         "dst_ip": dst_ip,

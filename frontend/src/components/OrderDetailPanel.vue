@@ -99,10 +99,19 @@
           <h3 class="section-title">拓扑节点与端口</h3>
           <el-table :data="placementRows" size="small" border empty-text="暂无节点放置信息">
             <el-table-column prop="roleLabel" label="任务角色" width="110" />
-            <el-table-column prop="hostname" label="部署/接入节点" min-width="150" />
+            <el-table-column label="部署/接入节点" min-width="170">
+              <template #default="{ row }">
+                <div class="endpoint-cell">
+                  <span class="endpoint-name">{{ row.hostname || '-' }}</span>
+                  <span v-if="row.topologyNodeId && row.topologyNodeId !== row.hostname" class="endpoint-subtext">
+                    拓扑ID：{{ row.topologyNodeId }}
+                  </span>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column label="业务面地址" min-width="180">
               <template #default="{ row }">
-                <code v-if="row.business_address">{{ row.business_address }}</code>
+                <code v-if="row.business_address" class="endpoint-code">{{ row.business_address }}</code>
                 <span v-else class="muted">未分配或不部署</span>
               </template>
             </el-table-column>
@@ -129,31 +138,46 @@
             </el-table-column>
             <el-table-column label="源端点" min-width="200">
               <template #default="{ row }">
-                <el-tag v-if="row.src_external" type="warning" size="small" effect="plain">外部</el-tag>
-                <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
-                <span>{{ row.src_host || '-' }}</span>
-                <code v-if="row.src_ip">{{ formatHost(row.src_ip) }}</code>
+                <div class="endpoint-cell">
+                  <div class="endpoint-head">
+                    <el-tag v-if="row.src_external" type="warning" size="small" effect="plain">外部</el-tag>
+                    <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
+                    <span class="endpoint-name">{{ row.src_host || '-' }}</span>
+                  </div>
+                  <code v-if="row.src_access_url" class="endpoint-code">{{ row.src_access_url }}</code>
+                  <code v-else-if="row.src_ip && row.src_port" class="endpoint-code">{{ formatHostPort(row.src_ip, row.src_port) }}</code>
+                  <code v-else-if="row.src_ip" class="endpoint-code">{{ formatHost(row.src_ip) }}</code>
+                  <span v-if="namedPortsText(row.src_named_ports)" class="endpoint-subtext">
+                    {{ namedPortsText(row.src_named_ports) }}
+                  </span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="目的端点" min-width="200">
               <template #default="{ row }">
-                <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部</el-tag>
-                <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
-                <span>{{ row.dst_host || '-' }}</span>
-                <code v-if="row.dst_ip && row.dst_port">{{ formatHostPort(row.dst_ip, row.dst_port) }}</code>
-                <template v-else-if="row.dst_ip">
-                  <code>{{ formatHost(row.dst_ip) }}</code>
-                  <span class="muted">{{ bindingPortPlaceholder(row) }}</span>
-                </template>
-                <code v-else-if="row.dst_access_url">{{ row.dst_access_url }}</code>
-                <span v-else class="muted">{{ row.dst_external ? '外部端点未提供接收地址' : '等待端口分配' }}</span>
+                <div class="endpoint-cell">
+                  <div class="endpoint-head">
+                    <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部</el-tag>
+                    <el-tag v-else type="success" size="small" effect="plain">平台</el-tag>
+                    <span class="endpoint-name">{{ row.dst_host || '-' }}</span>
+                  </div>
+                  <code v-if="row.dst_access_url" class="endpoint-code">{{ row.dst_access_url }}</code>
+                  <code v-else-if="row.dst_ip && row.dst_port" class="endpoint-code">{{ formatHostPort(row.dst_ip, row.dst_port) }}</code>
+                  <template v-else-if="row.dst_ip">
+                    <code class="endpoint-code">{{ formatHost(row.dst_ip) }}</code>
+                    <span class="endpoint-subtext">{{ bindingPortPlaceholder(row) }}</span>
+                  </template>
+                  <span v-else class="muted">{{ row.dst_external ? '外部端点未提供接收地址' : '等待端口分配' }}</span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="接入地址" min-width="280">
               <template #default="{ row }">
-                <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部接收</el-tag>
-                <code v-if="row.dst_access_url">{{ row.dst_access_url }}</code>
-                <span v-else class="muted">{{ bindingAccessPlaceholder(row) }}</span>
+                <div class="access-url-cell">
+                  <el-tag v-if="row.dst_external" type="warning" size="small" effect="plain">外部接收</el-tag>
+                  <code v-if="row.dst_access_url" class="endpoint-code">{{ row.dst_access_url }}</code>
+                  <span v-else class="muted">{{ bindingAccessPlaceholder(row) }}</span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="端口名" min-width="140">
@@ -692,6 +716,7 @@ const networkBindingRows = computed(() => {
   const rows = routingResult.value?.network_bindings
   return Array.isArray(rows) ? rows.map((row) => ({
     ...row,
+    src_access_url: sanitizeUserAccessUrl(row.src_access_url),
     dst_access_url: sanitizeUserAccessUrl(row.dst_access_url),
   })) : []
 })
@@ -903,6 +928,7 @@ function normalizePlacementRow(role, placement) {
     roleLabel: roleLabel(roleKey),
     instance_node_name: item.instance_node_name || item.template_node_name || roleKey,
     hostname: item.hostname || item.topology_node_id || (deployable ? '未部署' : '外部端点'),
+    topologyNodeId: item.topology_node_id || item.topologyNodeId || '',
     business_address: item.business_address || item.business_ipv6 || item.business_ip || '',
     deployable,
     container_id: item.container_id || '',
@@ -921,17 +947,27 @@ function normalizePlacementRow(role, placement) {
 
 function networkBindingPlacementEvidence(role) {
   const roleKey = String(role || '').toLowerCase()
-  const binding = networkBindingRows.value.find((row) => String(row.to || '').toLowerCase() === roleKey)
-  if (!binding) return {}
-  const portValues = binding.dst_named_ports && Object.keys(binding.dst_named_ports).length
-    ? binding.dst_named_ports
-    : (binding.dst_port ? { [roleKey || 'service']: binding.dst_port } : {})
-  const portAccessUrls = binding.dst_access_url
-    ? Object.fromEntries(Object.keys(portValues).map((name) => [name, binding.dst_access_url]))
+  const asSource = networkBindingRows.value.find((row) => String(row.from || '').toLowerCase() === roleKey)
+  const asDestination = networkBindingRows.value.find((row) => String(row.to || '').toLowerCase() === roleKey)
+  if (!asSource && !asDestination) return {}
+  const sourcePorts = asSource?.src_named_ports && Object.keys(asSource.src_named_ports).length
+    ? asSource.src_named_ports
+    : (asSource?.src_port ? { [roleKey || 'service']: asSource.src_port } : {})
+  const destinationPorts = asDestination?.dst_named_ports && Object.keys(asDestination.dst_named_ports).length
+    ? asDestination.dst_named_ports
+    : (asDestination?.dst_port ? { [roleKey || 'service']: asDestination.dst_port } : {})
+  const portValues = Object.keys(sourcePorts).length ? sourcePorts : destinationPorts
+  const accessUrl = asSource?.src_access_url
+    || (asSource?.src_ip && asSource?.src_port ? formatHostPort(asSource.src_ip, asSource.src_port) : '')
+    || asDestination?.dst_access_url
+    || (asDestination?.dst_ip && asDestination?.dst_port ? formatHostPort(asDestination.dst_ip, asDestination.dst_port) : '')
+  const portAccessUrls = accessUrl
+    ? Object.fromEntries(Object.keys(portValues).map((name) => [name, accessUrl]))
     : {}
   return {
-    hostname: binding.dst_host,
-    business_address: binding.dst_ip,
+    hostname: asSource?.src_host || asDestination?.dst_host,
+    topology_node_id: asSource?.src_topology_node_id || asDestination?.dst_topology_node_id,
+    business_address: asSource?.src_ip || asDestination?.dst_ip,
     port_values: portValues,
     port_access_urls: portAccessUrls,
   }
@@ -970,6 +1006,7 @@ function namedPortsText(value) {
 
 function portPlaceholder(row) {
   if (!row?.deployable) return '不部署'
+  if (isInstanceCleaned.value && row?.business_address) return '实例已清理，端口未保存'
   if (isDeploymentFailed(row)) return '部署失败未分配'
   return '等待部署分配'
 }
@@ -1614,6 +1651,40 @@ function nodeStatusLabel(value) {
   color: #334155;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.endpoint-cell,
+.access-url-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.endpoint-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.endpoint-name {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.endpoint-subtext {
+  color: #475569;
+  font-size: 12px;
+}
+
+.endpoint-code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  line-height: 1.5;
 }
 
 .json-block {

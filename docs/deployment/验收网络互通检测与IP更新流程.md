@@ -49,7 +49,7 @@ python3 ops/network/acceptance/check_connectivity.py --plane management --matrix
 python3 ops/network/acceptance/check_connectivity.py --plane data --matrix --timeout 1
 ```
 
-当前 2026-06-20 实测基线：
+当前 2026-06-21 实测基线：
 
 ```text
 management matrix:
@@ -58,16 +58,30 @@ compute-2 ok=17 fail=0
 compute-3 ok=17 fail=0
 
 data matrix:
-compute-1 ok=14 fail=2  failed=[compute-2, compute-3]
-compute-2 ok=2  fail=14 failed=[compute-1, compute-3, h1, h2, h3, h5, h6, h7, h8, h9, h10, h11, h12, h13]
-compute-3 ok=1  fail=15 failed=[compute-1, compute-2, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13]
+compute-1 ok=16 fail=0
+compute-2 ok=16 fail=0
+compute-3 ok=16 fail=0
+h1        ok=16 fail=0
+h2        ok=16 fail=0
+h3        ok=16 fail=0
+h4        ok=16 fail=0
+h5        ok=16 fail=0
+h6        ok=16 fail=0
+h7        ok=16 fail=0
+h8        ok=16 fail=0
+h9        ok=16 fail=0
+h10       ok=16 fail=0
+h11       ok=16 fail=0
+h12       ok=16 fail=0
+h13       ok=16 fail=0
 ```
 
 解释：
 
 - 管理面从 3 台计算节点看是全通的。
-- 数据面还不满足验收目标，尤其 compute-2/compute-3 侧大面积不通。
-- 该现象应交给拓扑/路由侧排查上游端口、RA/路由下发、转发表或数据面接线，不要在节点上临时加路由规避。
+- 数据面从 16 个数据面节点作为源看，当前清单里的 16 个数据面目标两两可达。
+- compute-2 主数据面地址已从过期的 `3012:9::319a:124f:5a8:51e4` 更新为 `3012:9::fc36:9ea:22bf:a73`；旧地址仅保留为候选追溯。
+- 16 个主数据面地址均避开 `temporary`、`deprecated` 和 `fe80::/64`。当前主地址多为 `dynamic mngtmpaddr` 且 `valid_lft/preferred_lft forever`；compute-1/2 另有 temporary 地址，但不写入平台主地址。
 
 ## 全量两两互通检测
 
@@ -100,6 +114,18 @@ python3 ops/network/acceptance/check_connectivity.py \
   --source-profile acceptance \
   --timeout 1 \
   --ssh-connect-timeout 5
+```
+
+如果 h1-h13 还没有配置 SSH 免密，可在本地使用 ignored 凭据文件跑全量数据面矩阵。密码文件只放本地 `ops/secrets/`，不要提交：
+
+```bash
+python3 ops/network/acceptance/check_connectivity.py \
+  --plane data \
+  --matrix \
+  --source-scope plane \
+  --source-profile current \
+  --password-file ops/secrets/terminal-credentials.local.md \
+  --timeout 1
 ```
 
 开发阶段如果还依赖 `10.112` 入口，使用：
@@ -216,7 +242,7 @@ python3 scripts/register_topology_nodes.py \
 - 会 down/up 网卡并 flush IPv6 地址。
 - 只适合终端节点数据面地址缺失或异常时，在负责人确认后执行。
 
-这些脚本不处理 compute-2/compute-3 的数据面互通问题。compute 节点的数据面不通时，优先交给拓扑/路由侧确认，不要套用终端节点脚本。
+这些脚本不处理 compute 节点的数据面互通问题。compute 节点的数据面不通时，优先交给拓扑/路由侧确认，不要套用终端节点脚本。
 
 ## 结果记录模板
 

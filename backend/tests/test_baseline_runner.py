@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 from services.baseline_runner import _build_diagnostics, _parse_benchmark_result, _summarize_run_diagnostics, run_benchmark
@@ -71,6 +73,23 @@ def test_video_baseline_metadata_is_lower_is_better():
     assert profile["metric_key"] == "frame_latency_p90_ms"
     assert profile["operator"] == "<="
     assert profile["unit"] == "ms"
+
+
+def test_baseline_images_follow_acceptance_registry_profile(monkeypatch):
+    monkeypatch.setenv("NETWORK_PROFILE", "acceptance")
+    monkeypatch.delenv("PRIVATE_REGISTRY", raising=False)
+
+    module = importlib.import_module("services.baseline_runner")
+    module = importlib.reload(module)
+
+    assert (
+        module.BENCHMARK_PROFILES["high_throughput_matmul"]["image"]
+        == "172.16.0.254:5000/scientific-matmul:dev"
+    )
+    assert (
+        module.BENCHMARK_PROFILES["low_latency_video_pipeline"]["image"]
+        == "172.16.0.254:5000/low-latency-video:dev"
+    )
 
 
 def test_baseline_diagnostics_capture_backend_and_gpu_error():
