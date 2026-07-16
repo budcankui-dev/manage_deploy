@@ -98,6 +98,7 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
         port=9100,
         node_alias="h2",
         topology_node_id="h18015002",
+        management_ip="172.16.0.152",
         business_ip="10.112.253.42",
         business_ipv6="2001:db8::2",
     )
@@ -154,12 +155,22 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     assert "text/html" in content_type
     assert "用户端结果接收器" in body
     assert "video-order-1" in body
+    assert "业务目标口径" in body
+    assert "视频 P90 帧推理时延" in body
+    assert "越低越好" in body
+    assert "基线 × 1.5" in body
     assert "P90 推理时延" in body
     assert "18.6 ms" in body
     assert "车辆" in body
     assert "h2" in body
     assert "h18015002" in body
     assert "2001:db8::2" in body
+    assert "验收演示操作提示" not in body
+    assert "ssh switchpc1@" not in body
+    assert "密码：1234567" not in body
+    assert "docker run --rm --network host" not in body
+    assert "172.16.0.254:5000/low-latency-video-endpoint:dev" not in body
+    assert "python3 /app/src/receiver_main.py --port 9100" not in body
     assert "9100" in body
     assert body.index("切换已接收工单") < body.index("本端接收信息")
     assert body.index("本端接收信息") < body.index("业务结果展示")
@@ -187,6 +198,7 @@ def test_receiver_homepage_supports_switching_between_orders_on_fixed_port(tmp_p
         port=9000,
         node_alias="h1",
         topology_node_id="h18001001",
+        management_ip="172.16.0.151",
         business_ip="10.112.126.124",
     )
     ReceiverHandler.store = ReceiverStore(tmp_path)
@@ -222,8 +234,16 @@ def test_receiver_homepage_supports_switching_between_orders_on_fixed_port(tmp_p
     assert 'value="matmul-order-new"' in body
     assert "?order_id=" not in body
     assert "matmul-order-new" in body
+    assert "业务目标口径" in body
+    assert "矩阵有效计算性能" in body
+    assert "越高越好" in body
+    assert "基线 × 0.8" in body
     assert "有效计算性能" in body
     assert "122.5 GFLOPS" in body
+    assert "验收演示操作提示" not in body
+    assert "ssh switchpc1@" not in body
+    assert "172.16.0.254:5000/scientific-matmul-endpoint:dev" not in body
+    assert "python3 /app/src/receiver_main.py --port 9000" not in body
     assert "矩阵规模" in body
     assert "4096" in body
     assert "输入矩阵 A 样例块" in body

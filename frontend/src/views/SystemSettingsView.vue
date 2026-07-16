@@ -367,7 +367,7 @@ const DEFAULT_TASK_RESOURCE_OVERRIDES = {
 
 const DEFAULT_BENCHMARK_EXECUTION_DEFAULTS = {
   default_task_count: 30,
-  max_parallel: 3,
+  max_parallel: 6,
   per_compute_slot_limit: 1,
 }
 

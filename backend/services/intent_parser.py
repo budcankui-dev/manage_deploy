@@ -186,9 +186,31 @@ def _extract_batch_count(text: str) -> int | None:
 
 def _extract_frame_count(text: str) -> int | None:
     patterns = [
-        r"(\d{1,5})\s*帧",
+        r"(?:视频片段|片段|候选(?:帧)?范围|处理|输入|共|总计|抽取|抽检|抽样)\s*(\d{1,5})\s*帧",
+        r"(\d{1,5})\s*帧\s*(?:视频片段|视频|片段|候选范围)",
         r"frames?\s*[:=]?\s*(\d{1,5})",
         r"frame_count\s*[:=]\s*(\d{1,5})",
+    ]
+    value = _extract_number(text, patterns)
+    if value is not None:
+        return int(value)
+
+    for match in re.finditer(r"(\d{1,5})\s*帧", text):
+        prefix = text[max(0, match.start() - 8):match.start()]
+        suffix = text[match.end():match.end() + 8]
+        if any(marker in prefix for marker in ("统计", "参与统计", "用于统计", "有效", "测评")):
+            continue
+        if "P90" in suffix.upper():
+            continue
+        return int(match.group(1))
+    return None
+
+
+def _extract_measured_frames(text: str) -> int | None:
+    patterns = [
+        r"(?:P90|p90)?\s*(?:有效统计|参与统计|用于统计|统计|测评|抽样统计)\s*(?:推理)?\s*(\d{1,5})\s*帧",
+        r"(\d{1,5})\s*帧\s*(?:P90|p90|参与统计|用于统计|有效统计)",
+        r"measured_frames\s*[:=]\s*(\d{1,5})",
     ]
     value = _extract_number(text, patterns)
     return int(value) if value is not None else None
@@ -351,10 +373,13 @@ def parse_intent(
         result.data_profile.setdefault("profile_id", "video_synthetic")
         result.data_profile.setdefault("source", "synthetic")
         frame_count = _extract_frame_count(text)
+        measured_frames = _extract_measured_frames(text)
         fps = _extract_fps(text)
         resolution = _extract_resolution(text)
         if frame_count is not None:
             result.data_profile["frame_count"] = frame_count
+        if measured_frames is not None:
+            result.data_profile["measured_frames"] = measured_frames
         if fps is not None:
             result.data_profile["fps"] = fps
         if resolution is not None:
@@ -485,7 +510,9 @@ def parse_intent(
             missing.append("批次数（如：50批）")
     elif result.task_type == "low_latency_video_pipeline":
         if not result.data_profile.get("frame_count"):
-            missing.append("视频帧数（如：90帧）")
+            missing.append("视频片段帧范围（如：100帧视频片段）")
+        if not result.data_profile.get("measured_frames"):
+            missing.append("参与统计帧数（如：统计30帧）")
         if not result.data_profile.get("resolution"):
             missing.append("视频分辨率（如：1080p）")
         if not result.data_profile.get("fps"):
@@ -591,8 +618,15 @@ def validate_draft_fields(draft: dict[str, Any]) -> list[str]:
     elif task_type == "low_latency_video_pipeline":
         _require_int_range(
             dp.get("frame_count"),
-            "视频帧数不能为空（例如：100帧）",
-            "视频帧数需要是 1-100000 之间的整数",
+            "视频片段帧范围不能为空（例如：100帧视频片段）",
+            "视频片段帧范围需要是 1-100000 之间的整数",
+            min_value=1,
+            max_value=100000,
+        )
+        _require_int_range(
+            dp.get("measured_frames"),
+            "参与统计帧数不能为空（例如：统计30帧）",
+            "参与统计帧数需要是 1-100000 之间的整数",
             min_value=1,
             max_value=100000,
         )

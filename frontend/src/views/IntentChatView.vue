@@ -98,7 +98,7 @@
             <el-select v-model="orderStatusFilter" placeholder="全部" clearable size="small" style="width: 130px">
               <el-option label="全部" value="" />
               <el-option label="待分配" value="pending" />
-              <el-option label="已部署" value="materialized" />
+              <el-option label="已生成实例/待启动" value="materialized" />
               <el-option label="已完成" value="completed" />
               <el-option label="失败" value="failed" />
               <el-option label="已取消" value="cancelled" />
@@ -501,29 +501,6 @@
               <span class="intent-summary-value">{{ row.value }}</span>
             </div>
           </div>
-          <div v-if="showClientCommands" class="client-command-panel">
-            <div class="client-command-header">
-              <strong>用户端启动步骤</strong>
-              <span>目的端可稍后启动，计算节点会保留较长回调重试窗口；节点分配完成后再从源端提交输入。</span>
-            </div>
-            <ol class="client-step-list">
-              <li>{{ destinationExecutionHint }} 启动接收程序，监听固定业务端口。</li>
-              <li>提交工单后查看“计算服务接入地址”，再由 {{ sourceExecutionHint }} 发起输入。</li>
-              <li>接收器会按工单 ID 区分结果，同类任务无需重复占用新端口。</li>
-            </ol>
-            <el-collapse class="advanced-command-collapse">
-              <el-collapse-item title="高级启动命令（演示人员使用）" name="commands">
-                <div v-if="receiverCommand" class="command-block">
-                  <div class="command-title">{{ destinationExecutionHint }} 先启动接收程序</div>
-                  <pre>{{ receiverCommand }}</pre>
-                </div>
-                <div v-if="sourceCommand" class="command-block">
-                  <div class="command-title">{{ sourceExecutionHint }} 在节点分配完成后提交输入</div>
-                  <pre>{{ sourceCommand }}</pre>
-                </div>
-              </el-collapse-item>
-            </el-collapse>
-          </div>
         </template>
         <el-empty v-else description="发送消息后查看解析结果" :image-size="60" />
         <div v-if="draftValidationErrors.length" class="errors">
@@ -611,11 +588,6 @@ const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
   low_latency_video_pipeline: 9100,
 }
 
-const ENDPOINT_IMAGE_BY_TASK_TYPE = {
-  high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
-  low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
-}
-
 let routingTimer = null
 let abortController = null
 
@@ -633,9 +605,9 @@ function toggleOrders() { showOrders.value = !showOrders.value }
 
 const exampleChips = [
   '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
-  '视频AI推理任务，从 h3 到 h4，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
+  '视频AI推理任务，从 h3 到 h4，720p视频片段100帧，统计30帧P90，30fps，现在开始跑2小时，低时延策略',
   '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
-  '从 h6 到 h7 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
+  '从 h6 到 h7 做工业检测视频推理，720p，视频片段100帧，统计30帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
 ]
 const supportedTaskHints = [
@@ -647,7 +619,7 @@ const supportedTaskHints = [
   {
     type: 'low_latency_video_pipeline',
     label: taskTypeLabel('low_latency_video_pipeline'),
-    hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、固定视频规格、抽检帧数和帧率。',
+    hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、固定视频规格、视频片段帧范围、参与统计帧数和帧率。',
   },
 ]
 
@@ -696,56 +668,15 @@ const effectiveCallbackUrl = computed(() => {
   if (endpointForm.value.callback_url_customized && endpointForm.value.callback_url) {
     url = endpointForm.value.callback_url
   } else if (destinationHost.value && destinationPort.value) {
-    url = `http://${formatCallbackHost(destinationHost.value)}:${destinationPort.value}`
+    url = `http://${formatUrlHost(destinationHost.value)}:${destinationPort.value}`
   } else {
     url = draft.value?.callback_url || draft.value?.runtime_plan?.callback_url || ''
   }
-  return normalizeReceiverHomeUrl(url)
+  return normalizeDisplayUrl(url)
 })
-const sourceExecutionHint = computed(() => formatExecutionHint('源端', draft.value?.source_name, draft.value?.source_endpoint))
-const destinationExecutionHint = computed(() => formatExecutionHint('目的端', draft.value?.destination_name, draft.value?.destination_endpoint))
-const endpointImage = computed(() => ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type] || '')
 const isRouteOnlyDraft = computed(() =>
   Boolean(endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
 )
-const showClientCommands = computed(() =>
-  isDraftSubmittable.value && !isRouteOnlyDraft.value
-)
-const receiverCommand = computed(() => {
-  if (!showClientCommands.value || !endpointImage.value || !destinationPort.value) return ''
-  const destinationEndpoint = draft.value?.destination_endpoint || {}
-  const envLines = [
-    `  -e ENDPOINT_NODE_ALIAS=${draft.value?.destination_name || 'destination'} \\`,
-    `  -e ENDPOINT_TOPOLOGY_NODE_ID=${destinationEndpoint.topology_node_id || draft.value?.destination_name || 'destination'} \\`,
-  ]
-  if (destinationEndpoint.business_ip) envLines.push(`  -e ENDPOINT_BUSINESS_IP=${destinationEndpoint.business_ip} \\`)
-  if (destinationEndpoint.business_ipv6) envLines.push(`  -e ENDPOINT_BUSINESS_IPV6=${destinationEndpoint.business_ipv6} \\`)
-  return [
-    'docker run --rm --network host \\',
-    ...envLines,
-    `  ${endpointImage.value} \\`,
-    `  python /app/src/receiver_main.py --port ${destinationPort.value}`,
-  ].join('\n')
-})
-const sourceCommand = computed(() => {
-  if (!showClientCommands.value || !endpointImage.value) return ''
-  const profile = JSON.stringify(draft.value.data_profile || {})
-  const lines = [
-    '# 节点分配完成后，在工单详情中复制真实“计算服务接入地址”再启动源端',
-    'docker run --rm --network host \\',
-    '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
-    '  -e SOURCE_LISTEN=false \\',
-  ]
-  if (draft.value?.task_type === 'low_latency_video_pipeline') {
-    lines.push('  -e WAIT_FOR_COMPUTE_READY=false \\')
-  }
-  lines.push(
-    `  -e DATA_PROFILE='${profile}' \\`,
-    `  ${endpointImage.value} \\`,
-    '  python /app/src/source_main.py',
-  )
-  return lines.join('\n')
-})
 const isDraftSubmittable = computed(() =>
   draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
 )
@@ -819,7 +750,7 @@ function syncEndpointFormFromDraft(currentDraft) {
   const savedCallbackUrl = currentDraft?.callback_url || runtimePlan.callback_url || ''
   const defaultCallbackUrl = buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan)
   const callbackCustomized = Boolean(
-    savedCallbackUrl && normalizeReceiverHomeUrl(savedCallbackUrl) !== normalizeReceiverHomeUrl(defaultCallbackUrl)
+    savedCallbackUrl && normalizeDisplayUrl(savedCallbackUrl) !== normalizeDisplayUrl(defaultCallbackUrl)
   )
   endpointForm.value = {
     source_endpoint_input: runtimePlan.source_endpoint_input || currentDraft?.source_name || '',
@@ -913,7 +844,8 @@ function getDraftValidationErrors(currentDraft) {
     pushRangeError(errors, dp.matrix_size, '矩阵规模不能为空（例如：1024阶矩阵）', '矩阵规模需要是 128-32768 之间的整数', 128, 32768)
     pushRangeError(errors, dp.batch_count, '批次数不能为空（例如：50批）', '批次数需要是 1-10000 之间的整数', 1, 10000)
   } else if (currentDraft.task_type === 'low_latency_video_pipeline') {
-    pushRangeError(errors, dp.frame_count, '视频帧数不能为空（例如：100帧）', '视频帧数需要是 1-100000 之间的整数', 1, 100000)
+    pushRangeError(errors, dp.frame_count, '视频片段帧范围不能为空（例如：100帧视频片段）', '视频片段帧范围需要是 1-100000 之间的整数', 1, 100000)
+    pushRangeError(errors, dp.measured_frames, '参与统计帧数不能为空（例如：统计30帧）', '参与统计帧数需要是 1-100000 之间的整数', 1, 100000)
     if (isBlankValue(dp.resolution)) {
       add('视频分辨率不能为空（例如：720p 或 1080p）')
     } else if (!['480p', '720p', '1080p', '2k', '4k', '8k'].includes(String(dp.resolution).toLowerCase())) {
@@ -956,31 +888,21 @@ function isHttpUrl(value) {
   }
 }
 
-function formatCallbackHost(host) {
-  const text = String(host || '')
-  return text.includes(':') && !text.startsWith('[') ? `[${text}]` : text
-}
-
-function normalizeReceiverHomeUrl(value) {
-  if (!value) return ''
-  try {
-    const parsed = new URL(String(value))
-    if (parsed.pathname === '/callback') {
-      parsed.pathname = '/'
-      parsed.search = ''
-      parsed.hash = ''
-    }
-    return parsed.toString().replace(/\/$/, '')
-  } catch {
-    return value
-  }
-}
-
 function buildDefaultCallbackUrlForDraft(currentDraft, runtimePlan = {}) {
   const endpoint = currentDraft?.destination_endpoint || {}
   const host = endpoint.business_ipv6 || endpoint.business_ip || currentDraft?.destination_name
   const port = runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type]
-  return host && port ? `http://${formatCallbackHost(host)}:${port}` : ''
+  return host && port ? `http://${formatUrlHost(host)}:${port}` : ''
+}
+
+function formatUrlHost(host) {
+  const text = String(host || '').trim()
+  return text.includes(':') && !text.startsWith('[') ? `[${text}]` : text
+}
+
+function normalizeDisplayUrl(value) {
+  if (!value) return ''
+  return String(value).replace(/\/callback\/?$/, '/').replace(/\/$/, '')
 }
 
 function formatEndpoint(endpoint, fallback) {
@@ -995,12 +917,6 @@ function formatEndpoint(endpoint, fallback) {
 function formatDraftEndpoint(role) {
   if (role === 'source') return formatEndpoint(draft.value?.source_endpoint, draft.value?.source_name)
   return formatEndpoint(draft.value?.destination_endpoint, draft.value?.destination_name)
-}
-
-function formatExecutionHint(label, fallbackName, endpoint) {
-  const address = endpoint?.business_ipv6 || endpoint?.business_ip
-  const name = fallbackName || label
-  return address ? `${label} ${name} / ${address}` : `${label} ${name}`
 }
 
 function orderStatusType(status) {
@@ -1018,7 +934,7 @@ function orderStatusType(status) {
 const ORDER_STATUS_LABEL = {
   pending: '待分配',
   awaiting_routing: '待分配',
-  materialized: '已部署',
+  materialized: '已生成实例/待启动',
   completed: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -1059,7 +975,7 @@ function combinedStatusType(row) {
 
 function combinedStatusLabel(row) {
   if (isRouteOnlyWaitingOrder(row)) return '待启动'
-  if (row.status === 'materialized') return '已部署'
+  if (row.status === 'materialized') return '已生成实例/待启动'
   if (row.status === 'completed') return '已完成'
   if (row.status === 'failed') return '失败'
   if (row.status === 'cancelled') return '已取消'
@@ -1283,7 +1199,7 @@ async function cancelSelectedOrder(order = null) {
 
   orderActionLoading.value = `cancel:${targetOrderId}`
   try {
-    await ordersApi.cancel(targetOrderId)
+    await ordersApi.cancel(targetOrderId, { silentError: true })
     ElMessage.success('工单已取消')
     await loadOrders()
     if (selectedOrderId.value === targetOrderId) {
@@ -1293,7 +1209,9 @@ async function cancelSelectedOrder(order = null) {
       await loadConversation(conversation.value.id)
     }
   } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '取消失败'))
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '取消工单未完成，请刷新状态后重试。'))
+    }
   } finally {
     orderActionLoading.value = ''
   }
@@ -1318,7 +1236,7 @@ async function stopSelectedOrder(order = null) {
 
   orderActionLoading.value = `stop:${targetOrderId}`
   try {
-    await ordersApi.stopRuntime(targetOrderId)
+    await ordersApi.stopRuntime(targetOrderId, { silentError: true })
     ElMessage.success('任务运行已停止')
     await loadOrders()
     if (selectedOrderId.value === targetOrderId) {
@@ -1328,7 +1246,9 @@ async function stopSelectedOrder(order = null) {
       await loadConversation(conversation.value.id)
     }
   } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '停止运行失败'))
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '停止运行未完成，请刷新状态后重试。'))
+    }
   } finally {
     orderActionLoading.value = ''
   }
@@ -1355,7 +1275,7 @@ async function deleteSelectedOrder(order = null) {
 
   orderActionLoading.value = `delete:${deletingOrderId}`
   try {
-    await ordersApi.delete(deletingOrderId)
+    await ordersApi.delete(deletingOrderId, { silentError: true })
     ElMessage.success('工单已删除')
     if (selectedOrderId.value === deletingOrderId) {
       orderDrawerVisible.value = false
@@ -1368,7 +1288,9 @@ async function deleteSelectedOrder(order = null) {
       await loadConversation(conversation.value.id)
     }
   } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '删除失败'))
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '删除工单未完成，请刷新状态后重试。'))
+    }
   } finally {
     orderActionLoading.value = ''
   }
@@ -1394,7 +1316,7 @@ async function deleteSelectedOrders() {
   batchOrderDeleteLoading.value = true
   try {
     const deletingIds = [...selectedOrderIds.value]
-    const { data } = await ordersApi.batchDelete(deletingIds)
+    const { data } = await ordersApi.batchDelete(deletingIds, { silentError: true })
     const succeeded = data?.succeeded || []
     const failed = data?.failed || {}
     const failedCount = Object.keys(failed).length
@@ -1412,7 +1334,9 @@ async function deleteSelectedOrders() {
     selectedOrderIds.value = []
     await loadOrders()
   } catch (err) {
-    ElMessage.error(extractErrorMessage(err, '批量删除失败'))
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '批量删除未完成，请刷新状态后重试。'))
+    }
   } finally {
     batchOrderDeleteLoading.value = false
   }
@@ -2345,78 +2269,6 @@ onBeforeUnmount(() => {
   color: #334155;
   font-size: 12px;
   line-height: 1.5;
-}
-
-.client-command-panel {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.client-command-header {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 8px;
-}
-
-.client-command-header strong {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-
-.client-command-header span,
-.command-note {
-  color: #334155;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.client-step-list {
-  margin: 0 0 8px 18px;
-  color: #1f2937;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.advanced-command-collapse {
-  --el-collapse-header-height: 34px;
-  border-top: 0;
-  border-bottom: 0;
-}
-
-.advanced-command-collapse :deep(.el-collapse-item__header) {
-  color: #1f2937;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.advanced-command-collapse :deep(.el-collapse-item__wrap) {
-  border-bottom: 0;
-}
-
-.command-block {
-  margin-top: 8px;
-}
-
-.command-title {
-  margin-bottom: 4px;
-  color: #1f2937;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.command-block pre {
-  margin: 0;
-  padding: 8px;
-  overflow-x: auto;
-  border-radius: 8px;
-  background: #0f172a;
-  color: #e5e7eb;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 /* ── Composer ── */

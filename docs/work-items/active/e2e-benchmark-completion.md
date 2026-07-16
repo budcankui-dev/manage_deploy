@@ -36,12 +36,12 @@ Last Updated: 2026-06-12
 - 节点类型：admin=管理节点，compute-1/2/3=计算节点，h1-h13=终端节点；当前正式拓扑不再使用“计算+终端”双角色。
 
 ### 部署
-- 后端部署在 admin-server（10.112.244.94:8181）
-- 前端部署在 admin-server（10.112.244.94:8182，nginx）
-- MANAGER_PUBLIC_URL=http://10.112.244.94:8181，容器上报路径正确
+- 后端部署在 admin-server（10.112.73.149:8181）
+- 前端部署在 admin-server（10.112.73.149:8182，nginx）
+- MANAGER_PUBLIC_URL=http://10.112.73.149:8181，容器上报路径正确
 
 ### 视频AI推理链路联调（截至 2026-06-12）
-- 远端视频 worker 镜像已重建并推送：`10.112.244.94:5000/low-latency-video:dev`。
+- 远端视频 worker 镜像已重建并推送：`10.112.73.149:5000/low-latency-video:dev`。
 - `compute-3` 当前 Node Agent 已恢复可达，静态 IP 为 `10.112.59.209`；路由与部署可继续使用该节点。
 - 视频 baseline 已在可调度节点重跑并稳定：
   - compute-1：`frame_latency_p90_ms=9.38037 ms`，`stable=true`
@@ -87,7 +87,7 @@ Last Updated: 2026-06-12
 ```bash
 # 构建并推送 AMD64 视频 worker 镜像
 WORKER_KIND=video \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=10.112.73.149:5000/low-latency-video \
 WORKER_TAG=dev \
 WORKER_PUSH=1 \
 WORKER_PLATFORM=linux/amd64 \
@@ -95,7 +95,7 @@ WORKER_PLATFORM=linux/amd64 \
 
 # 重建视频模板和 catalog
 DEMO_BASE_URL=http://127.0.0.1:8000 \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=10.112.73.149:5000/low-latency-video \
 WORKER_TAG=dev \
 PYTHONPATH=backend \
 backend/venv/bin/python backend/scripts/rebuild_video_template.py

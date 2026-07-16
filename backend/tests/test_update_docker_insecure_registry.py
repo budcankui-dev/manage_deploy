@@ -17,7 +17,7 @@ def test_update_daemon_config_appends_registry_and_preserves_existing_fields(tmp
             {
                 "data-root": "/mnt/data/docker",
                 "runtimes": {"nvidia": {"path": "nvidia-container-runtime"}},
-                "insecure-registries": ["10.112.244.94:5000"],
+                "insecure-registries": ["10.112.73.149:5000"],
             }
         ),
         encoding="utf-8",
@@ -33,7 +33,7 @@ def test_update_daemon_config_appends_registry_and_preserves_existing_fields(tmp
     assert data["data-root"] == "/mnt/data/docker"
     assert data["runtimes"]["nvidia"]["path"] == "nvidia-container-runtime"
     assert data["insecure-registries"] == [
-        "10.112.244.94:5000",
+        "10.112.73.149:5000",
         "172.16.0.254:5000",
     ]
     assert list(tmp_path.glob("daemon.json.bak.*"))

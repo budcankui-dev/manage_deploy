@@ -20,7 +20,7 @@ class ConnectivitySourceTests(unittest.TestCase):
         inventory = {
             "manager": {
                 "hostname": "admin",
-                "management_ip": "10.112.244.94",
+                "management_ip": "10.112.73.149",
                 "acceptance_management_ip": "172.16.0.254",
                 "ssh_user": "bupt",
                 "ssh_port": 22,

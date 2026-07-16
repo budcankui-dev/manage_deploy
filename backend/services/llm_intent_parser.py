@@ -51,7 +51,8 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 | 结束时间 | end_time | string | ISO 格式如 "2025-06-01T10:00:00" |
 | 矩阵规模 | matrix_size | int | 矩阵任务必填，N×N 矩阵的 N 值 |
 | 批次数 | batch_count | int | 矩阵任务必填，计算批次数量 |
-| 视频帧数 | frame_count | int | 视频任务必填，处理多少帧 |
+| 视频片段帧范围 | frame_count | int | 视频任务必填，固定视频片段中参与抽样的候选帧范围 |
+| 参与统计帧数 | measured_frames | int | 视频任务必填，用于计算 P90 时延的有效统计帧数 |
 | 分辨率 | resolution | string | 视频任务必填，如 720p/1080p/4K |
 | 帧率 | fps | int | 视频任务必填，如 30 |
 | 输入token | prompt_tokens | int | LLM任务必填，输入 prompt token 数 |
@@ -84,6 +85,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
   "matrix_size": number 或 null,
   "batch_count": number 或 null,
   "frame_count": number 或 null,
+  "measured_frames": number 或 null,
   "resolution": "string 或 null",
   "fps": number 或 null,
   "prompt_tokens": number 或 null,
@@ -109,7 +111,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 5. "从X到Y" / "源X目的Y" → source_name=X, destination_name=Y
 6. "N阶矩阵" / "NxN" / "规模N" → matrix_size = N
 7. "N批" / "N次" / "batch N" → batch_count = N
-8. "N帧" / "frames=N" → frame_count = N；"30fps" → fps = 30；"1080p/720p/4K" → resolution
+8. "N帧视频片段" / "候选帧范围N帧" / "抽取N帧" / "frames=N" → frame_count = N；"统计N帧" / "参与统计N帧" / "P90统计N帧" / "有效统计N帧" → measured_frames = N；"30fps" → fps = 30；"1080p/720p/4K" → resolution
 9. "prompt_tokens=N" / "prompt N tokens" → prompt_tokens = N；"max_new_tokens=N" / "生成 N tokens" → max_new_tokens = N；"batch_size=N" → batch_size = N
 10. "训练 N 条样本" / "样本数 N" / "samples=N" → sample_count = N
 11. "NGB 数据" / "data=NGB" / "数据规模 NGB" → data_size_gb = N
@@ -393,6 +395,7 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
         "matrix_size",
         "batch_count",
         "frame_count",
+        "measured_frames",
         "fps",
         "prompt_tokens",
         "max_new_tokens",
@@ -522,6 +525,7 @@ def _raw_to_parse_result(
         "matrix_size",
         "batch_count",
         "frame_count",
+        "measured_frames",
         "resolution",
         "fps",
         "prompt_tokens",

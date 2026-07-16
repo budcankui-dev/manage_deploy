@@ -200,6 +200,7 @@ class TaskInstanceResponse(TaskInstanceBase):
 
     id: str
     template_id: str
+    source_order_id: Optional[str] = None
     macro_values: Optional[dict] = None
     status: TaskStatus
     deployment_mode: Optional[DeploymentMode] = None
@@ -219,6 +220,7 @@ class TaskInstanceSimple(TaskInstanceBase):
 
     id: str
     template_id: str
+    source_order_id: Optional[str] = None
     status: TaskStatus
     deployment_mode: Optional[DeploymentMode] = None
     start_time: Optional[datetime] = None
@@ -228,6 +230,13 @@ class TaskInstanceSimple(TaskInstanceBase):
     error_message: Optional[str] = None
     created_at: datetime
     nodes: list["TaskInstanceNodeResponse"] = Field(default_factory=list)
+
+
+class TaskInstanceListResponse(BaseModel):
+    items: list[TaskInstanceSimple]
+    total: int
+    page: int
+    page_size: int
 
 
 class TaskEventResponse(BaseModel):

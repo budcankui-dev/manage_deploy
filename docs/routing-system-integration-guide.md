@@ -135,8 +135,8 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 
 | 项 | 当前值 |
 |----|--------|
-| 平台后端 | 当前校园网调试入口 `http://10.112.244.94:8181`；验收管理网入口 `http://172.16.0.254:8181`；路由服务部署在管理节点时使用 `http://127.0.0.1:8181` |
-| 平台前端 | 当前校园网调试入口 `http://10.112.244.94:8182`；验收管理网入口 `http://172.16.0.254:8182` |
+| 平台后端 | 当前校园网调试入口 `http://10.112.73.149:8181`；验收管理网入口 `http://172.16.0.254:8181`；路由服务部署在管理节点时使用 `http://127.0.0.1:8181` |
+| 平台前端 | 当前校园网调试入口 `http://10.112.73.149:8182`；验收管理网入口 `http://172.16.0.254:8182` |
 | 路由模式 | 开发自测可用系统设置中的本地/模拟路由；联调外部路由时切换为 `外部路由系统`，平台不会自动消费 pending 工单 |
 | 清理状态 | 历史测评工单、任务实例、未确认 release 事件已清理；可直接创建新工单联调 |
 
@@ -147,6 +147,17 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 建议路由系统把 HTTP 超时设置为 **不少于 60 秒，推荐 120 秒**。`/result` 会物化实例并预分配端口，偶尔比普通查询慢；如果请求超时，先查询该工单状态，看到已进入 `network_binding_ready` 或 `completed` 就不要重复扣资源。
 
 平台系统设置中“业务测评路由”应选择 **外部路由系统**。该模式下平台会等待路由系统回写结果，并拒绝内置自动路由接口，避免测评工单绕过外部路由服务。
+
+联调时要把“平台状态”和“路由侧动作”拆开看：
+
+| 平台状态/字段 | 平台含义 | 路由系统应做什么 |
+|---------------|----------|------------------|
+| `pending` | 工单等待路由。 | 先调用 `claim`，claim 成功后再扣减路由侧资源并计算 placements。 |
+| `computing` | 工单已被某个路由进程领取。 | 只有领取成功的进程可以继续 `/result`，其他进程不要重复处理。 |
+| `materialized` / 前端“已生成实例/待启动” | 平台已根据 placements 生成任务实例和端口绑定，不等于容器已运行。 | 读取 `/result` 响应里的 `network_bindings`，下发流表/QoS。 |
+| `network_binding_ready` | 端口绑定已生成，等待网络规则就绪。 | 下发规则后调用 `POST /api/routing-orders/{order_id}/network-ready`。 |
+| `running` / `ready` | 实例或节点容器已启动并通过健康检查。 | 只作为排障确认，不要把 `/result` 成功误解成 `running`。 |
+| release event 未 ack | 平台已停止/删除/清理任务，并写出资源释放事件。 | 把对应 GPU/资源加回路由系统资源池后，再调用 HTTP ack。 |
 
 核心联调只需要下面 4 个接口：
 
@@ -259,7 +270,7 @@ curl -sS -X POST "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/network-r
 |------|------------|------|
 | 临时资源不足 | `PATCH /api/routing-orders/{order_id}/requeue` | 把 `computing -> pending`，稍后重试，不要丢工单。 |
 | 确定无法路由 | `PATCH /api/routing-orders/{order_id}/fail` | 把工单标记为 `failed`，需要写清失败原因。 |
-| 查询释放事件 | `GET /api/routing-resource-events?event_type=release&unacked=true&limit=100` | 平台告诉路由系统哪些 GPU 已释放。 |
+| 查询释放事件 | `GET /api/routing-resource-events?event_type=release&unacked=true&limit=100` | 推荐方式。平台告诉路由系统哪些 GPU 已释放；`unacked=true` 是接口查询参数，不是数据库字段。 |
 | 确认释放事件 | `POST /api/routing-resource-events/ack` | 路由系统把资源加回后，确认这些事件已处理。 |
 
 平台仓库提供一个最小 mock 路由器用于接口自检。它不会替代路由算法，只用于证明 pending、claim、result、network-ready 和端口返回链路可用：
@@ -346,7 +357,7 @@ while True:
 | 读取节点和 baseline | MySQL 读 `nodes`、`node_baselines` | 算法侧查询方便，字段稳定。 |
 | 回写路由结果 | 必须调用 `POST /api/routing-orders/{order_id}/result` | 平台要校验 GPU 冲突、物化实例、分配端口。 |
 | 下发流表后确认 | 必须调用 `POST /api/routing-orders/{order_id}/network-ready` | 平台收到确认后才启动或注册调度。 |
-| 处理资源释放 | MySQL 或 HTTP 读 `routing_resource_events`，ack 走 HTTP | 资源加回后需要平台记录确认时间。 |
+| 处理资源释放 | 推荐 HTTP 读 `GET /api/routing-resource-events?event_type=release&unacked=true`；如已直连 MySQL，也可只读扫 `routing_resource_events` | `unacked` 不是表字段，直连 MySQL 时使用 `router_ack_at IS NULL`；资源加回后必须调用 HTTP ack，让平台记录确认时间。 |
 
 不要让路由系统直接 `UPDATE task_orders.routing_status` 或直接写 `runtime_config.routing_result`。这些字段由平台接口维护，否则容易绕过 GPU 冲突校验、端口分配和网络就绪状态。
 
@@ -550,6 +561,14 @@ baseline 准备规则：
 
 资源释放事件表。平台在任务停止、失败、删除、清理实例后写入 release 事件，路由系统处理后调用 ack。
 
+推荐路由系统通过 HTTP 接口读取未确认事件：
+
+```bash
+curl -sS "$PLATFORM_API_BASE/api/routing-resource-events?event_type=release&unacked=true&limit=100"
+```
+
+其中 `unacked=true` 是接口查询参数，不是数据库字段；后端会把它转换成 `router_ack_at IS NULL` 条件。如果路由系统已经直连 MySQL，也可以按下面 SQL 只读扫表，但确认处理仍必须调用 `POST /api/routing-resource-events/ack`，不要直接更新 `router_ack_at`。
+
 | 字段 | 用途 |
 |------|------|
 | `id` | 自增事件 ID。 |
@@ -564,7 +583,7 @@ baseline 准备规则：
 | `reason` | `completed`、`cleanup_instance`、`delete_order`、`failed` 等。 |
 | `router_ack_at` | 路由系统确认处理时间。 |
 
-推荐查询未确认 release：
+直连 MySQL 时查询未确认 release：
 
 ```sql
 SELECT id, order_id, job_id, benchmark_run_id, task_type,
@@ -1026,6 +1045,17 @@ Content-Type: application/json
 - 同一 GPU 不会被多个未释放任务同时占用。
 - 任务清理后平台写 release 事件，路由系统 ack 后能继续路由下一批。
 
+排障时建议按这个顺序看，不要只看前端单个状态字样：
+
+1. `GET /api/routing-orders?status=pending` 是否能看到当前轮次工单。
+2. `PATCH /api/routing-orders/{order_id}/claim` 是否成功，重复 claim 是否返回 `409`。
+3. `POST /api/routing-orders/{order_id}/result` 是否返回 `network_bindings`，状态是否进入 `network_binding_ready`。
+4. 路由系统是否按 `network_bindings` 下发 A->B、B->C 流表/QoS。
+5. `POST /api/routing-orders/{order_id}/network-ready` 是否成功，平台状态是否进入 `completed`。
+6. 平台任务实例和节点状态是否从 `pending/starting` 推进到 `running/ready`。
+7. 停止、删除或清理后 `GET /api/routing-resource-events?event_type=release&unacked=true` 是否出现 release 事件。
+8. 路由系统加回资源后是否调用 ack，同一事件是否不再出现在 `unacked=true` 查询结果中。
+
 ## 12. 联调测试用例
 
 路由同学或 AI 实现完最小版本后，按下面测试用例自测。测试前建议在平台前端新建一轮“外部路由系统”模式的 benchmark 工单，并只处理当前轮次的 pending 工单。
@@ -1035,7 +1065,7 @@ Content-Type: application/json
 ```bash
 export PLATFORM_API_BASE=http://127.0.0.1:8181
 # 如果路由服务不在管理节点上运行：
-# export PLATFORM_API_BASE=http://10.112.244.94:8181     # 当前校园网调试入口
+# export PLATFORM_API_BASE=http://10.112.73.149:8181     # 当前校园网调试入口
 # export PLATFORM_API_BASE=http://172.16.0.254:8181      # 验收管理网入口
 ```
 

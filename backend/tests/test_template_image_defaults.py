@@ -67,7 +67,7 @@ def test_templates_can_use_current_development_registry_profile(monkeypatch):
     matmul = importlib.reload(matmul)
     video = importlib.reload(video)
 
-    assert matmul.MATMUL_COMPUTE_IMAGE == "10.112.244.94:5000/scientific-matmul:dev"
-    assert matmul.MATMUL_ENDPOINT_IMAGE == "10.112.244.94:5000/scientific-matmul-endpoint:dev"
-    assert video.VIDEO_COMPUTE_IMAGE == "10.112.244.94:5000/low-latency-video:dev"
-    assert video.VIDEO_ENDPOINT_IMAGE == "10.112.244.94:5000/low-latency-video-endpoint:dev"
+    assert matmul.MATMUL_COMPUTE_IMAGE == "10.112.73.149:5000/scientific-matmul:dev"
+    assert matmul.MATMUL_ENDPOINT_IMAGE == "10.112.73.149:5000/scientific-matmul-endpoint:dev"
+    assert video.VIDEO_COMPUTE_IMAGE == "10.112.73.149:5000/low-latency-video:dev"
+    assert video.VIDEO_ENDPOINT_IMAGE == "10.112.73.149:5000/low-latency-video-endpoint:dev"

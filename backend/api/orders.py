@@ -68,6 +68,7 @@ from services.routing_payload_builder import build_routing_payload
 from services.routing_policy import normalize_routing_policy, require_routing_policy
 from services.routing_network import (
     build_network_bindings,
+    instance_waiting_for_network_ready,
     mark_network_binding_ready,
 )
 from services.scheduler import TaskScheduler
@@ -440,6 +441,13 @@ def _default_compute_gpu_for_order(order: TaskOrder) -> str | None:
         return _benchmark_config(task_type).get("default_compute_gpu") or "0"
     except HTTPException:
         return "0"
+
+
+async def _network_ready_wait_message(db: AsyncSession, instance_id: str) -> str | None:
+    waiting_order = await instance_waiting_for_network_ready(db, instance_id)
+    if waiting_order:
+        return f"工单 {waiting_order.id} 等待外部路由系统确认 network-ready"
+    return None
 
 
 def _benchmark_routing_result(order: TaskOrder) -> dict:
@@ -1352,7 +1360,7 @@ async def stop_order_runtime(
     _ensure_order_owner_or_admin(order, current_user)
 
     if not order.materialized_instance_id:
-        return {"message": "当前工单没有已部署实例", "stopped": False}
+        return {"message": "当前工单没有已生成实例", "stopped": False}
 
     result = await db.execute(
         select(TaskInstance)
@@ -2297,11 +2305,250 @@ class BenchmarkRunScopedRequest(BaseModel):
 
 
 class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
-    max_parallel: int = Field(default=3, ge=1, le=10)
+    max_parallel: int = Field(default=6, ge=1, le=10)
     per_compute_slot_limit: int = Field(default=1, ge=1, le=4)
     cleanup_evaluated: bool = True
     retry_failed: bool = False
     wait_seconds: int = Field(default=0, ge=0, le=30)
+
+
+class ManagedBenchmarkRunRequest(ControlledBenchmarkStartRequest):
+    poll_interval_seconds: int = Field(default=5, ge=1, le=30)
+    max_rounds: int = Field(default=720, ge=1, le=3000)
+
+
+_MANAGED_BENCHMARK_TASKS: dict[str, asyncio.Task] = {}
+_MANAGED_BENCHMARK_STATUS: dict[str, dict[str, Any]] = {}
+_MANAGED_BENCHMARK_LOCK = asyncio.Lock()
+
+
+def _managed_benchmark_key(task_type: str | None, benchmark_run_id: str | None) -> str:
+    return f"{task_type or '*'}::{benchmark_run_id or '*'}"
+
+
+def _benchmark_status_payload(
+    key: str,
+    *,
+    phase: str,
+    message: str,
+    payload: ManagedBenchmarkRunRequest,
+    progress: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    now = business_now().isoformat()
+    previous = _MANAGED_BENCHMARK_STATUS.get(key, {})
+    status = {
+        **previous,
+        "key": key,
+        "phase": phase,
+        "message": message,
+        "benchmark_run_id": payload.benchmark_run_id,
+        "task_type": payload.task_type,
+        "max_parallel": payload.max_parallel,
+        "per_compute_slot_limit": payload.per_compute_slot_limit,
+        "poll_interval_seconds": payload.poll_interval_seconds,
+        "updated_at": now,
+        "error": error,
+    }
+    if not previous.get("started_at"):
+        status["started_at"] = now
+    if progress is not None:
+        status["progress"] = progress
+    _MANAGED_BENCHMARK_STATUS[key] = status
+    return status
+
+
+def _is_managed_benchmark_running(key: str) -> bool:
+    task = _MANAGED_BENCHMARK_TASKS.get(key)
+    return bool(task and not task.done())
+
+
+def _request_managed_benchmark_stop(benchmark_run_id: str | None, task_type: str | None) -> None:
+    if not benchmark_run_id:
+        return
+    for key, status in _MANAGED_BENCHMARK_STATUS.items():
+        if status.get("benchmark_run_id") != benchmark_run_id:
+            continue
+        if task_type and status.get("task_type") != task_type:
+            continue
+        status["stop_requested"] = True
+        status["phase"] = "stopping"
+        status["message"] = "已收到停止请求，正在停止本轮测评并释放运行实例。"
+        status["updated_at"] = business_now().isoformat()
+
+
+async def _run_managed_benchmark_loop(
+    key: str,
+    payload: ManagedBenchmarkRunRequest,
+    user_id: str,
+) -> None:
+    payload = payload.model_copy(update={"wait_seconds": 0})
+    try:
+        idle_rounds = 0
+        for round_index in range(1, payload.max_rounds + 1):
+            status = _MANAGED_BENCHMARK_STATUS.get(key, {})
+            if status.get("stop_requested"):
+                _benchmark_status_payload(
+                    key,
+                    phase="stopped",
+                    message="当前测评轮次已停止。",
+                    payload=payload,
+                    progress=status.get("progress"),
+                )
+                return
+
+            async with async_session_maker() as session:
+                user = await session.get(User, user_id)
+                if not user:
+                    raise RuntimeError("当前登录用户不存在，请重新登录后再运行测评。")
+                progress = await _advance_controlled_benchmark_run(session, payload, user)
+                await session.commit()
+
+            total = int(progress.get("total") or 0)
+            evaluated = int(progress.get("evaluated") or 0)
+            active = int(progress.get("active") or 0)
+            pending = int(progress.get("pending_to_start") or 0)
+            started = int(progress.get("started") or 0)
+            cleaned = int(progress.get("cleaned") or 0)
+            waiting = len(progress.get("waiting_resource") or {})
+            failed = len(progress.get("failed") or {})
+
+            progress["round"] = round_index
+            if total > 0 and evaluated >= total:
+                _benchmark_status_payload(
+                    key,
+                    phase="completed",
+                    message=f"本轮 {evaluated}/{total} 个测评任务已完成评估。",
+                    payload=payload,
+                    progress=progress,
+                )
+                return
+
+            if not total:
+                idle_rounds += 1
+                phase = "waiting"
+                message = "当前轮次还没有可运行的测评工单，请先创建并完成节点分配。"
+            elif started or active:
+                idle_rounds = 0
+                phase = "running"
+                message = (
+                    f"测评运行中：已评估 {evaluated}/{total}，"
+                    f"本轮启动 {started} 个，运行中 {active} 个，已释放实例 {cleaned} 个。"
+                )
+            elif pending or waiting:
+                idle_rounds += 1
+                phase = "waiting_resource"
+                message = (
+                    f"等待资源释放后继续推进：已评估 {evaluated}/{total}，"
+                    f"待启动 {pending} 个，资源等待 {waiting} 个。"
+                )
+            else:
+                idle_rounds += 1
+                phase = "blocked"
+                message = (
+                    f"当前轮次暂无法继续推进：已评估 {evaluated}/{total}，"
+                    f"失败/异常 {failed} 个。请查看工单后重试或停止本轮测评。"
+                )
+
+            _benchmark_status_payload(
+                key,
+                phase=phase,
+                message=message,
+                payload=payload,
+                progress=progress,
+            )
+            if phase == "blocked" and idle_rounds >= 3:
+                return
+            await asyncio.sleep(payload.poll_interval_seconds if idle_rounds else 2)
+
+        status = _MANAGED_BENCHMARK_STATUS.get(key, {})
+        _benchmark_status_payload(
+            key,
+            phase="blocked",
+            message="后台测评推进已达到最大轮询次数，请刷新后查看工单状态或重新运行。",
+            payload=payload,
+            progress=status.get("progress"),
+        )
+    except asyncio.CancelledError:
+        status = _MANAGED_BENCHMARK_STATUS.get(key, {})
+        _benchmark_status_payload(
+            key,
+            phase="stopped",
+            message="当前测评轮次已停止。",
+            payload=payload,
+            progress=status.get("progress"),
+        )
+        raise
+    except Exception as exc:
+        status = _MANAGED_BENCHMARK_STATUS.get(key, {})
+        _benchmark_status_payload(
+            key,
+            phase="failed",
+            message="后台测评推进遇到异常，请刷新后重试或停止本轮测评。",
+            payload=payload,
+            progress=status.get("progress"),
+            error=str(exc),
+        )
+
+@router.post("/benchmark/managed-run")
+async def start_managed_benchmark_run(
+    payload: ManagedBenchmarkRunRequest | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    """后台托管推进本轮测评，避免浏览器切页或请求超时导致轮次卡住。"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    payload = payload or ManagedBenchmarkRunRequest()
+    if not payload.benchmark_run_id:
+        raise HTTPException(status_code=400, detail="benchmark_run_id is required")
+
+    key = _managed_benchmark_key(payload.task_type, payload.benchmark_run_id)
+    async with _MANAGED_BENCHMARK_LOCK:
+        if _is_managed_benchmark_running(key):
+            status = _MANAGED_BENCHMARK_STATUS.get(key)
+            if status:
+                return {**status, "already_running": True}
+        status = _benchmark_status_payload(
+            key,
+            phase="running",
+            message="已启动后台测评推进，页面会自动刷新进度。",
+            payload=payload,
+            progress=None,
+        )
+        status.pop("stop_requested", None)
+        task = asyncio.create_task(_run_managed_benchmark_loop(key, payload, current_user.id))
+        _MANAGED_BENCHMARK_TASKS[key] = task
+        task.add_done_callback(
+            lambda done_task, task_key=key: (
+                _MANAGED_BENCHMARK_TASKS.pop(task_key, None)
+                if _MANAGED_BENCHMARK_TASKS.get(task_key) is done_task
+                else None
+            )
+        )
+    return {**status, "already_running": False}
+
+
+@router.get("/benchmark/managed-run/status")
+async def managed_benchmark_run_status(
+    benchmark_run_id: str,
+    task_type: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    key = _managed_benchmark_key(task_type, benchmark_run_id)
+    status = _MANAGED_BENCHMARK_STATUS.get(key)
+    if not status:
+        return {
+            "key": key,
+            "benchmark_run_id": benchmark_run_id,
+            "task_type": task_type,
+            "phase": "idle",
+            "message": "当前轮次没有后台测评任务。",
+            "running": False,
+            "progress": None,
+        }
+    return {**status, "running": _is_managed_benchmark_running(key)}
 
 
 @router.post("/benchmark/stop", response_model=BatchOperationResponse)
@@ -2313,6 +2560,7 @@ async def stop_benchmark_run(
     """停止当前测评轮次的未完成运行，释放容器，保留已完成证据。"""
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Admin role required")
+    _request_managed_benchmark_stop(request.benchmark_run_id, request.task_type)
     orders, failed = await _resolve_batch_orders(db, request, current_user)
     task_scheduler = TaskScheduler()
     succeeded: list[str] = []
@@ -2502,6 +2750,11 @@ async def start_all_routed_benchmark_orders(
             failed[order.id] = f"Cannot start instance in status: {status_value}"
             continue
 
+        waiting_message = await _network_ready_wait_message(db, instance_id)
+        if waiting_message:
+            failed[order.id] = waiting_message
+            continue
+
         try:
             preflight = await _preflight_instance_plan(
                 db,
@@ -2669,37 +2922,11 @@ async def _reevaluate_orders_from_latest_metrics(
     return succeeded, failed
 
 
-@router.post("/benchmark/recalculate", response_model=BatchOperationResponse)
-async def recalculate_benchmark_evaluations(
-    request: BatchOperationRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """按当前验收轮次重算业务目标评估，不重新启动容器。"""
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Admin role required")
-    orders, failed = await _resolve_batch_orders(db, request)
-    succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(db, orders)
-    failed.update(recalc_failed)
-    await db.commit()
-    return BatchOperationResponse(succeeded=succeeded, failed=failed)
-
-
-@router.post("/start-controlled-routed")
-async def start_controlled_routed_benchmark_orders(
-    payload: ControlledBenchmarkStartRequest | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Start benchmark orders with compute/GPU-slot concurrency control.
-
-    The acceptance target compares each sample with the historical single-task
-    baseline of the selected compute node. Starting all samples at once measures
-    resource contention instead, so this endpoint advances the run in controlled
-    waves and optionally removes already evaluated runtime containers while
-    keeping order/evaluation evidence.
-    """
-    payload = payload or ControlledBenchmarkStartRequest()
+async def _advance_controlled_benchmark_run(
+    db: AsyncSession,
+    payload: ControlledBenchmarkStartRequest,
+    current_user: User,
+) -> dict[str, Any]:
     run_orders = await _controlled_benchmark_orders(db, payload, current_user, include_completed=True)
     orders = [order for order in run_orders if order.status == OrderStatus.MATERIALIZED]
     startable_instance_ids = {
@@ -2768,6 +2995,7 @@ async def start_controlled_routed_benchmark_orders(
     started: list[str] = []
     background_start_ids: list[str] = []
     skipped_busy: list[str] = []
+    waiting_resource: dict[str, str] = {}
     for order in orders:
         if len(started) >= payload.max_parallel:
             break
@@ -2788,9 +3016,15 @@ async def start_controlled_routed_benchmark_orders(
             failed[order.id] = f"Cannot start instance in status: {status_value}"
             continue
 
+        waiting_message = await _network_ready_wait_message(db, instance_id)
+        if waiting_message:
+            waiting_resource[order.id] = waiting_message
+            continue
+
         slot = _benchmark_compute_slot(order)
         if active_by_slot[slot] >= payload.per_compute_slot_limit:
             skipped_busy.append(order.id)
+            waiting_resource[order.id] = "当前计算节点/GPU 槽位正在执行其他测评，等待下一轮自动推进。"
             continue
 
         try:
@@ -2802,7 +3036,7 @@ async def start_controlled_routed_benchmark_orders(
             )
             if not preflight.ok:
                 messages = "; ".join(issue.message for issue in preflight.conflicts)
-                failed[order.id] = f"启动前预检查失败: {messages}"
+                waiting_resource[order.id] = f"启动前资源暂不可用，等待下一轮自动推进：{messages}"
                 continue
             instance.status = TaskStatus.STARTING
             instance.error_message = None
@@ -2852,11 +3086,46 @@ async def start_controlled_routed_benchmark_orders(
         "pending_to_start": pending_to_start,
         "started": len(started),
         "skipped_busy": skipped_busy,
+        "waiting_resource": waiting_resource,
         "cleaned": len(cleaned),
         "failed": failed,
         "instance_ids": started,
         "success_rate": success_count / evaluated_count if evaluated_count else None,
     }
+
+
+@router.post("/benchmark/recalculate", response_model=BatchOperationResponse)
+async def recalculate_benchmark_evaluations(
+    request: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按当前验收轮次重算业务目标评估，不重新启动容器。"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    orders, failed = await _resolve_batch_orders(db, request)
+    succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(db, orders)
+    failed.update(recalc_failed)
+    await db.commit()
+    return BatchOperationResponse(succeeded=succeeded, failed=failed)
+
+
+@router.post("/start-controlled-routed")
+async def start_controlled_routed_benchmark_orders(
+    payload: ControlledBenchmarkStartRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start benchmark orders with compute/GPU-slot concurrency control.
+
+    The acceptance target compares each sample with the historical single-task
+    baseline of the selected compute node. Starting all samples at once measures
+    resource contention instead, so this endpoint advances the run in controlled
+    waves and optionally removes already evaluated runtime containers while
+    keeping order/evaluation evidence.
+    """
+    payload = payload or ControlledBenchmarkStartRequest()
+    return await _advance_controlled_benchmark_run(db, payload, current_user)
 
 
 async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):

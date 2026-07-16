@@ -83,7 +83,7 @@ async def test_batch_baseline_returns_readable_partial_failures(client, monkeypa
 
     async def fake_run_baseline_on_node(endpoint, task_type, runs):
         if "compute-2" in endpoint:
-            raise RuntimeError('Head "https://10.112.244.94:5000/v2/x": http: server gave HTTP response to HTTPS client')
+            raise RuntimeError('Head "https://10.112.73.149:5000/v2/x": http: server gave HTTP response to HTTPS client')
         return {
             "metric_key": "effective_gflops",
             "baseline_value": 100.0,

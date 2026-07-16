@@ -5,7 +5,7 @@ import path from "node:path";
 const require = createRequire(new URL("../../../frontend/package.json", import.meta.url));
 const { chromium } = require("playwright");
 
-const baseUrl = process.env.PRESENTATION_BASE_URL || "http://10.112.244.94:8182";
+const baseUrl = process.env.PRESENTATION_BASE_URL || "http://10.112.73.149:8182";
 const username = process.env.E2E_ADMIN_USERNAME || "admin";
 const password = process.env.E2E_ADMIN_PASSWORD || "admin";
 const outDir = path.resolve("docs/presentations/weekly-progress/screenshots");

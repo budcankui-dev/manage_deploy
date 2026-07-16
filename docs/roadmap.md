@@ -30,6 +30,7 @@
 - [ ] 回写 placements 后自动物化实例并按业务时间窗口调度
 - [ ] GPU 编号同时落到容器运行约束和环境变量（GPU_DEVICE / CUDA_VISIBLE_DEVICES / NVIDIA_VISIBLE_DEVICES）
 - [ ] 内置随机路由策略与外部路由系统入口在页面和文档中清晰区分
+- [ ] 前端工单状态文案拆分：`materialized` 显示为“已生成实例/待启动”，真实部署成功以实例/节点 `running` 或 `ready` 为准，避免把“物化完成”误解成“容器已运行”
 
 ## P2：多节点部署运维
 

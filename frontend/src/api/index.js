@@ -58,6 +58,9 @@ api.interceptors.response.use(
     if (error.config?.silentError) {
       return Promise.reject(error)
     }
+    if (error.__authExpired) {
+      return Promise.reject(error)
+    }
     const message = error.response?.status === 401
       ? '登录失败，请检查用户名或密码'
       : extractErrorMessage(error, '请求失败')
@@ -110,15 +113,16 @@ export const ordersApi = {
   list: (params = {}) => api.get('/orders', { params }),
   get: (id) => api.get(`/orders/${id}`),
   create: (data) => api.post('/orders', data),
-  delete: (id) => api.delete(`/orders/${id}`),
-  stopRuntime: (id) => api.post(`/orders/${id}/stop-runtime`, null, withTimeout(LONG_RUNNING_TIMEOUT)),
-  batchDelete: (payload) => api.post(
+  delete: (id, config = {}) => api.delete(`/orders/${id}`, { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }),
+  stopRuntime: (id, config = {}) => api.post(`/orders/${id}/stop-runtime`, null, { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }),
+  batchDelete: (payload, config = {}) => api.post(
     '/orders/batch/delete',
-    Array.isArray(payload) ? { order_ids: payload } : payload
+    Array.isArray(payload) ? { order_ids: payload } : payload,
+    { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }
   ),
   materialize: (id) => api.post(`/orders/${id}/materialize`),
   materializePending: () => api.post('/orders/materialize/pending'),
-  cancel: (id) => api.post(`/orders/${id}/cancel`),
+  cancel: (id, config = {}) => api.post(`/orders/${id}/cancel`, null, config),
   batchBenchmark: (data) => api.post('/orders/batch-benchmark', data),
   batchAutoRoute: (data = {}) => api.post('/orders/batch-auto-route', data),
   startAllRouted: (data = {}) => api.post('/orders/start-all-routed', data),
@@ -127,16 +131,25 @@ export const ordersApi = {
     data,
     { ...withTimeout(BENCHMARK_FLOW_TIMEOUT), ...config }
   ),
+  startManagedBenchmarkRun: (data = {}, config = {}) => api.post(
+    '/orders/benchmark/managed-run',
+    data,
+    { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }
+  ),
+  managedBenchmarkRunStatus: (params = {}, config = {}) => api.get(
+    '/orders/benchmark/managed-run/status',
+    { params, ...config }
+  ),
   stopBenchmarkRun: (data = {}, config = {}) => api.post(
     '/orders/benchmark/stop',
     data,
     { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }
   ),
   recalculateBenchmark: (data = {}) => api.post('/orders/benchmark/recalculate', data, withTimeout(LONG_RUNNING_TIMEOUT)),
-  cleanupInstances: (payload) => api.post(
+  cleanupInstances: (payload, config = {}) => api.post(
     '/orders/batch/cleanup-instances',
     Array.isArray(payload) ? { order_ids: payload } : payload,
-    withTimeout(LONG_RUNNING_TIMEOUT)
+    { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }
   ),
 }
 

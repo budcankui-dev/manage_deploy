@@ -17,9 +17,9 @@ class DeploymentProfile:
 _PROFILE_DEFAULTS = {
     "current": DeploymentProfile(
         name="current",
-        registry="10.112.244.94:5000",
-        manager_api_base="http://10.112.244.94:8181",
-        minio_endpoint="http://10.112.244.94:9000",
+        registry="10.112.73.149:5000",
+        manager_api_base="http://10.112.73.149:8181",
+        minio_endpoint="http://10.112.73.149:9000",
     ),
     "acceptance": DeploymentProfile(
         name="acceptance",

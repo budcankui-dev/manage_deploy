@@ -83,6 +83,7 @@
               {{ row.value }}
             </el-descriptions-item>
           </el-descriptions>
+
         </el-tab-pane>
 
         <el-tab-pane label="路由与节点" name="routing">
@@ -392,6 +393,19 @@
             </li>
           </ol>
 
+          <div class="result-proof-card" :class="verdict.statusClass">
+            <div>
+              <p class="eyebrow">验收证据</p>
+              <h3>{{ resultProofHeadline }}</h3>
+              <p>{{ resultProofDescription }}</p>
+            </div>
+            <div class="result-proof-facts">
+              <span v-for="item in resultProofFacts" :key="item.label">
+                {{ item.label }}：<strong>{{ item.value }}</strong>
+              </span>
+            </div>
+          </div>
+
           <el-alert
             v-if="!evaluation"
             class="result-empty-alert"
@@ -562,7 +576,6 @@ import {
   videoPreviewNeedsOverlay,
 } from '@/constants/businessTaskDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
-
 const props = defineProps({
   detail: { type: Object, default: null },
   resultObjects: { type: Array, default: () => [] },
@@ -784,6 +797,61 @@ const verdict = computed(() => {
     statusClass: evaluation.value.business_success ? 'success' : 'danger',
   }
 })
+const resultProofHeadline = computed(() => {
+  if (!evaluation.value) return '等待业务容器上报结果'
+  if (evaluation.value.business_success === true) return '业务目标已达标'
+  if (evaluation.value.business_success === false) return '业务已完成但未达标'
+  return '业务结果已收到，等待目标判定'
+})
+const resultProofDescription = computed(() => {
+  if (!evaluation.value) {
+    return '任务运行并上报指标后，这里会展示可复核的输入、输出和判定依据。'
+  }
+  if (isVideoTask.value) {
+    return '视频任务以参与统计帧的 P90 推理时延作为核心指标，并保留检测框、类别、置信度和预览图作为业务真实运行证据。'
+  }
+  if (isMatmulTask.value) {
+    return '矩阵任务以有效计算吞吐量作为核心指标，并保留矩阵规模、批次数、采样次数和执行后端作为业务真实运行证据。'
+  }
+  return '系统已收到业务容器上报的指标，并根据业务目标完成判定。'
+})
+const resultProofFacts = computed(() => {
+  const rows = []
+  if (evaluation.value) {
+    rows.push({
+      label: metricLabel(evaluation.value.metric_key),
+      value: `${formatMetric(evaluation.value.actual_value)} ${evaluation.value.unit || ''}`.trim(),
+    })
+    if (evaluation.value.target_value != null) {
+      rows.push({
+        label: '目标阈值',
+        value: `${formatMetric(evaluation.value.target_value)} ${evaluation.value.unit || ''}`.trim(),
+      })
+    }
+    rows.push({
+      label: '达标',
+      value: evaluation.value.business_success === true
+        ? '是'
+        : evaluation.value.business_success === false
+          ? '否'
+          : '待判定',
+    })
+  }
+  const meta = resultMetadata.value || {}
+  if (isMatmulTask.value) {
+    if (meta.matrix_size != null) rows.push({ label: '运行规模', value: `${meta.matrix_size} × ${meta.matrix_size}` })
+    if (meta.sample_count != null) rows.push({ label: '采样次数', value: String(meta.sample_count) })
+    if (meta.backend) rows.push({ label: '执行后端', value: String(meta.backend) })
+  } else if (isVideoTask.value) {
+    if (meta.measured_frames != null) rows.push({ label: '参与统计帧数', value: `${meta.measured_frames} 帧` })
+    if (meta.detection_count != null) rows.push({ label: '检测数量', value: String(meta.detection_count) })
+    if (meta.top_label_zh || meta.top_label) rows.push({ label: '识别目标', value: String(meta.top_label_zh || meta.top_label) })
+  }
+  if (!rows.length) {
+    rows.push({ label: '当前状态', value: isUserAccessDemo.value ? '等待用户端或业务容器运行' : '等待指标上报' })
+  }
+  return rows
+})
 
 const videoPreviewFrames = computed(() => buildVideoPreviewFrames(resultMetadata.value))
 const selectedVideoFrameKey = ref('')
@@ -804,9 +872,9 @@ const activeVideoFrameSummary = computed(() => {
 })
 const videoFrameGallerySummary = computed(() => {
   const meta = resultMetadata.value || {}
-  const measured = meta.measured_frames != null ? `本次有效推理 ${meta.measured_frames} 帧` : '本次有效推理帧数待上报'
+  const measured = meta.measured_frames != null ? `本次参与统计 ${meta.measured_frames} 帧` : '本次参与统计帧数待上报'
   const shown = videoPreviewFrames.value.length > 1
-    ? `下方展示 ${videoPreviewFrames.value.length} 张抽样检测帧`
+    ? `下方展示 ${videoPreviewFrames.value.length} 张检测帧预览`
     : '当前展示 1 张代表性检测帧'
   return `${measured}，${shown}；鼠标悬停缩略图可查看帧序号和时延。`
 })
@@ -1107,7 +1175,7 @@ function orderStatusLabel(value) {
     pending: '待分配',
     routing: '分配中',
     routed: '待部署',
-    materialized: '已部署',
+    materialized: '已生成实例/待启动',
     running: '运行中',
     completed: '已完成',
     failed: '失败',
@@ -1440,6 +1508,18 @@ function nodeStatusLabel(value) {
   background: var(--bg-tertiary, #f8fafc);
 }
 
+.result-proof-card h3 {
+  margin: 0 0 6px;
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.result-proof-card p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.65;
+}
+
 .objective-headline,
 .result-verdict strong {
   display: block;
@@ -1474,6 +1554,53 @@ function nodeStatusLabel(value) {
   color: var(--accent-secondary, #2563eb);
   text-transform: uppercase;
   font-size: 12px;
+}
+
+.result-proof-card {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(220px, 0.8fr);
+  gap: 14px;
+  align-items: start;
+  margin: 14px 0 16px;
+  padding: 16px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 30%),
+    linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+}
+
+.result-proof-card.success {
+  border-color: rgba(34, 197, 94, 0.42);
+  background:
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.13), transparent 30%),
+    linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%);
+}
+
+.result-proof-card.danger {
+  border-color: rgba(239, 68, 68, 0.36);
+  background:
+    radial-gradient(circle at top right, rgba(239, 68, 68, 0.1), transparent 30%),
+    linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+}
+
+.result-proof-facts {
+  display: grid;
+  gap: 8px;
+}
+
+.result-proof-facts span {
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.result-proof-facts strong {
+  color: #0f172a;
 }
 
 .proof-grid,
@@ -1739,5 +1866,15 @@ code {
   font-size: 12px;
   color: #0f172a;
   font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .overview-card {
+    flex-direction: column;
+  }
+
+  .result-proof-card {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

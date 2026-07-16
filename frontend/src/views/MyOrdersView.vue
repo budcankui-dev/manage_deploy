@@ -235,14 +235,16 @@ async function cancelOrder(order = null) {
 
   cancelLoading.value = true
   try {
-    await ordersApi.cancel(targetOrderId)
+    await ordersApi.cancel(targetOrderId, { silentError: true })
     ElMessage.success('工单已取消')
     await loadOrders()
     if (selectedOrderId.value === targetOrderId) {
       await selectOrder({ id: targetOrderId })
     }
-  } catch {
-    ElMessage.error('取消失败')
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning('取消工单未完成，请刷新状态后重试。')
+    }
   } finally {
     cancelLoading.value = false
   }
@@ -267,14 +269,16 @@ async function stopOrder(order = null) {
 
   stopLoading.value = true
   try {
-    await ordersApi.stopRuntime(targetOrderId)
+    await ordersApi.stopRuntime(targetOrderId, { silentError: true })
     ElMessage.success('任务运行已停止')
     await loadOrders()
     if (selectedOrderId.value === targetOrderId) {
       await selectOrder({ id: targetOrderId })
     }
-  } catch {
-    ElMessage.error('停止运行失败')
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning('停止运行未完成，请刷新状态后重试。')
+    }
   } finally {
     stopLoading.value = false
   }
@@ -300,7 +304,7 @@ async function deleteOrder(order = null) {
 
   deleteLoading.value = true
   try {
-    await ordersApi.delete(targetOrderId)
+    await ordersApi.delete(targetOrderId, { silentError: true })
     ElMessage.success('工单已删除')
     if (selectedOrderId.value === targetOrderId) {
       selectedOrderId.value = ''
@@ -308,8 +312,10 @@ async function deleteOrder(order = null) {
       resultObjects.value = []
     }
     await loadOrders()
-  } catch {
-    ElMessage.error('删除失败')
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning('删除工单未完成，请刷新状态后重试。')
+    }
   } finally {
     deleteLoading.value = false
   }
@@ -334,7 +340,7 @@ async function batchDeleteOrders() {
 
   batchDeleteLoading.value = true
   try {
-    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value, { silentError: true })
     const allOk = showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
     if (allOk && selectedOrderIds.value.includes(selectedOrderId.value)) {
       selectedOrderId.value = ''
@@ -343,8 +349,10 @@ async function batchDeleteOrders() {
     }
     selectedOrderIds.value = []
     await loadOrders()
-  } catch {
-    ElMessage.error('批量删除失败')
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning('批量删除未完成，请刷新状态后重试。')
+    }
   } finally {
     batchDeleteLoading.value = false
   }
@@ -356,7 +364,7 @@ function formatStatus(status, order = null) {
     pending: '待分配',
     routing: '分配中',
     routed: '待部署',
-    materialized: '已部署',
+    materialized: '已生成实例/待启动',
     running: '运行中',
     completed: '已完成',
     failed: '失败',

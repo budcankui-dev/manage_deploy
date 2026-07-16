@@ -17,7 +17,7 @@ INVENTORY="${INVENTORY:-${ROOT}/ops/inventory/topology_nodes.json}"
 NETWORK_PROFILE="${NETWORK_PROFILE:-acceptance}"
 case "${NETWORK_PROFILE}" in
   current|dev|development|campus)
-    PROFILE_REGISTRY="10.112.244.94:5000"
+    PROFILE_REGISTRY="10.112.73.149:5000"
     ;;
   acceptance|accept|prod|production)
     NETWORK_PROFILE="acceptance"

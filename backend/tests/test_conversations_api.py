@@ -650,7 +650,7 @@ async def test_video_conversation_demo_route_materializes_same_order(client, db_
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，统计30帧，30fps，现在开始跑2小时，低时延策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1050,7 +1050,7 @@ async def test_conversation_ignores_user_supplied_video_latency_threshold(client
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，端到端时延低于 1ms"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，统计30帧，30fps，现在开始跑2小时，端到端时延低于 1ms"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1110,7 +1110,7 @@ async def test_confirm_intent_rejects_invalid_video_fps(client, db_session, monk
 
     message_response = await client.post(
         f"/api/conversations/{conversation_id}/messages",
-        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，30fps，现在开始跑2小时，低时延策略"},
+        json={"content": "视频AI推理任务，从 h1 到 h2，720p视频，100帧，统计30帧，30fps，现在开始跑2小时，低时延策略"},
         headers=headers,
     )
     assert message_response.status_code == 200
@@ -1118,7 +1118,7 @@ async def test_confirm_intent_rejects_invalid_video_fps(client, db_session, monk
 
     patch_response = await client.patch(
         f"/api/conversations/{conversation_id}/draft",
-        json={"data_profile": {"frame_count": 100, "resolution": "720p", "fps": 0}},
+        json={"data_profile": {"frame_count": 100, "measured_frames": 30, "resolution": "720p", "fps": 0}},
         headers=headers,
     )
     assert patch_response.status_code == 200

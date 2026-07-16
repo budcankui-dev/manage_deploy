@@ -4,6 +4,11 @@ import { instancesApi } from '@/api'
 
 export const useInstancesStore = defineStore('instances', () => {
   const instances = ref([])
+  const pagination = ref({
+    total: 0,
+    page: 1,
+    pageSize: 20,
+  })
   const loading = ref(false)
   const currentInstance = ref(null)
 
@@ -11,7 +16,22 @@ export const useInstancesStore = defineStore('instances', () => {
     loading.value = true
     try {
       const { data } = await instancesApi.list(params)
-      instances.value = data
+      if (Array.isArray(data)) {
+        instances.value = data
+        pagination.value = {
+          total: data.length,
+          page: params.page || 1,
+          pageSize: params.page_size || data.length || 20,
+        }
+      } else {
+        instances.value = data.items || []
+        pagination.value = {
+          total: data.total || 0,
+          page: data.page || params.page || 1,
+          pageSize: data.page_size || params.page_size || 20,
+        }
+      }
+      return data
     } finally {
       loading.value = false
     }
@@ -88,6 +108,7 @@ export const useInstancesStore = defineStore('instances', () => {
 
   return {
     instances,
+    pagination,
     loading,
     currentInstance,
     fetchInstances,

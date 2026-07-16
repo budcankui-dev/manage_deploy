@@ -10,6 +10,33 @@
           <el-radio-button label="card">卡片</el-radio-button>
           <el-radio-button label="list">列表</el-radio-button>
         </el-radio-group>
+        <el-select
+          v-model="taskScopeFilter"
+          class="task-scope-filter"
+          placeholder="按任务筛选"
+          clearable
+          filterable
+        >
+          <el-option-group label="关联工单">
+            <el-option
+              v-for="item in taskScopeOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            >
+              <div class="task-option">
+                <span>{{ item.label }}</span>
+                <small>{{ item.meta }}</small>
+              </div>
+            </el-option>
+          </el-option-group>
+          <el-option label="手工实例 / 无关联工单" value="manual">
+            <div class="task-option">
+              <span>手工实例 / 无关联工单</span>
+              <small>按无关联工单筛选</small>
+            </div>
+          </el-option>
+        </el-select>
         <el-select v-model="statusFilter" placeholder="状态" clearable style="width: 120px">
           <el-option label="全部" value="" />
           <el-option label="待启动" value="pending" />
@@ -24,8 +51,8 @@
           <el-button size="small" type="warning" plain :disabled="batchOperating" @click="handleBatchStop">停止</el-button>
           <el-button size="small" type="danger" plain :loading="batchOperating" @click="handleBatchDelete">删除</el-button>
         </template>
-        <el-button size="small" plain :disabled="!paginatedInstances.length || batchOperating" @click="selectCurrentPage">选择当前页</el-button>
-        <el-button size="small" plain :disabled="!filteredInstances.length || batchOperating" @click="selectAllFiltered">选择全部</el-button>
+        <el-button size="small" plain :disabled="!instances.length || batchOperating" @click="selectCurrentPage">选择当前页</el-button>
+        <el-button size="small" plain :disabled="!totalInstances || batchOperating" @click="selectAllFiltered">选择全部筛选结果</el-button>
         <el-button size="small" plain :disabled="!selectedIds.length || batchOperating" @click="clearSelection">清空选择</el-button>
         <el-button type="primary" @click="openCreateDialog">新建实例</el-button>
       </div>
@@ -33,7 +60,7 @@
 
     <div v-if="viewMode === 'card'" class="instances-grid">
       <div
-        v-for="instance in paginatedInstances"
+        v-for="instance in instances"
         :key="instance.id"
         class="instance-card"
         :class="instance.status"
@@ -65,15 +92,26 @@
         </div>
         <div class="instance-meta">
           <span>{{ templateName(instance.template_id) }}</span>
+          <span>{{ taskScopeLabel(instance) }}</span>
           <span>{{ instance.nodes?.length || 0 }} 节点</span>
         </div>
       </div>
     </div>
 
-    <el-table v-else :data="paginatedInstances" v-loading="loading" size="small">
+    <el-table
+      v-else
+      class="instances-table"
+      :data="instances"
+      v-loading="loading"
+      size="small"
+      stripe
+      border
+      highlight-current-row
+      @row-click="handleTableRowClick"
+    >
       <el-table-column label="选择" width="70">
         <template #default="{ row }">
-          <el-checkbox :model-value="selectedIds.includes(row.id)" @change="toggleSelected(row.id)" />
+          <el-checkbox :model-value="selectedIds.includes(row.id)" @click.stop @change="toggleSelected(row.id)" />
         </template>
       </el-table-column>
       <el-table-column prop="name" label="实例名称" min-width="200" />
@@ -98,8 +136,8 @@
       <el-table-column label="关联工单" min-width="140">
         <template #default="{ row }">
           <template v-if="row.source_order_id">
-            <el-button link type="primary" @click="$router.push(`/business-tasks?orderId=${row.source_order_id}`)">
-              查看工单
+            <el-button link type="primary" @click.stop="$router.push(`/business-tasks?orderId=${row.source_order_id}`)">
+              {{ orderLabel(row.source_order_id) }}
             </el-button>
           </template>
           <span v-else>-</span>
@@ -110,24 +148,24 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canStart(row.status)" size="small" type="primary" link @click="startInstance(row.id)">启动</el-button>
-          <el-button v-if="row.status === 'running'" size="small" type="warning" link @click="stopInstance(row.id)">停止</el-button>
-          <el-button size="small" link @click="viewInstance(row.id)">详情</el-button>
-          <el-button size="small" link @click="openEditDialog(row.id)">编辑</el-button>
-          <el-button size="small" type="danger" link @click="confirmDelete(row)">删除</el-button>
+          <el-button v-if="canStart(row.status)" size="small" type="primary" link @click.stop="startInstance(row.id)">启动</el-button>
+          <el-button v-if="row.status === 'running'" size="small" type="warning" link @click.stop="stopInstance(row.id)">停止</el-button>
+          <el-button size="small" link @click.stop="viewInstance(row.id)">详情</el-button>
+          <el-button size="small" link @click.stop="openEditDialog(row.id)">编辑</el-button>
+          <el-button size="small" type="danger" link @click.stop="confirmDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="!loading && !filteredInstances.length" description="没有任务实例" />
-    <div v-if="filteredInstances.length" class="pagination-wrap">
+    <el-empty v-if="!loading && !instances.length" description="没有任务实例" />
+    <div v-if="totalInstances" class="pagination-wrap">
       <el-pagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
         background
         layout="total, sizes, prev, pager, next"
         :page-sizes="[8, 12, 20, 50]"
-        :total="filteredInstances.length"
+        :total="totalInstances"
       />
     </div>
 
@@ -270,7 +308,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import utc from 'dayjs/plugin/utc'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useInstancesStore } from '@/stores/instances'
-import { instancesApi, nodesApi, templatesApi } from '@/api'
+import { instancesApi, nodesApi, ordersApi, templatesApi } from '@/api'
 import { useTemplatesStore } from '@/stores/templates'
 import { buildInstancePayload, INSTANCE_JSON_EXAMPLE, mapApiNodeToForm, mapApiNodeToOverride, mapFormNodeToOverride } from '@/utils/deployJson'
 import { extractErrorMessage, normalizeErrorMessage } from '@/utils/errorMessage'
@@ -282,6 +320,7 @@ const router = useRouter()
 const route = useRoute()
 const viewMode = ref('card')
 const statusFilter = ref('')
+const taskScopeFilter = ref('')
 const showCreateDialog = ref(false)
 const createMode = ref('json')
 const createJsonText = ref('')
@@ -304,10 +343,12 @@ const selectedIds = ref([])
 const currentPage = ref(1)
 const pageSize = ref(8)
 const batchOperating = ref(false)
+const orders = ref([])
 
 const instancesStore = useInstancesStore()
 const templatesStore = useTemplatesStore()
 const { instances, loading } = storeToRefs(instancesStore)
+const { pagination } = storeToRefs(instancesStore)
 const { templates } = storeToRefs(templatesStore)
 const {
   fetchInstances,
@@ -350,23 +391,29 @@ const editForm = ref({
   keep_after_stop: false,
 })
 
-const filteredInstances = computed(() => {
-  const list = [...(instances.value || [])].sort((a, b) => {
-    const ta = new Date(a.created_at || 0).getTime()
-    const tb = new Date(b.created_at || 0).getTime()
-    return tb - ta
-  })
-  return statusFilter.value ? list.filter((i) => i.status === statusFilter.value) : list
-})
-const paginatedInstances = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredInstances.value.slice(start, start + pageSize.value)
+const orderMap = computed(() => new Map((orders.value || []).map((item) => [item.id, item])))
+const totalInstances = computed(() => pagination.value.total || instances.value.length || 0)
+const taskScopeOptions = computed(() => {
+  const groups = (orders.value || [])
+    .filter((item) => item.materialized_instance_id || item.instance_exists)
+    .map((item) => ({
+      value: item.id,
+      label: orderLabel(item.id),
+      count: item.instance_exists || item.materialized_instance_id ? 1 : 0,
+      running: item.deployment_status === 'running' ? 1 : 0,
+      failed: item.deployment_status === 'failed' ? 1 : 0,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN', { numeric: true }))
+    .map((item) => ({
+      ...item,
+      meta: `${item.count} 个实例${item.running ? `，${item.running} 运行中` : ''}${item.failed ? `，${item.failed} 失败` : ''}`,
+    }))
 })
 const editLocked = computed(() => ['running', 'starting', 'stopping'].includes(editingInstanceStatus.value))
 const changeSummaryLines = computed(() => buildChangeSummary(originalEditSnapshot.value, pendingEditPayload.value))
 
 onMounted(async () => {
-  await Promise.all([fetchInstances(), fetchTemplates()])
+  await Promise.all([loadInstances(), fetchTemplates(), fetchOrders()])
   const { data } = await nodesApi.list()
   nodes.value = data
   await openCreateFromQuery()
@@ -380,6 +427,45 @@ watch(
     await openEditFromQuery()
   }
 )
+
+watch([statusFilter, taskScopeFilter], () => {
+  currentPage.value = 1
+  void loadInstances()
+})
+
+watch([currentPage, pageSize], () => {
+  void loadInstances()
+})
+
+async function fetchOrders() {
+  try {
+    const { data } = await ordersApi.list({ limit: 500, include_cancelled: true, reconcile: false })
+    orders.value = Array.isArray(data) ? data : data.items || []
+  } catch {
+    orders.value = []
+  }
+}
+
+function buildInstanceListParams({ all = false } = {}) {
+  const params = {
+    page: all ? 1 : currentPage.value,
+    page_size: all ? 100 : pageSize.value,
+  }
+  if (statusFilter.value) params.status = statusFilter.value
+  if (taskScopeFilter.value === 'manual') {
+    params.manual_only = true
+  } else if (taskScopeFilter.value) {
+    params.source_order_id = taskScopeFilter.value
+  }
+  return params
+}
+
+async function loadInstances() {
+  await fetchInstances(buildInstanceListParams())
+  selectedIds.value = selectedIds.value.filter((id) =>
+    (instances.value || []).some((item) => item.id === id)
+  )
+}
 
 async function openCreateFromQuery() {
   const templateId = route.query.template_id
@@ -433,12 +519,30 @@ function clearSelection() {
 }
 
 function selectCurrentPage() {
-  const ids = paginatedInstances.value.map((item) => item.id).filter(Boolean)
+  const ids = instances.value.map((item) => item.id).filter(Boolean)
   selectedIds.value = Array.from(new Set([...selectedIds.value, ...ids]))
 }
 
-function selectAllFiltered() {
-  selectedIds.value = filteredInstances.value.map((item) => item.id).filter(Boolean)
+async function selectAllFiltered() {
+  batchOperating.value = true
+  try {
+    const ids = []
+    const pageSizeForSelect = 100
+    const totalPages = Math.max(1, Math.ceil(totalInstances.value / pageSizeForSelect))
+    for (let page = 1; page <= totalPages; page += 1) {
+      const { data } = await instancesApi.list({
+        ...buildInstanceListParams({ all: true }),
+        page,
+        page_size: pageSizeForSelect,
+      })
+      const items = Array.isArray(data) ? data : data.items || []
+      ids.push(...items.map((item) => item.id).filter(Boolean))
+    }
+    selectedIds.value = Array.from(new Set(ids))
+    await loadInstances()
+  } finally {
+    batchOperating.value = false
+  }
 }
 
 function initMacroValues(defs, existing = {}) {
@@ -477,6 +581,19 @@ async function onTemplateChange(templateId) {
 
 function templateName(templateId) {
   return templates.value.find((t) => t.id === templateId)?.name || templateId || '-'
+}
+
+function shortId(id) {
+  return id ? String(id).slice(0, 8) : '-'
+}
+
+function orderLabel(orderId) {
+  const order = orderMap.value.get(orderId)
+  return order?.name || order?.external_task_id || `工单 ${shortId(orderId)}`
+}
+
+function taskScopeLabel(instance) {
+  return instance.source_order_id ? orderLabel(instance.source_order_id) : '手工实例'
 }
 
 function openCreateDialog() {
@@ -539,7 +656,9 @@ async function finalizeCreate(payload) {
   macroDefs.value = []
   macroValues.value = {}
   configRefs.value = []
-  await fetchInstances()
+  currentPage.value = 1
+  await loadInstances()
+  await fetchOrders()
   return created
 }
 
@@ -703,7 +822,8 @@ async function confirmSubmitEdit() {
     showChangeSummaryDialog.value = false
     showEditDialog.value = false
     pendingEditPayload.value = null
-    await fetchInstances()
+    await loadInstances()
+    await fetchOrders()
   } finally {
     editing.value = false
   }
@@ -712,10 +832,11 @@ async function confirmSubmitEdit() {
 function canStart(status) {
   return ['pending', 'stopped', 'failed'].includes(status)
 }
-async function startInstance(id) { await storeStart(id); ElMessage.success('实例已启动') }
-async function stopInstance(id) { await storeStop(id); ElMessage.success('实例已停止') }
-async function restartInstance(id) { await storeRestart(id); ElMessage.success('实例已重启') }
+async function startInstance(id) { await storeStart(id); await loadInstances(); ElMessage.success('实例已启动') }
+async function stopInstance(id) { await storeStop(id); await loadInstances(); ElMessage.success('实例已停止') }
+async function restartInstance(id) { await storeRestart(id); await loadInstances(); ElMessage.success('实例已重启') }
 function viewInstance(id) { router.push(`/dev/instances/${id}`) }
+function handleTableRowClick(row) { viewInstance(row.id) }
 function getErrorMessage(error, fallback) {
   return extractErrorMessage(error, fallback)
 }
@@ -725,6 +846,8 @@ async function confirmDelete(instance) {
     await deleteInstance(instance.id)
     ElMessage.success('实例已删除')
     selectedIds.value = selectedIds.value.filter((id) => id !== instance.id)
+    await loadInstances()
+    await fetchOrders()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(getErrorMessage(error, '删除实例失败'))
@@ -742,6 +865,8 @@ async function handleBatchStart() {
       ElMessage.success(`批量启动完成，成功 ${result.succeeded.length} 个`)
     }
     clearSelection()
+    await loadInstances()
+    await fetchOrders()
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '批量启动失败'))
   } finally {
@@ -760,6 +885,8 @@ async function handleBatchStop() {
       ElMessage.success(`批量停止完成，成功 ${result.succeeded.length} 个`)
     }
     clearSelection()
+    await loadInstances()
+    await fetchOrders()
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '批量停止失败'))
   } finally {
@@ -784,6 +911,8 @@ async function handleBatchDelete() {
       ElMessage.success(`批量删除完成，成功 ${result.succeeded.length} 个`)
     }
     clearSelection()
+    await loadInstances()
+    await fetchOrders()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(getErrorMessage(error, '批量删除失败'))
@@ -818,12 +947,26 @@ function formatUtc8Time(t) {
 .page-header { display: flex; justify-content: space-between; align-items: flex-end; }
 .subtitle { color: var(--text-secondary); margin-top: 4px; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
+.task-scope-filter { width: 260px; }
+.task-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+}
+.task-option small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 .instances-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 .instance-card { background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 14px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s; }
 .instance-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.12); border-color: var(--accent-primary); transform: translateY(-2px); }
 .instance-card:active { transform: translateY(0); }
 .instance-header { display: flex; justify-content: space-between; align-items: flex-start; }
-.instance-meta { margin-top: 10px; display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 12px; }
+.instance-meta { margin-top: 10px; display: flex; justify-content: space-between; gap: 8px; color: var(--text-secondary); font-size: 12px; }
+.instance-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.instances-table :deep(.el-table__row) { cursor: pointer; }
 /* Status-tinted left border */
 .instance-card.running { border-left: 3px solid var(--success); }
 .instance-card.failed { border-left: 3px solid var(--danger); }

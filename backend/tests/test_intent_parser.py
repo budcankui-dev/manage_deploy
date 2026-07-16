@@ -6,7 +6,7 @@ from services.llm_intent_parser import _raw_to_parse_result
 
 
 def test_parse_video_pipeline_uses_baseline_objective_even_when_user_mentions_latency():
-    result = parse_intent("部署低时延视频转发，从 h1 到 h2，处理90帧，720p，30fps，现在开始跑2小时，端到端时延低于 200ms")
+    result = parse_intent("部署低时延视频转发，从 h1 到 h2，处理90帧，统计30帧，720p，30fps，现在开始跑2小时，端到端时延低于 200ms")
     assert result.task_type == "low_latency_video_pipeline"
     assert result.data_profile["frame_count"] == 90
     assert result.data_profile["resolution"] == "720p"
@@ -17,7 +17,7 @@ def test_parse_video_pipeline_uses_baseline_objective_even_when_user_mentions_la
 
 
 def test_parse_low_latency_forwarding_strategy_is_distinct_from_fastest_completion():
-    result = parse_intent("视频AI推理任务，从 h1 到 h2，处理90帧，720p，30fps，现在开始跑2小时，低时延策略")
+    result = parse_intent("视频AI推理任务，从 h1 到 h2，处理90帧，统计30帧，720p，30fps，现在开始跑2小时，低时延策略")
 
     assert result.task_type == "low_latency_video_pipeline"
     assert result.modality == "低时延转发模态"
@@ -25,8 +25,32 @@ def test_parse_low_latency_forwarding_strategy_is_distinct_from_fastest_completi
     assert result.parse_status == "valid"
 
 
+def test_parse_video_pipeline_distinguishes_frame_range_and_measured_frames():
+    result = parse_intent(
+        "视频AI推理任务，从 h1 到 h2，720p视频片段100帧，统计30帧P90，30fps，现在开始跑2小时，低时延策略"
+    )
+
+    assert result.task_type == "low_latency_video_pipeline"
+    assert result.data_profile["frame_count"] == 100
+    assert result.data_profile["measured_frames"] == 30
+    assert result.data_profile["fps"] == 30
+    assert result.parse_status == "valid"
+
+
+def test_parse_video_extract_frames_are_candidate_range_not_measured_frames():
+    result = parse_intent(
+        "视频AI推理任务，从 h1 到 h2，720p，抽取100帧，30fps，现在开始跑2小时，低时延策略"
+    )
+
+    assert result.task_type == "low_latency_video_pipeline"
+    assert result.data_profile["frame_count"] == 100
+    assert "measured_frames" not in result.data_profile
+    assert result.parse_status == "incomplete"
+    assert "参与统计帧数" in "；".join(result.validation_errors)
+
+
 def test_task_type_forces_modality_mapping_even_if_user_mentions_other_modality():
-    result = parse_intent("我想按高通量计算模态做一个视频AI推理任务，从 h1 到 h2，100帧，720p，30fps，现在开始跑2小时")
+    result = parse_intent("我想按高通量计算模态做一个视频AI推理任务，从 h1 到 h2，100帧，统计30帧，720p，30fps，现在开始跑2小时")
 
     assert result.task_type == "low_latency_video_pipeline"
     assert result.modality == "低时延转发模态"
@@ -40,12 +64,12 @@ async def test_runtime_settings_can_override_task_modality_mapping():
         "intent_rule_fallback_enabled": True,
         "task_modality_override_enabled": True,
         "task_modality_overrides": {
-            "low_latency_video_pipeline": "确定性转发模态",
+        "low_latency_video_pipeline": "确定性转发模态",
         },
     }
 
     result, _trace = await run_intent_workflow(
-        "视频AI推理任务，从 h1 到 h2，100帧，720p，30fps，现在开始跑2小时",
+        "视频AI推理任务，从 h1 到 h2，100帧，统计30帧，720p，30fps，现在开始跑2小时",
         valid_nodes=["h1", "h2"],
         runtime_settings=runtime_settings,
     )
@@ -137,9 +161,10 @@ def test_parse_multiturn_completion_merges_existing_draft():
     )
     assert first.parse_status == "incomplete"
     assert any("帧率" in item for item in first.validation_errors)
+    assert any("参与统计帧数" in item for item in first.validation_errors)
 
     second = parse_intent(
-        "补充帧率 30fps",
+        "补充帧率 30fps，统计30帧",
         existing_draft={
             "task_type": first.task_type,
             "modality": first.modality,
@@ -156,6 +181,7 @@ def test_parse_multiturn_completion_merges_existing_draft():
 
     assert second.parse_status == "valid"
     assert second.data_profile["fps"] == 30
+    assert second.data_profile["measured_frames"] == 30
     assert second.source_name == "h1"
     assert second.destination_name == "h2"
 
@@ -206,6 +232,27 @@ def test_llm_parse_result_keeps_explicit_future_time_when_immediate_is_negated()
 
     assert result.business_start_time.isoformat() == "2099-06-03T21:30:00"
     assert result.business_end_time.isoformat() == "2099-06-03T23:30:00"
+
+
+def test_llm_parse_result_preserves_video_measured_frames():
+    raw = {
+        "task_type": "low_latency_video_pipeline",
+        "source_name": "h1",
+        "destination_name": "h2",
+        "start_time": "now",
+        "end_time": "2099-06-03T23:30:00",
+        "frame_count": 100,
+        "measured_frames": 30,
+        "resolution": "720p",
+        "fps": 30,
+        "routing_strategy": "low_latency_forwarding",
+    }
+
+    result = _raw_to_parse_result(raw, None, utterance="视频片段100帧，统计30帧P90")
+
+    assert result.data_profile["frame_count"] == 100
+    assert result.data_profile["measured_frames"] == 30
+    assert result.parse_status == "valid"
 
 
 @pytest.mark.parametrize(

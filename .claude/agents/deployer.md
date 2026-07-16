@@ -25,8 +25,8 @@ ssh manage-admin "curl -s http://localhost:8181/api/nodes | python3 -c 'import s
 
 # 4. 如果 worker 代码有改动，重建并推送镜像
 cd workers
-docker build -f high-throughput-matmul/Dockerfile -t 10.112.244.94:5000/scientific-matmul:dev .
-docker push 10.112.244.94:5000/scientific-matmul:dev
+docker build -f high-throughput-matmul/Dockerfile -t 10.112.73.149:5000/scientific-matmul:dev .
+docker push 10.112.73.149:5000/scientific-matmul:dev
 ```
 
 拓扑、SSH 别名、端口见 `docs/deployment/test-lab.md`。
@@ -34,7 +34,7 @@ docker push 10.112.244.94:5000/scientific-matmul:dev
 ## 能力范围
 
 - SSH 批量运维（别名 manage-admin / manage-compute-1/2/3）
-- 镜像分发到私有 registry `10.112.244.94:5000`
+- 镜像分发到私有 registry `10.112.73.149:5000`
 - 节点注册验证（`GET /api/nodes`）
 - 清理残留容器（`DELETE /containers/{task_id}/{node_id}` via Node Agent）
 - 健康检查：`curl http://{node_ip}:8001/health`

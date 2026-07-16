@@ -234,7 +234,7 @@ def main() -> int:
 
     job = wait_for_data_handler(port, timeout_sec=120.0)
     print(
-        f"VIDEO_COMPUTE_GOT_JOB frames={job.get('frame_count')} "
+        f"VIDEO_COMPUTE_GOT_JOB frame_count={job.get('frame_count')} "
         f"stride={job.get('frame_stride')}",
         flush=True,
     )
@@ -243,7 +243,7 @@ def main() -> int:
     result = run_video_profile(job, progress_callback=progress_callback)
     print(
         f"VIDEO_COMPUTE_DONE p90_ms={result['frame_latency_p90_ms']:.2f} "
-        f"frames={result['measured_frames']}",
+        f"measured_frames={result['measured_frames']}",
         flush=True,
     )
     PostDataHandler.result_data = result

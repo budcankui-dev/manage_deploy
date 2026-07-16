@@ -10,7 +10,7 @@
 #      will not run on x86_64 compute nodes.
 #
 #   2. Cross-platform build for AMD64 compute nodes + push to private registry:
-#        NODE_AGENT_IMAGE=10.112.244.94:5000/node-agent \
+#        NODE_AGENT_IMAGE=10.112.73.149:5000/node-agent \
 #        NODE_AGENT_TAG=dev \
 #        NODE_AGENT_PUSH=1 \
 #        NODE_AGENT_PLATFORM=linux/amd64 \

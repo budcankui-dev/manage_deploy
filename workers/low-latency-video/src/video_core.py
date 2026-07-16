@@ -574,7 +574,7 @@ def _add_preview_evidence_overlay(
         f"帧序号 {frame_index} | 单帧推理 {frame_latency_ms:.2f} ms | "
         f"P90 {p90_latency_ms:.2f} ms"
     )
-    zh_line_2 = f"有效推理帧 {measured_frames} | GPU {'已分配' if gpu_assigned else '未分配'}"
+    zh_line_2 = f"统计帧 {measured_frames} | GPU {'已分配' if gpu_assigned else '未分配'}"
     fallback_line_1 = (
         f"frame {frame_index} | latency {frame_latency_ms:.2f} ms | "
         f"P90 {p90_latency_ms:.2f} ms"

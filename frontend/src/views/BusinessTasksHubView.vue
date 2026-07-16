@@ -894,10 +894,16 @@ async function deleteOrder(row) {
       return
     }
   }
-  await ordersApi.delete(order_id)
-  ElMessage.success('工单已删除')
-  drawerOpen.value = false
-  await refreshAll()
+  try {
+    await ordersApi.delete(order_id, { silentError: true })
+    ElMessage.success('工单已删除')
+    drawerOpen.value = false
+    await refreshAll()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '删除工单未完成，请刷新状态后重试。'))
+    }
+  }
 }
 
 async function cleanupSelectedOrderInstances() {
@@ -913,10 +919,14 @@ async function cleanupSelectedOrderInstances() {
   }
   batchCleanupLoading.value = true
   try {
-    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value)
+    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value, { silentError: true })
     const allOk = showBatchOperationResult(data, (count) => `已清理 ${count} 个工单实例，工单证据已保留`)
     if (allOk) selectedOrderIds.value = []
     await refreshAll()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '清理实例未完成，请刷新状态后重试。'))
+    }
   } finally {
     batchCleanupLoading.value = false
   }
@@ -935,13 +945,17 @@ async function deleteSelectedOrders() {
   }
   batchDeleteLoading.value = true
   try {
-    const { data } = await ordersApi.batchDelete(selectedOrderIds.value)
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value, { silentError: true })
     const allOk = showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
     if (allOk) {
       selectedOrderIds.value = []
       drawerOpen.value = false
     }
     await refreshAll()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '批量删除未完成，请刷新状态后重试。'))
+    }
   } finally {
     batchDeleteLoading.value = false
   }
@@ -970,10 +984,14 @@ async function cleanupCurrentBenchmarkRun() {
   }
   runCleanupLoading.value = true
   try {
-    const { data } = await ordersApi.cleanupInstances(payload)
+    const { data } = await ordersApi.cleanupInstances(payload, { silentError: true })
     const allOk = showBatchOperationResult(data, (count) => `本轮已清理 ${count} 个工单实例，证据已保留`)
     if (allOk) selectedOrderIds.value = []
     await refreshAll()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '清理本轮实例未完成，请刷新状态后重试。'))
+    }
   } finally {
     runCleanupLoading.value = false
   }
@@ -994,13 +1012,17 @@ async function deleteCurrentBenchmarkRun() {
   }
   runDeleteLoading.value = true
   try {
-    const { data } = await ordersApi.batchDelete(payload)
+    const { data } = await ordersApi.batchDelete(payload, { silentError: true })
     const allOk = showBatchOperationResult(data, (count) => `本轮已删除 ${count} 个工单`)
     if (allOk) {
       selectedOrderIds.value = []
       drawerOpen.value = false
     }
     await refreshAll()
+  } catch (err) {
+    if (!err?.__authExpired) {
+      ElMessage.warning(extractErrorMessage(err, '删除本轮工单未完成，请刷新状态后重试。'))
+    }
   } finally {
     runDeleteLoading.value = false
   }

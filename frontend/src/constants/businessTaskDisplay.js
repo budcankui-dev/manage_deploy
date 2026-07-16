@@ -120,7 +120,7 @@ export function describeObjectiveMeaning(taskType, objective) {
     return `验收标准：${sentence}。以有效计算吞吐量和节点历史基线对比判定业务目标是否达标；计算跑通并上报指标后即可参与成功率统计。`
   }
   if (taskType === 'low_latency_video_pipeline') {
-    return `验收标准：${sentence}。数值越小表示推理越快；以有效推理阶段的 P90 帧处理时延和节点历史基线对比判定。`
+    return `验收标准：${sentence}。数值越小表示推理越快；以参与统计阶段的 P90 帧处理时延和节点历史基线对比判定。`
   }
   return `验收标准：${sentence}。`
 }
@@ -140,10 +140,10 @@ export function describeDataProfile(taskType, profile) {
     const videoSpec = [profile.resolution, profile.fps != null ? `${profile.fps}fps` : null].filter(Boolean).join(' / ')
     return compactRows([
       { label: '输入视频规格', value: videoSpec || '-' },
-      { label: '本次抽检帧数', value: profile.frame_count != null ? `${profile.frame_count} 帧` : '-' },
+      { label: '视频片段帧范围', value: profile.frame_count != null ? `${profile.frame_count} 帧` : '-' },
       { label: '抽帧间隔', value: profile.frame_stride != null ? `每 ${profile.frame_stride} 帧取 1 帧` : '-' },
       { label: '预热帧数', value: String(profile.warmup_frames ?? '-') },
-      { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
+      { label: '参与统计帧数', value: profile.measured_frames != null ? `${profile.measured_frames} 帧` : '-' },
       { label: '固定测试视频', value: profile.video_asset || 'bottle-detection.mp4' },
       { label: '检测模型', value: profile.model_name || 'yolov5n' },
     ])
@@ -333,7 +333,7 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
     rows.push({ label: 'GPU 分配', value: meta.gpu_assigned ? '已分配' : '未检测到 GPU 分配' })
   }
   if (meta.gpu_error) rows.push({ label: 'GPU 诊断', value: String(meta.gpu_error) })
-  if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
+  if (meta.measured_frames != null) rows.push({ label: '参与统计帧数', value: `${meta.measured_frames} 帧` })
   if (meta.annotated_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.annotated_frame_index) })
   if (meta.annotated_frame_latency_ms != null) {
     rows.push({ label: '预览帧时延', value: `${Number(meta.annotated_frame_latency_ms).toFixed(2)} ms` })
@@ -452,7 +452,7 @@ export function videoPreviewEvidenceRows(resultMetadata) {
   const latency = previewFrameLatency(meta)
   if (latency != null && Number.isFinite(latency)) rows.push(`单帧推理 ${latency.toFixed(2)} ms`)
   if (meta.frame_latency_p90_ms != null) rows.push(`P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
-  if (meta.measured_frames != null) rows.push(`有效帧 ${meta.measured_frames}`)
+  if (meta.measured_frames != null) rows.push(`P90统计帧数 ${meta.measured_frames} 帧`)
   if (meta.gpu_assigned !== undefined) rows.push(`GPU ${meta.gpu_assigned ? '已分配' : '未分配'}`)
   return rows
 }

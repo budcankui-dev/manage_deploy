@@ -91,7 +91,7 @@ Last Updated: 2026-05-28
   - **[2026-06-02]** `ordersApi` 新增 `batchBenchmark`
 - `frontend/src/views/BusinessTasksHubView.vue`：
   - **[2026-06-02]** 新增"批量压测"按钮（紧挨"运行基线测试"）、`showBatchBenchmarkDialog` 对话框（任务数量/类型/矩阵大小/批次数）、`submitBatchBenchmark` 函数
-- 远程 API（`http://10.112.244.94:8181`）：
+- 远程 API（`http://10.112.73.149:8181`）：
   - **[2026-06-02]** PUT `templates/b1632eae-2363-44df-8ae3-456bd2d511d9`：source/compute/sink 三节点 `port_defs` 改为 `auto=true`，range 分别为 [18800,18900]/[18900,19000]/[19000,19100]
 - `backend/api/conversations.py`：
   - **[Integration Fix]** `confirm_intent` 中 `db.add(order)` + `await db.flush()` 包裹 try/except，捕获 Duplicate entry / UNIQUE constraint / IntegrityError，返回 409 而非 500

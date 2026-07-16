@@ -30,7 +30,7 @@ def main() -> int:
     result = wait_for_data_handler(port, timeout_sec=180.0)
     print(
         f"VIDEO_SINK_GOT_RESULT p90_ms={result.get('frame_latency_p90_ms')} "
-        f"frames={result.get('measured_frames')}",
+        f"measured_frames={result.get('measured_frames')}",
         flush=True,
     )
 

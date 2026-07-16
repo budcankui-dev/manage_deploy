@@ -122,6 +122,8 @@ E2E_TRIGGER_MATMUL_DEMO=1 npm run test:e2e:headed
 - 用户端接入演示：自然语言输入 -> 参数完整 -> 确认生成工单。系统设置为“系统自动分配”时会直接完成 compute 节点分配并生成接入信息；设置为“外部路由系统”时进入待分配，等待路由系统回写。平台默认只部署 compute，source/sink 是用户自行接入的外部端点。
 - 自动化测评域：`/benchmark` 为批量业务目标成功率测评，source/compute/sink 都由平台部署，便于稳定复现指标。
 
+用户端外部接入模式的页面验收、手动启动容器命令、真实拓扑脚本和排障流程见 [用户接入模式端到端验收流程](user-access-e2e-runbook.md)。该流程必须覆盖矩阵乘法和视频AI推理两类任务；正式稳定性验收仍以两类任务各 30 个测评工单、业务目标成功率均不低于 90% 为准。
+
 该 E2E 可在系统设置页启用开发调试路由流程，只验证用户端链路和 compute 物化能力；正式路由系统仍通过 `/api/routing-orders/{order_id}/result` 回写 placements。
 
 Worker 和脚本语法：
@@ -175,7 +177,7 @@ E2E_DELETE_INSTANCE=1 ./scripts/e2e_matmul_live.sh
 
 `WORKER_SKIP_BUILD=1` 只允许在已经确认目标节点可拉取正确 tag、正确 registry、正确 CPU 架构的镜像后使用。远程 AMD64 节点测试前必须验证镜像是 `linux/amd64`，不能复用 macOS Docker Desktop 上默认构建出的本地镜像。
 
-真实拓扑测试时，优先使用验收管理网私有仓库镜像，例如 `172.16.0.254:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。`10.112.244.94:5000` 只作为校园网开发/远程维护回退入口。
+真实拓扑测试时，优先使用验收管理网私有仓库镜像，例如 `172.16.0.254:5000/scientific-matmul:dev`，并确保各业务节点 Docker 已配置可拉取该 registry。`10.112.73.149:5000` 只作为校园网开发/远程维护回退入口。
 
 期望：
 
@@ -239,7 +241,7 @@ PYTHONPATH=. ./venv/bin/python scripts/run_intent_online_eval.py --concurrency 8
 
 期望：生成 `reports/intent_eval_online.json`，`total=360`，`passed=true`，页面 `/intent-evaluation` 展示“意图参数解析准确率”不低于 90%。正式验收建议使用并发 8、单条最多重试 5 次、失败间隔 5 秒的参数；在当前固定数据集规模下，正常应在 10 多分钟内完成。若评测中断，可追加 `--resume` 续跑已完成样本。报告内部保留模型原始输出诊断，专家主页面只展示统一准确率。
 
-正式展示以管理节点页面为准。`reports/intent_eval_online.json` 是文件产物，不写入 MySQL；本地 `127.0.0.1` 运行出的报告不会自动出现在管理节点页面。准备让验收方或用户查看时，应在管理节点页面运行评测，或显式同步本地 `reports/intent_eval_online.json`、`reports/intent_eval_online.status.json` 和对应 `reports/intent_eval_runs/*.json` 到 `/home/bupt/manage_deploy/reports/` 后再刷新 `http://172.16.0.254:8182/intent-evaluation`。校园网远程维护阶段可用 `http://10.112.244.94:8182/intent-evaluation` 访问同一管理节点前端。
+正式展示以管理节点页面为准。`reports/intent_eval_online.json` 是文件产物，不写入 MySQL；本地 `127.0.0.1` 运行出的报告不会自动出现在管理节点页面。准备让验收方或用户查看时，应在管理节点页面运行评测，或显式同步本地 `reports/intent_eval_online.json`、`reports/intent_eval_online.status.json` 和对应 `reports/intent_eval_runs/*.json` 到 `/home/bupt/manage_deploy/reports/` 后再刷新 `http://172.16.0.254:8182/intent-evaluation`。校园网远程维护阶段可用 `http://10.112.73.149:8182/intent-evaluation` 访问同一管理节点前端。
 
 ## 用户端意图对话闭环
 
@@ -258,7 +260,7 @@ http://<manager-host>/intent-chat
 视频AI推理任务示例输入：
 
 ```text
-视频AI推理任务，从 h3 到 h4，720p视频，100帧，30fps，现在开始跑2小时，低时延策略
+视频AI推理任务，从 h3 到 h4，720p视频片段100帧，统计30帧P90，30fps，现在开始跑2小时，低时延策略
 ```
 
 验证要点：
@@ -291,6 +293,7 @@ PYTHONPATH=. ./venv/bin/python scripts/e2e_compute_only_access.py --base-url htt
 ```bash
 ENDPOINT_NODE_ALIAS=h2 \
 ENDPOINT_TOPOLOGY_NODE_ID=h18015002 \
+ENDPOINT_MANAGEMENT_IP=172.16.0.152 \
 ENDPOINT_BUSINESS_IPV6=2001:da8:215:6a01:xxxx:xxxx:xxxx:xxxx \
 PYTHONPATH=workers python3 workers/high-throughput-matmul/src/receiver_main.py --port 9000
 ```
@@ -300,6 +303,7 @@ PYTHONPATH=workers python3 workers/high-throughput-matmul/src/receiver_main.py -
 ```bash
 ENDPOINT_NODE_ALIAS=h2 \
 ENDPOINT_TOPOLOGY_NODE_ID=h18015002 \
+ENDPOINT_MANAGEMENT_IP=172.16.0.152 \
 ENDPOINT_BUSINESS_IPV6=2001:da8:215:6a01:xxxx:xxxx:xxxx:xxxx \
 PYTHONPATH=workers python3 workers/low-latency-video/src/receiver_main.py --port 9100
 ```

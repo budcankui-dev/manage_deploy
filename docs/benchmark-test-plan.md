@@ -46,10 +46,10 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 ## 测试环境
 
-- 管理员前端：`http://10.112.244.94:8182`
-- 业务测评页：`http://10.112.244.94:8182/benchmark`
-- 后端 API：`http://10.112.244.94:8181`
-- 管理节点：`admin-server`，`10.112.244.94`
+- 管理员前端：`http://10.112.73.149:8182`
+- 业务测评页：`http://10.112.73.149:8182/benchmark`
+- 后端 API：`http://10.112.73.149:8181`
+- 管理节点：`admin-server`，`10.112.73.149`
 - 业务节点：`compute-1`、`compute-2`、`compute-3`
 - 用户终端节点：`h1-h13`，当前作为用户接入源/目的端点和 route-only/轻量 source/sink 演示终端
 
@@ -61,7 +61,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 1. `admin-server` 已部署前端、后端、数据库、对象存储和私有镜像仓库。
 2. `compute-1/2/3` 已注册为可调度计算节点，`h1-h13` 已注册为终端节点。业务目标成功率测评中，平台可在可管控测试设备上部署 source / compute / sink 容器，用于自动化统计成功率；真实用户接入演示中，source/sink 默认是用户自行控制的终端端点，平台通常只部署 compute。
 3. 业务节点已运行 Node Agent，管理面能访问各节点 Agent API。
-4. 矩阵乘法 worker 镜像已在 AMD64 环境构建并推送到 `10.112.244.94:5000/scientific-matmul:dev`。
+4. 矩阵乘法 worker 镜像已在 AMD64 环境构建并推送到 `10.112.73.149:5000/scientific-matmul:dev`。
 5. 每个参与测试的节点已完成相同 profile 的 baseline 测试，且 `stable=true`。
 
 ## 默认参数
@@ -91,7 +91,8 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 | fps | `30` | 用于解释抽帧间隔和业务画像 |
 | 抽帧间隔 | `30` | 约每秒抽 1 帧，避免批量测评产生过高数据面流量 |
 | warmup_frames | `10` | 前 10 帧用于模型和 OpenCV DNN 预热 |
-| measured_frames | `30` | 统计 30 帧的 P90 时延，兼顾演示速度和稳定性 |
+| 视频片段帧范围 frame_count | `100` | 固定测试视频中参与抽样的候选片段范围，不等同于最终统计帧数 |
+| measured_frames | `30` | 参与 P90 统计的帧数，兼顾演示速度和稳定性 |
 | 置信度阈值 | `0.25` | 固定检测参数，避免不同批次人为调参 |
 | NMS 阈值 | `0.45` | 固定检测参数 |
 
@@ -109,7 +110,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 ### Step 2 批量测评
 
-在一行内配置任务数和当前任务类型的固定 profile 参数，然后点击“创建测评工单”。矩阵乘法展示矩阵规模、批次数、观测秒数和最少样本数；视频 AI 推理展示帧数、抽帧间隔和有效帧数。内部 CPU 调试测评参数不作为专家验收页面参数展示，仅在开发调试场景使用。
+在一行内配置任务数和当前任务类型的固定 profile 参数，然后点击“创建测评工单”。矩阵乘法展示矩阵规模、批次数、观测秒数和最少样本数；视频 AI 推理展示视频片段帧范围、抽帧间隔和参与统计帧数。内部 CPU 调试测评参数不作为专家验收页面参数展示，仅在开发调试场景使用。
 
 创建出的工单应带 `is_benchmark=true` 标记，只用于验收成功率统计，避免和普通用户工单混在一起。测评工单会自动写入业务开始/结束时间，保证路由回写后可以稳定物化为 scheduled 实例。
 
@@ -198,7 +199,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 ## 真实拓扑执行要求
 
-从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再按 [标准化部署与运维流程](/Users/yanjia/codes/manage_deploy/docs/deployment/标准化部署与运维流程.md) 更新 `admin-server` 的 `/home/bupt/manage_deploy` 并重启服务。当前管理节点按拷贝式部署目录使用，不在远端 `git pull`；同步时必须排除数据库、`.env`、虚拟环境和报告产物。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.244.94:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
+从本地代码修改迁移到真实拓扑时，必须先提交/推送代码，再按 [标准化部署与运维流程](/Users/yanjia/codes/manage_deploy/docs/deployment/标准化部署与运维流程.md) 更新 `admin-server` 的 `/home/bupt/manage_deploy` 并重启服务。当前管理节点按拷贝式部署目录使用，不在远端 `git pull`；同步时必须排除数据库、`.env`、虚拟环境和报告产物。涉及 worker、Node Agent 或 Dockerfile 变更时，还必须重新构建 AMD64 镜像并推送到 `10.112.73.149:5000`，随后让 `compute-1/2/3` 拉取最新镜像并预检查容器内代码。禁止在真实验收中沿用本地 `127.0.0.1`、ARM64 镜像、`WORKER_SKIP_BUILD=1` 或跳过远端镜像预检查。
 
 完整操作清单见 [matmul-acceptance-runbook.md](/Users/yanjia/codes/manage_deploy/docs/deployment/matmul-acceptance-runbook.md)。
 
@@ -207,7 +208,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 ```bash
 # admin-server 构建并推送 AMD64 worker
 cd /home/bupt/manage_deploy
-WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_IMAGE=10.112.73.149:5000/scientific-matmul \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \
@@ -215,7 +216,7 @@ WORKER_PUSH=1 \
 
 # admin-server 重建模板，确保模板 image 指向私有 registry
 cd /home/bupt/manage_deploy/backend
-WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_IMAGE=10.112.73.149:5000/scientific-matmul \
 WORKER_TAG=dev \
 DEMO_BASE_URL=http://127.0.0.1:8181 \
 PYTHONPATH=. /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_matmul_template.py
@@ -225,7 +226,7 @@ PYTHONPATH=. /home/bupt/miniconda3/bin/python3.13 scripts/rebuild_matmul_templat
 
 ```bash
 WORKER_KIND=video \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=10.112.73.149:5000/low-latency-video \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \
@@ -268,9 +269,9 @@ docker push localhost:5000/scientific-matmul:dev
 
 ```bash
 # 本地或 admin-server 运行真实远程 E2E preflight，不能跳过镜像/架构/agent 检查
-BASE_URL=http://10.112.244.94:8181 \
+BASE_URL=http://10.112.73.149:8181 \
 E2E_REMOTE=1 \
-WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_IMAGE=10.112.73.149:5000/scientific-matmul \
 WORKER_TAG=dev \
 E2E_REMOTE_NODES="manage-compute-1 manage-compute-2 manage-compute-3" \
 E2E_NODE_AGENT_HOSTS="10.112.38.25 10.112.17.51 10.112.59.209" \
@@ -281,7 +282,7 @@ MATMUL_BATCH_COUNT=50 \
 
 ## 可视化 E2E 要求
 
-端到端测试需要让用户看到页面过程时，Tester Agent 应使用有头浏览器或 Codex Browser 打开 `http://10.112.244.94:8182/benchmark`，逐步操作 Step 1 到 Step 4，并在关键节点保留截图或页面状态说明。
+端到端测试需要让用户看到页面过程时，Tester Agent 应使用有头浏览器或 Codex Browser 打开 `http://10.112.73.149:8182/benchmark`，逐步操作 Step 1 到 Step 4，并在关键节点保留截图或页面状态说明。
 
 命令行 API 校验只能作为辅助，不能替代浏览器中对验收页面布局、状态变化和结果进度条的可视化确认。
 
@@ -293,7 +294,7 @@ MATMUL_BATCH_COUNT=50 \
 - 当前业务目标统计接口和订单列表支持按 `benchmark_run_id` 过滤，验收页面默认按当前轮次统计，避免新旧测评结果互相污染。
 - 当前验收页面支持 `POST /api/orders/start-controlled-routed` 运行测评，按小批次限流执行，并在评估后释放容器实例、保留工单证据；正式矩阵验收不再使用一次性启动全部实例作为默认口径。
 - 当前业务工单中心支持按 `benchmark_run_id` 筛选验收测评工单，并提供“清理实例保留工单”和“删除工单”两类批量操作；前者用于释放容器资源并保留证据，后者用于删除废弃轮次。
-- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；它使用固定测试视频 + YOLOv5n ONNX 产出带框结果，CPU 路径仅作为开发调试开关。如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.244.94:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
+- 当前视频 AI 推理 worker 已提供本地单测、benchmark mode 和镜像构建入口，并已在 `/benchmark` 页面作为扩展业务类型开放；它使用固定测试视频 + YOLOv5n ONNX 产出带框结果，CPU 路径仅作为开发调试开关。如需远端联调，先构建 `WORKER_KIND=video WORKER_IMAGE=10.112.73.149:5000/low-latency-video WORKER_TAG=dev WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh`，再注册对应模板和 catalog。
 - 当前正式判定不依赖实时 CPU/GPU 监控。资源监控可作为演示增强项，但验收主证据是工单详情中的实例状态、实际节点/GPU 分配、业务指标评估和指标采集 JSON，避免为了演示引入额外监控系统导致链路变复杂。
 - 当前测试工单列表依赖管理员视角查看全局 `is_benchmark=true` 工单；普通用户仍只能查看自己的工单，管理员页面必须能列出全部测评工单并打开详情。
 - 真正面向专家验收前，需要在当前真实拓扑环境执行一次全量 baseline 和 30 任务测评，并保存浏览器截图和 JSON 报告。

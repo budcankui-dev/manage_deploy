@@ -142,7 +142,7 @@ async def test_order_uses_task_type_catalog_when_template_id_is_stale(client, db
             instance_id=instance.id,
             template_node_id="template-node-compute",
             name="compute",
-            image="10.112.244.94:5000/scientific-matmul:dev",
+            image="10.112.73.149:5000/scientific-matmul:dev",
             command="python /app/src/compute_main.py",
             node_id=node.id,
             status="failed",
@@ -159,7 +159,7 @@ async def test_order_uses_task_type_catalog_when_template_id_is_stale(client, db
     detail = response.json()
     assert detail["instance"]["node_count"] == 1
     placement = detail["node_placements"][0]
-    assert placement["image"] == "10.112.244.94:5000/scientific-matmul:dev"
+    assert placement["image"] == "10.112.73.149:5000/scientific-matmul:dev"
     assert placement["container_id"] is None
     assert placement["container_name"] is None
     assert placement["error_message"] == "镜像启动失败"
@@ -213,7 +213,7 @@ async def test_order_detail_uses_latest_metric_as_user_mode_runtime_evidence(cli
             instance_id=instance.id,
             template_node_id="template-node-user-mode-metric",
             name="compute",
-            image="10.112.244.94:5000/scientific-matmul:dev",
+            image="10.112.73.149:5000/scientific-matmul:dev",
             command="python /app/src/compute_main.py",
             node_id=node.id,
             status=TaskStatus.RUNNING,

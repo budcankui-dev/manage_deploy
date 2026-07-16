@@ -27,10 +27,10 @@ from schemas import (
     InstancePreflightResponse,
     TaskEventResponse,
     TaskInstanceCreate,
+    TaskInstanceListResponse,
     TaskInstanceNodeOverride,
     TaskInstanceResponse,
     TaskInstanceSchedule,
-    TaskInstanceSimple,
     TaskInstanceUpdate,
     TaskMetricReport,
     TaskMetricResponse,
@@ -610,29 +610,52 @@ async def preflight_instance_create(
     return await _preflight_instance_plan(db, plan)
 
 
-@router.get("", response_model=list[TaskInstanceSimple])
+@router.get("", response_model=TaskInstanceListResponse)
 async def list_instances(
     status: str | None = Query(None),
     template_id: str | None = Query(None),
     deployment_mode: str | None = Query(None),
     source_order_id: str | None = Query(None),
+    manual_only: bool = Query(False),
     q: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(TaskInstance).options(selectinload(TaskInstance.nodes))
+    filters = []
     if status:
-        query = query.where(TaskInstance.status == status)
+        filters.append(TaskInstance.status == status)
     if template_id:
-        query = query.where(TaskInstance.template_id == template_id)
+        filters.append(TaskInstance.template_id == template_id)
     if deployment_mode:
-        query = query.where(TaskInstance.deployment_mode == deployment_mode)
-    if source_order_id:
-        query = query.where(TaskInstance.source_order_id == source_order_id)
+        filters.append(TaskInstance.deployment_mode == deployment_mode)
+    if manual_only:
+        filters.append(TaskInstance.source_order_id.is_(None))
+    elif source_order_id:
+        filters.append(TaskInstance.source_order_id == source_order_id)
     if q:
-        query = query.where(TaskInstance.name.ilike(f"%{q}%"))
-    query = query.order_by(TaskInstance.created_at.desc())
+        filters.append(TaskInstance.name.ilike(f"%{q}%"))
+
+    count_query = select(func.count(TaskInstance.id))
+    if filters:
+        count_query = count_query.where(*filters)
+    total = int((await db.execute(count_query)).scalar_one() or 0)
+
+    query = select(TaskInstance).options(selectinload(TaskInstance.nodes))
+    if filters:
+        query = query.where(*filters)
+    query = (
+        query.order_by(TaskInstance.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await db.execute(query)
-    return result.scalars().all()
+    return TaskInstanceListResponse(
+        items=list(result.scalars().all()),
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{instance_id}", response_model=TaskInstanceResponse)

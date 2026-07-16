@@ -77,14 +77,14 @@ ssh manage-admin "cd /home/bupt/manage_deploy && \
 
 ```bash
 WORKER_KIND=matmul \
-WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+WORKER_IMAGE=10.112.73.149:5000/scientific-matmul \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \
 ./scripts/build_workers.sh
 
 WORKER_KIND=video \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=10.112.73.149:5000/low-latency-video \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \
@@ -94,7 +94,7 @@ WORKER_PUSH=1 \
 ## 能力范围
 
 - SSH 批量运维，常用别名包括 `manage-admin`、`manage-compute-1/2/3`。
-- 镜像分发到私有 registry `10.112.244.94:5000`。
+- 镜像分发到私有 registry `10.112.73.149:5000`。
 - 节点注册验证：`GET /api/nodes`。
 - Node Agent 健康检查：`curl http://{node_ip}:8001/health`。
 - 残留容器检查和清理，清理前必须确认不会影响正在运行的业务。

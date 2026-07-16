@@ -3248,6 +3248,136 @@ async def test_controlled_benchmark_claims_instance_and_dispatches_background_st
 
 
 @pytest.mark.asyncio
+async def test_controlled_benchmark_waits_for_external_network_ready_before_claiming_start(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-network-ready-user")
+
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="network ready gated benchmark order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.NETWORK_BINDING_READY.value,
+        runtime_config={
+            "benchmark": {"run_id": "network-ready-gated-run"},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+                "routing_strategy": "resource_guarantee",
+                "runtime_plan": {"routing_strategy": "resource_guarantee"},
+            },
+            "routing_result": {
+                "strategy": "resource_guarantee",
+                "network_ready_required": True,
+                "network_ready": False,
+                "placements": [
+                    {"task_node_id": "source", "topology_node_id": "h1"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                    {"task_node_id": "sink", "topology_node_id": "h2"},
+                ],
+            },
+        },
+        is_benchmark=True,
+        materialized_instance_id="network-ready-gated-instance",
+    )
+    instance = TaskInstance(
+        id="network-ready-gated-instance",
+        template_id=template_id,
+        name="network ready gated benchmark instance",
+        status=TaskStatus.PENDING,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    db_session.add_all([order, instance])
+    await db_session.flush()
+
+    async def should_not_preflight(*args, **kwargs):
+        raise AssertionError("preflight must not run before network-ready")
+
+    def should_not_dispatch(instance_id):
+        raise AssertionError(f"background start must not be dispatched for {instance_id}")
+
+    monkeypatch.setattr(orders_api, "_preflight_instance_plan", should_not_preflight)
+    monkeypatch.setattr(orders_api, "_schedule_background_benchmark_start", should_not_dispatch)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={"benchmark_run_id": "network-ready-gated-run", "task_type": "high_throughput_matmul"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] == 0
+    assert order.id in body["waiting_resource"]
+    assert "network-ready" in body["waiting_resource"][order.id]
+    refreshed = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == "network-ready-gated-instance"))
+    ).scalar_one()
+    assert refreshed.status == TaskStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_run_exposes_background_status(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    headers, _admin = await _auth_headers(client, db_session, username="managed-run-admin", role=UserRole.ADMIN)
+    seen: list[tuple[str, str | None]] = []
+
+    async def fake_managed_loop(key, payload, user_id):
+        seen.append((key, user_id))
+        orders_api._benchmark_status_payload(
+            key,
+            phase="completed",
+            message="测试后台测评已完成。",
+            payload=payload,
+            progress={
+                "total": 1,
+                "evaluated": 1,
+                "success": 1,
+                "active": 0,
+                "pending_to_start": 0,
+                "started": 1,
+                "cleaned": 1,
+                "failed": {},
+            },
+        )
+
+    monkeypatch.setattr(orders_api, "_run_managed_benchmark_loop", fake_managed_loop)
+
+    start_response = await client.post(
+        "/api/orders/benchmark/managed-run",
+        headers=headers,
+        json={"benchmark_run_id": "managed-run-test", "task_type": "high_throughput_matmul"},
+    )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["already_running"] is False
+    assert start_response.json()["phase"] == "running"
+
+    # Let the scheduled background task finish and publish its status.
+    import asyncio
+
+    await asyncio.sleep(0)
+    status_response = await client.get(
+        "/api/orders/benchmark/managed-run/status",
+        headers=headers,
+        params={"benchmark_run_id": "managed-run-test", "task_type": "high_throughput_matmul"},
+    )
+
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["phase"] == "completed"
+    assert body["progress"]["evaluated"] == 1
+    assert seen and seen[0][0] == "high_throughput_matmul::managed-run-test"
+
+
+@pytest.mark.asyncio
 async def test_controlled_benchmark_reports_whole_run_after_completed_cleanup(client, db_session, monkeypatch):
     import api.orders as orders_api
 

@@ -12,7 +12,7 @@
 #
 #   2. Cross-platform build for remote AMD64 compute nodes + push to a private
 #      registry (preferred for the test-lab):
-#        WORKER_IMAGE=10.112.244.94:5000/scientific-matmul \
+#        WORKER_IMAGE=10.112.73.149:5000/scientific-matmul \
 #        WORKER_TAG=dev \
 #        WORKER_PUSH=1 \
 #        WORKER_PLATFORM=linux/amd64 \
@@ -20,7 +20,7 @@
 #
 # Environment variables:
 #   WORKER_IMAGE     Full image repo name. Default: manage-deploy/scientific-matmul.
-#                    Set to e.g. 10.112.244.94:5000/scientific-matmul when pushing
+#                    Set to e.g. 10.112.73.149:5000/scientific-matmul when pushing
 #                    to the test-lab private registry.
 #   WORKER_KIND      Worker type. Default: matmul.
 #                    Supported: matmul, video, matmul-endpoint, video-endpoint.
@@ -42,14 +42,14 @@
 #                    builder is recreated only if it does not yet exist; to
 #                    apply a changed list, `docker buildx rm $WORKER_BUILDER`
 #                    first. Default: the registry part of WORKER_IMAGE if it
-#                    contains ":" before the first "/" (e.g. 10.112.244.94:5000).
+#                    contains ":" before the first "/" (e.g. 10.112.73.149:5000).
 #
 # Notes:
 #   - When WORKER_PLATFORM is set the script uses `docker buildx build`. buildx
 #     must be available locally (`docker buildx version`).
 #   - The docker-container buildx driver does NOT inherit the host daemon's
 #     insecure-registries setting. To push to plain-HTTP registries like
-#     10.112.244.94:5000 the builder must be created with a buildkitd.toml that
+#     10.112.73.149:5000 the builder must be created with a buildkitd.toml that
 #     marks them http+insecure. This script handles that automatically.
 #   - When WORKER_PUSH=1 the image is sent straight to the registry; the local
 #     daemon does not retain a usable copy for arm64+amd64 multi-arch manifests
@@ -171,7 +171,7 @@ if [[ -n "${PLATFORM}" ]]; then
 else
   if [[ "${PUSH}" == "1" ]]; then
     echo "ERROR: WORKER_PUSH=1 requires WORKER_PLATFORM (use buildx)."
-    echo "Example: WORKER_IMAGE=10.112.244.94:5000/scientific-matmul WORKER_TAG=dev \\"
+    echo "Example: WORKER_IMAGE=10.112.73.149:5000/scientific-matmul WORKER_TAG=dev \\"
     echo "         WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh"
     exit 1
   fi

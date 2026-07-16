@@ -147,11 +147,11 @@
             <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
           </template>
           <template v-else-if="taskType === 'low_latency_video_pipeline'">
-            <span>帧数</span>
+            <span>视频片段帧范围</span>
             <el-input-number v-model="benchmarkForm.frame_count" :min="30" :step="10" controls-position="right" />
             <span>抽帧间隔</span>
             <el-input-number v-model="benchmarkForm.frame_stride" :min="1" controls-position="right" />
-            <span>有效帧</span>
+            <span>参与统计帧数</span>
             <el-input-number v-model="benchmarkForm.measured_frames" :min="10" :max="300" controls-position="right" />
           </template>
             <el-button
@@ -168,6 +168,9 @@
         </div>
       </div>
       <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
+      <p v-if="taskType === 'low_latency_video_pipeline'" class="status-note">
+        视频参数口径：视频片段帧范围表示从固定测试视频中参与抽样的候选范围；抽帧间隔决定取样步长；参与统计帧数用于计算 P90 帧推理时延。
+      </p>
       <p class="status-note">创建测评工单会生成新的测评轮次 ID，后续运行、统计和测试工单列表默认只针对这一轮，避免历史数据影响当前结果。</p>
     </el-card>
 
@@ -495,6 +498,7 @@ import {
   readBenchmarkRunSession,
   writeBenchmarkRunSession,
 } from '@/utils/benchmarkRunSession'
+import { extractErrorMessage } from '@/utils/errorMessage'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
 const route = useRoute()
@@ -568,7 +572,7 @@ const benchmarkForm = reactive({
 })
 const benchmarkCountTouched = ref(false)
 const executionForm = reactive({
-  max_parallel: 3,
+  max_parallel: 6,
   per_compute_slot_limit: 1,
 })
 const executionFormTouched = ref(false)
@@ -582,7 +586,7 @@ const settingsForm = reactive({
   show_routing_dag_json: false,
   benchmark_execution_defaults: {
     default_task_count: formalEvaluationCount,
-    max_parallel: 3,
+    max_parallel: 6,
     per_compute_slot_limit: 1,
   },
 })
@@ -814,6 +818,20 @@ const executionStatusText = computed(() => {
   return ''
 })
 
+function shouldSuppressOperationError(error) {
+  return Boolean(error?.__authExpired)
+}
+
+function showOperationWarning(error, fallback) {
+  if (shouldSuppressOperationError(error)) return
+  ElMessage.warning(extractErrorMessage(error, fallback))
+}
+
+function isRetryableBenchmarkPollError(error) {
+  const status = error?.response?.status
+  return !status || status === 408 || status === 429 || status >= 500
+}
+
 const successPercent = computed(() =>
   summaryAggregate.value?.business_success_rate != null
     ? summaryAggregate.value.business_success_rate * 100
@@ -984,7 +1002,7 @@ function orderStatusLabel(value) {
     pending: '待提交',
     routing: '分配中',
     routed: '已分配',
-    materialized: '已部署',
+    materialized: '已生成实例/待启动',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
@@ -1144,7 +1162,7 @@ function normalizeBenchmarkExecutionDefaults(value) {
   const incoming = value && typeof value === 'object' ? value : {}
   return {
     default_task_count: clampInteger(incoming.default_task_count, formalEvaluationCount, 1, 30),
-    max_parallel: clampInteger(incoming.max_parallel, 3, 1, 10),
+    max_parallel: clampInteger(incoming.max_parallel, 6, 1, 10),
     per_compute_slot_limit: clampInteger(incoming.per_compute_slot_limit, 1, 1, 4),
   }
 }
@@ -1403,10 +1421,6 @@ function setCurrentBenchmarkRunId(runId) {
   router.replace({ query: nextQuery }).catch(() => {})
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
 async function loadAll() {
   await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines()])
   await loadOrders()
@@ -1421,6 +1435,10 @@ async function loadAll() {
   }
   syncBenchmarkRunSession()
   reconcileBenchmarkRunSessionAfterLoad()
+}
+
+function pause(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
 }
 
 async function runSingleBaseline(row) {
@@ -1595,9 +1613,11 @@ async function cleanupSelectedOrderInstances() {
           task_type: taskType.value,
           is_benchmark: true,
         }
-    const { data } = await ordersApi.cleanupInstances(payload)
+    const { data } = await ordersApi.cleanupInstances(payload, { silentError: true })
     showBatchOperationResult(data, (count) => `已清理 ${count} 个工单实例，工单证据已保留`)
     await Promise.all([loadOrders(), loadSummary()])
+  } catch (error) {
+    showOperationWarning(error, '清理本轮实例未完成，请刷新状态后重试。')
   } finally {
     cleanupLoading.value = false
   }
@@ -1625,10 +1645,12 @@ async function deleteSelectedOrders() {
           task_type: taskType.value,
           is_benchmark: true,
         }
-    const { data } = await ordersApi.batchDelete(payload)
+    const { data } = await ordersApi.batchDelete(payload, { silentError: true })
     showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
     if (!Object.keys(data.failed || {}).length) selectedOrderIds.value = []
     await Promise.all([loadOrders(), loadSummary()])
+  } catch (error) {
+    showOperationWarning(error, '删除本轮工单未完成，请刷新状态后重试。')
   } finally {
     deleteLoading.value = false
   }
@@ -1664,10 +1686,10 @@ async function stopCurrentBenchmarkRun() {
     showBatchOperationResult(data, (count) => `已处理 ${count} 个测评工单`)
     await Promise.all([loadOrders(), loadSummary()])
     controlledStartStatus.value = '当前测评轮次已停止；如需重新测评，可删除本轮工单后重新创建并运行。'
-  } catch {
+  } catch (error) {
     await Promise.all([loadOrders(), loadSummary()]).catch(() => {})
     controlledStartStatus.value = '已停止前端自动推进；停止请求未完成，请刷新状态后重试停止或清理本轮实例。'
-    ElMessage.warning('已停止前端自动推进，但后端停止请求未完成，请刷新后重试。')
+    showOperationWarning(error, '停止本轮测评未完成，请刷新状态后重试。')
   } finally {
     benchmarkStopLoading.value = false
   }
@@ -1723,6 +1745,87 @@ async function runEvaluationFlow() {
   return doStartAll()
 }
 
+function formatManagedBenchmarkStatus(data) {
+  const progress = data?.progress || {}
+  const total = Number(progress.total || summaryAggregate.value?.count || 0)
+  const evaluated = Number(progress.evaluated || summaryAggregate.value?.evaluated_count || 0)
+  const active = Number(progress.active || 0)
+  const pending = Number(progress.pending_to_start || 0)
+  const started = Number(progress.started || 0)
+  const cleaned = Number(progress.cleaned || 0)
+  const baseMessage = data?.message || ''
+  if (['completed', 'blocked', 'failed', 'stopped'].includes(data?.phase)) {
+    return baseMessage || `当前测评状态：${data.phase}`
+  }
+  if (data?.phase === 'idle') {
+    return baseMessage || '当前轮次没有后台测评任务，可重新点击运行测评继续推进。'
+  }
+  if (total) {
+    return `测评运行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，待启动 ${pending} 个，已释放实例 ${cleaned} 个。`
+  }
+  return baseMessage || '后台测评推进中，页面会自动刷新进度。'
+}
+
+async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
+  let latest = null
+  let transientFailures = 0
+  for (let round = 1; round <= 720; round += 1) {
+    if (isBenchmarkRunStopped(runnerKey)) {
+      controlledStartStatus.value = '当前测评轮次已停止。'
+      return latest
+    }
+    let data
+    try {
+      const response = await ordersApi.managedBenchmarkRunStatus({
+        benchmark_run_id: runId,
+        task_type: runTaskType,
+      }, { silentError: true })
+      data = response.data
+      latest = data
+      controlledStartStatus.value = formatManagedBenchmarkStatus(data)
+      await Promise.all([loadOrders(), loadSummary()])
+      transientFailures = 0
+    } catch (error) {
+      if (shouldSuppressOperationError(error) || !isRetryableBenchmarkPollError(error) || transientFailures >= 3) {
+        throw error
+      }
+      transientFailures += 1
+      controlledStartStatus.value = `测评仍在后台运行，状态刷新暂时失败，正在自动重试（${transientFailures}/3）。`
+      await pause(1000)
+      continue
+    }
+
+    if (data.phase === 'completed') {
+      const total = Number(data.progress?.total || summaryAggregate.value?.count || 0)
+      ElMessage.success(total ? `本轮 ${total} 个测评任务已全部完成评估` : '本轮测评已完成')
+      clearCurrentBenchmarkRunSession()
+      return latest
+    }
+    if (data.phase === 'stopped') {
+      clearCurrentBenchmarkRunSession()
+      return latest
+    }
+    if (data.phase === 'idle') {
+      clearCurrentBenchmarkRunSession()
+      ElMessage.warning(data.message || '后台测评状态已重置，请重新点击运行测评继续推进。')
+      return latest
+    }
+    if (data.phase === 'blocked') {
+      clearCurrentBenchmarkRunSession()
+      ElMessage.warning(data.message || '当前轮次暂无法继续推进，请查看工单后重试或停止本轮测评。')
+      return latest
+    }
+    if (data.phase === 'failed') {
+      clearCurrentBenchmarkRunSession()
+      ElMessage.warning(data.message || '后台测评推进遇到异常，请刷新后重试或停止本轮测评。')
+      return latest
+    }
+    await pause(data.phase === 'waiting_resource' ? 5000 : 2500)
+  }
+  controlledStartStatus.value = '测评状态轮询已到达上限，请刷新页面查看最新结果。'
+  return latest
+}
+
 async function doStartAll() {
   if (!currentBenchmarkRunId.value) {
     ElMessage.warning('请先创建或选择一个测评轮次，再启动执行。')
@@ -1746,62 +1849,31 @@ async function doStartAll() {
   startLoading.value = true
   setActiveBenchmarkRunnerKey(runnerKey)
   markBenchmarkRunSession('running')
-  controlledStartStatus.value = '正在按小批次运行测评任务...'
+  controlledStartStatus.value = '正在启动后台测评推进...'
   const runId = currentBenchmarkRunId.value
   const runTaskType = taskType.value
   const maxParallel = clampInteger(executionForm.max_parallel, settingsForm.benchmark_execution_defaults.max_parallel, 1, 10)
   const perComputeSlotLimit = clampInteger(executionForm.per_compute_slot_limit, settingsForm.benchmark_execution_defaults.per_compute_slot_limit, 1, 4)
   try {
-    let latest = null
-    for (let round = 1; round <= 180; round += 1) {
-      if (isBenchmarkRunStopped(runnerKey)) {
-        controlledStartStatus.value = '当前测评轮次已停止。'
-        break
-      }
-      let data
-      try {
-        const response = await ordersApi.startControlledRouted({
-          benchmark_run_id: runId,
-          task_type: runTaskType,
-          max_parallel: maxParallel,
-          per_compute_slot_limit: perComputeSlotLimit,
-          cleanup_evaluated: true,
-        }, { silentError: true })
-        data = response.data
-      } catch (error) {
-        if (isBenchmarkRunStopped(runnerKey)) {
-          controlledStartStatus.value = '当前测评轮次已停止。'
-          break
-        }
-        controlledStartStatus.value = '测评推进请求失败，请检查当前轮次状态后重试运行或停止本轮测评。'
-        throw error
-      }
-      latest = data
-      await Promise.all([loadOrders(), loadSummary()])
-      const total = Number(data.total || summaryAggregate.value?.count || 0)
-      const evaluated = Number(data.evaluated || summaryAggregate.value?.evaluated_count || 0)
-      const active = Number(data.active || 0)
-      const started = Number(data.started || 0)
-      const cleaned = Number(data.cleaned || 0)
-      controlledStartStatus.value = `测评运行中：已评估 ${evaluated}/${total}，本轮启动 ${started} 个，运行中 ${active} 个，已释放实例 ${cleaned} 个。`
-
-      if (total > 0 && evaluated >= total) {
-        ElMessage.success(`本轮 ${evaluated} 个测评任务已全部完成评估`)
-        clearCurrentBenchmarkRunSession()
-        break
-      }
-      if (!started && !active && !Number(data.pending_to_start || 0)) {
-        ElMessage.warning('当前没有可继续启动的测评任务，请检查失败原因或重新路由。')
-        clearCurrentBenchmarkRunSession()
-        break
-      }
-      await sleep(started ? 2500 : 5000)
-    }
+    await ordersApi.startManagedBenchmarkRun({
+      benchmark_run_id: runId,
+      task_type: runTaskType,
+      max_parallel: maxParallel,
+      per_compute_slot_limit: perComputeSlotLimit,
+      cleanup_evaluated: true,
+    }, { silentError: true })
+    const latest = await pollManagedBenchmarkRun(runId, runTaskType, runnerKey)
     await Promise.all([loadOrders(), loadSummary()])
     if (benchmarkRunCompleted.value) {
       clearCurrentBenchmarkRunSession()
     }
     return latest
+  } catch (error) {
+    if (!isBenchmarkRunStopped(runnerKey)) {
+      controlledStartStatus.value = '测评后台推进未能启动或状态刷新中断，请刷新状态后重试运行或停止本轮测评。'
+      showOperationWarning(error, '测评推进暂未完成，请刷新状态后重试。')
+    }
+    return null
   } finally {
     startLoading.value = false
     clearActiveBenchmarkRunnerKey(runnerKey)
@@ -1811,14 +1883,6 @@ async function doStartAll() {
 async function resumeBenchmarkRunIfNeeded() {
   syncBenchmarkRunSession()
   if (!currentRunSessionRunning.value || restoringRunSession.value || startLoading.value || routeLoading.value) return
-  if (activeBenchmarkRunnerKey() === currentBenchmarkRunKey()) {
-    controlledStartStatus.value = '当前测评轮次已在后台执行，页面会自动刷新进度，请勿重复启动。'
-    await Promise.all([loadOrders(), loadSummary()])
-    if (currentRunSessionRunning.value && !benchmarkRunCompleted.value) {
-      scheduleResumeBenchmarkRun(5000)
-    }
-    return
-  }
   await Promise.all([loadOrders(), loadSummary()])
   reconcileBenchmarkRunSessionAfterLoad()
   if (!currentRunSessionRunning.value) return
@@ -1827,11 +1891,17 @@ async function resumeBenchmarkRunIfNeeded() {
     return
   }
   restoringRunSession.value = true
-  controlledStartStatus.value = '检测到当前测评轮次仍在执行，已自动恢复进度刷新与分批推进。'
+  controlledStartStatus.value = '检测到当前测评轮次仍在执行，已自动恢复后台状态刷新。'
+  const runnerKey = currentBenchmarkRunKey()
+  setActiveBenchmarkRunnerKey(runnerKey)
   try {
-    await doStartAll()
+    await pollManagedBenchmarkRun(currentBenchmarkRunId.value, taskType.value, runnerKey)
+  } catch (error) {
+    controlledStartStatus.value = '测评状态刷新暂时中断，请点击刷新或再次运行测评继续查看。'
+    showOperationWarning(error, '测评状态刷新未完成，请稍后重试。')
   } finally {
     restoringRunSession.value = false
+    clearActiveBenchmarkRunnerKey(runnerKey)
   }
 }
 

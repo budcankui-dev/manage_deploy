@@ -3,8 +3,8 @@
   "manager": {
     "hostname": "admin",
     "display_name": "管理节点",
-    "management_ip": "10.112.244.94",
-    "business_ip": "10.112.244.94",
+    "management_ip": "10.112.73.149",
+    "business_ip": "10.112.73.149",
     "acceptance_management_ip": "172.16.0.254",
     "acceptance_business_ip": "172.16.0.254",
     "node_kind": "admin",
@@ -26,6 +26,7 @@
       ],
       "management_iface": "enp7s0",
       "business_iface": "enx9c69d3680773",
+      "docker_root_dir": "/data/hdd1/docker",
       "topology_zone": "compute",
       "is_schedulable": true,
       "is_routable": true
@@ -45,6 +46,7 @@
       ],
       "management_iface": "enp4s0",
       "business_iface": "enx9c69d3680d3d",
+      "docker_root_dir": "/disk/sdb/docker",
       "topology_zone": "compute",
       "is_schedulable": true,
       "is_routable": true
@@ -59,6 +61,7 @@
       "acceptance_business_ipv6": "3012:a::ec4:7aff:fe85:7815",
       "management_iface": "enx00e04c36b4e7",
       "business_iface": "enp129s0f1",
+      "docker_root_dir": "/data/docker",
       "topology_zone": "compute",
       "is_schedulable": true,
       "is_routable": true

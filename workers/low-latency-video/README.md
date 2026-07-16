@@ -30,7 +30,7 @@ source -> compute -> sink
 - `VIDEO_ASSET_DIR=/app/assets`：镜像内资产目录。
 - `USE_GPU=true`：业务默认要求 GPU。
 - `GPU_DEVICE` / `NVIDIA_VISIBLE_DEVICES` / `CUDA_VISIBLE_DEVICES`：由部署系统按路由结果注入，用于记录和校验 GPU 分配。
-- `MEASURED_FRAMES=30`：验收默认有效统计帧数。
+- `MEASURED_FRAMES=30`：验收默认参与 P90 统计帧数。
 
 ## GPU 后端说明
 
@@ -59,7 +59,7 @@ WORKER_TAG=dev \
 
 ```bash
 WORKER_KIND=video \
-WORKER_IMAGE=10.112.244.94:5000/low-latency-video \
+WORKER_IMAGE=10.112.73.149:5000/low-latency-video \
 WORKER_TAG=dev \
 WORKER_PLATFORM=linux/amd64 \
 WORKER_PUSH=1 \

@@ -111,7 +111,7 @@ def estimate_data_mb(task_type: str, data_profile: dict[str, Any] | None = None)
     if task_type == "low_latency_video_pipeline":
         height = _parse_resolution_height(profile.get("resolution", 720))
         width = int(height * 16 / 9)
-        frame_count = int(profile.get("frame_count", profile.get("measured_frames", 90)) or 90)
+        frame_count = int(profile.get("frame_count", 90) or 90)
         stride = max(1, int(profile.get("frame_stride", 30) or 30))
         sampled_frames = max(1, math.ceil(frame_count / stride))
         # Acceptance demo sends compressed/sampled frame payloads, not raw video.

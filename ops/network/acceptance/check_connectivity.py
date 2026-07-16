@@ -164,17 +164,30 @@ def _source_ssh_args(item: dict[str, Any], *, profile: str, connect_timeout: int
     )
 
 
+def _known_hosts_options(known_hosts: Path | None) -> str:
+    if not known_hosts:
+        return ""
+    path = known_hosts.expanduser().resolve()
+    return f"-o UserKnownHostsFile={shlex.quote(str(path))} -o StrictHostKeyChecking=yes "
+
+
+def _with_known_hosts(ssh_args: str, known_hosts: Path | None) -> str:
+    return f"{_known_hosts_options(known_hosts)}{ssh_args}" if known_hosts else ssh_args
+
+
 def _source_for_item(
     item: dict[str, Any],
     *,
     profile: str,
     connect_timeout: int,
     password: str | None,
+    known_hosts: Path | None,
 ) -> Source | None:
     ssh_args = _source_ssh_args(item, profile=profile, connect_timeout=connect_timeout)
     hostname = item.get("hostname")
     if not hostname or not ssh_args:
         return None
+    ssh_args = _with_known_hosts(ssh_args, known_hosts)
     if password and (item.get("node_kind") == "terminal" or str(hostname).startswith("h")):
         ssh_args = ssh_args.replace("-o BatchMode=yes ", "")
         return Source(name=hostname, ssh_args=ssh_args, login_kind="password", password=password)
@@ -189,9 +202,13 @@ def _sources_for_scope(
     profile: str,
     connect_timeout: int,
     password_file: Path | None = None,
+    known_hosts: Path | None = None,
 ) -> dict[str, Source]:
     if scope == "default":
-        return {name: Source(name=name, ssh_args=ssh) for name, ssh in DEFAULT_SSH_SOURCES.items()}
+        return {
+            name: Source(name=name, ssh_args=_with_known_hosts(ssh, known_hosts))
+            for name, ssh in DEFAULT_SSH_SOURCES.items()
+        }
 
     sources: dict[str, Source] = {}
     password = _load_password(password_file)
@@ -201,6 +218,7 @@ def _sources_for_scope(
             profile=profile,
             connect_timeout=connect_timeout,
             password=password,
+            known_hosts=known_hosts,
         )
         if source:
             sources[source.name] = source
@@ -377,9 +395,12 @@ def _print_matrix_source_error(source: str, exc: RemoteProbeError, target_count:
     return target_count
 
 
-def _selected_sources(source_args: list[str] | None) -> dict[str, Source]:
+def _selected_sources(source_args: list[str] | None, known_hosts: Path | None = None) -> dict[str, Source]:
     if not source_args:
-        return {name: Source(name=name, ssh_args=ssh) for name, ssh in DEFAULT_SSH_SOURCES.items()}
+        return {
+            name: Source(name=name, ssh_args=_with_known_hosts(ssh, known_hosts))
+            for name, ssh in DEFAULT_SSH_SOURCES.items()
+        }
     sources: dict[str, Source] = {}
     for item in source_args:
         if "=" not in item:
@@ -389,7 +410,7 @@ def _selected_sources(source_args: list[str] | None) -> dict[str, Source]:
         ssh = ssh.strip()
         if not name or not ssh:
             raise SystemExit("--source must include both name and SSH args")
-        sources[name] = Source(name=name, ssh_args=ssh)
+        sources[name] = Source(name=name, ssh_args=_with_known_hosts(ssh, known_hosts))
     return sources
 
 
@@ -403,6 +424,7 @@ def _run_matrix(
     timeout: int,
     ssh_connect_timeout: int,
     password_file: Path | None,
+    known_hosts: Path | None,
     list_sources: bool = False,
 ) -> int:
     failures = 0
@@ -410,7 +432,7 @@ def _run_matrix(
     for current_plane in planes:
         targets = _targets_for_plane(inventory, current_plane)
         sources = (
-            _selected_sources(source_args)
+            _selected_sources(source_args, known_hosts)
             if source_args
             else _sources_for_scope(
                 inventory,
@@ -419,6 +441,7 @@ def _run_matrix(
                 profile=source_profile,
                 connect_timeout=ssh_connect_timeout,
                 password_file=password_file,
+                known_hosts=known_hosts,
             )
         )
         if not sources:
@@ -505,6 +528,14 @@ def main() -> int:
             "Used only for generated terminal sources in --matrix mode."
         ),
     )
+    parser.add_argument(
+        "--known-hosts",
+        type=Path,
+        help=(
+            "Project-local known_hosts file for SSH probes. Generate it with "
+            "ops/network/acceptance/refresh_known_hosts.py."
+        ),
+    )
     args = parser.parse_args()
 
     inventory = _load_inventory(args.inventory)
@@ -524,6 +555,7 @@ def main() -> int:
                 timeout=args.timeout,
                 ssh_connect_timeout=args.ssh_connect_timeout,
                 password_file=args.password_file,
+                known_hosts=args.known_hosts,
                 list_sources=args.list_sources,
             )
             else 0
@@ -533,7 +565,11 @@ def main() -> int:
         targets = _management_targets(inventory)
         if args.ssh:
             try:
-                results = _run_remote(targets, ssh=args.ssh, timeout=args.timeout)
+                results = _run_remote(
+                    targets,
+                    ssh=_with_known_hosts(args.ssh, args.known_hosts),
+                    timeout=args.timeout,
+                )
             except RemoteProbeError as exc:
                 sys.stderr.write(exc.stderr)
                 raise SystemExit(exc.returncode) from exc
@@ -545,7 +581,11 @@ def main() -> int:
         targets = _data_targets(inventory)
         if args.ssh:
             try:
-                results = _run_remote(targets, ssh=args.ssh, timeout=args.timeout)
+                results = _run_remote(
+                    targets,
+                    ssh=_with_known_hosts(args.ssh, args.known_hosts),
+                    timeout=args.timeout,
+                )
             except RemoteProbeError as exc:
                 sys.stderr.write(exc.stderr)
                 raise SystemExit(exc.returncode) from exc

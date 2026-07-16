@@ -31,9 +31,9 @@ def test_current_profile_alias_keeps_development_management_addresses(monkeypatc
     profile = module.current_deployment_profile()
 
     assert profile.name == "current"
-    assert profile.registry == "10.112.244.94:5000"
-    assert profile.manager_api_base == "http://10.112.244.94:8181"
-    assert profile.minio_endpoint == "http://10.112.244.94:9000"
+    assert profile.registry == "10.112.73.149:5000"
+    assert profile.manager_api_base == "http://10.112.73.149:8181"
+    assert profile.minio_endpoint == "http://10.112.73.149:9000"
 
 
 def test_acceptance_profile_defaults_to_management_network_addresses(monkeypatch):

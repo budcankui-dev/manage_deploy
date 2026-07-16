@@ -19,7 +19,7 @@ export const ORDER_STATUS_LABELS = {
   pending: '待分配',
   awaiting_routing: '待分配',
   routed: '待部署',
-  materialized: '已部署',
+  materialized: '已生成实例/待启动',
   running: '运行中',
   completed: '已完成',
   failed: '失败',

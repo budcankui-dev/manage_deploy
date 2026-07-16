@@ -23,6 +23,7 @@ class ReceiverConfig:
     port: int
     node_alias: str | None = None
     topology_node_id: str | None = None
+    management_ip: str | None = None
     business_ip: str | None = None
     business_ipv6: str | None = None
 
@@ -211,6 +212,7 @@ def run_receiver(*, port: int, task_type: str, storage_dir: str) -> None:
         port=port,
         node_alias=_env("ENDPOINT_NODE_ALIAS", "NODE_ALIAS", "TOPOLOGY_ALIAS"),
         topology_node_id=_env("ENDPOINT_TOPOLOGY_NODE_ID", "TOPOLOGY_NODE_ID"),
+        management_ip=_env("ENDPOINT_MANAGEMENT_IP", "MANAGEMENT_IP"),
         business_ip=_env("ENDPOINT_BUSINESS_IP", "BUSINESS_IP"),
         business_ipv6=_env("ENDPOINT_BUSINESS_IPV6", "BUSINESS_IPV6"),
     )
@@ -314,6 +316,11 @@ def _render_receiver_page(
     .layout {{ display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr); gap: 18px; align-items: start; }}
     .order-panel[hidden] {{ display: none; }}
     .result-section-title {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }}
+    .verdict-band {{ display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr); gap: 14px; align-items: stretch; margin: 0 0 16px; }}
+    .verdict-card {{ border-radius: 16px; padding: 16px; background: linear-gradient(135deg, #eaf2ff 0%, #ffffff 100%); border: 1px solid #c9daf4; }}
+    .verdict-card span {{ display: block; color: var(--subtle); font-size: 13px; font-weight: 800; margin-bottom: 6px; }}
+    .verdict-card strong {{ display: block; color: #0f172a; font-size: 24px; overflow-wrap: anywhere; }}
+    .verdict-card p {{ margin: 8px 0 0; color: #1f2f46; line-height: 1.7; }}
     .preview {{ width: 100%; max-height: 560px; object-fit: contain; border-radius: 12px; background: #0f172a; }}
     .video-player {{ width: 100%; max-height: 360px; border-radius: 12px; background: #0f172a; }}
     .thumb-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 12px; }}
@@ -333,7 +340,7 @@ def _render_receiver_page(
     .sample-table th {{ background: #f3f7fb; font-weight: 800; }}
     pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e5edf9; border-radius: 12px; padding: 16px; max-height: 420px; overflow: auto; }}
     code {{ background: rgba(15, 23, 42, 0.08); border-radius: 6px; padding: 2px 6px; }}
-    @media (max-width: 840px) {{ .layout, .hero-head {{ grid-template-columns: 1fr; }} h1 {{ font-size: 25px; }} }}
+    @media (max-width: 840px) {{ .layout, .hero-head, .verdict-band {{ grid-template-columns: 1fr; }} h1 {{ font-size: 25px; }} }}
   </style>
 </head>
 <body>
@@ -452,6 +459,7 @@ def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str
     status = escape(str(record.get("status") or "-"))
     raw_json = escape(json.dumps(payload or {}, ensure_ascii=False, indent=2))
     result_cards = _render_result_cards(task_type, result, payload.get("metric_key"))
+    verdict = _render_business_verdict(task_type, result)
     if task_type == "low_latency_video_pipeline":
         main_result = _render_video_result(result)
         evidence_html = _render_video_evidence(task_type, result)
@@ -468,6 +476,7 @@ def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str
             <h2>业务结果展示</h2>
             <div class="muted">当前工单：<code>{escape(order_id)}</code></div>
           </div>
+          {verdict}
           {main_result}
           <div class="grid">{result_cards}</div>
         </section>
@@ -479,6 +488,45 @@ def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str
         </section>
       </section>
     """
+
+
+def _render_business_verdict(task_type: str, result: dict[str, Any]) -> str:
+    if task_type == "high_throughput_matmul":
+        metric = _format_number(result.get("effective_gflops"), " GFLOPS")
+        samples = _format_plain(result.get("sample_count"))
+        return f"""
+          <div class="verdict-band">
+            <div class="verdict-card">
+              <span>业务目标口径</span>
+              <strong>矩阵有效计算性能，越高越好</strong>
+              <p>管理端按同 profile 历史基线 × 0.8 判定是否达标；本页展示目的端收到的单个工单结果。</p>
+            </div>
+            <div class="verdict-card">
+              <span>本工单结果</span>
+              <strong>{escape(metric)}</strong>
+              <p>采样次数：{escape(samples)}；完整达标率以管理端 30 个任务统计为准。</p>
+            </div>
+          </div>
+        """
+    if task_type == "low_latency_video_pipeline":
+        metric = _format_number(result.get("frame_latency_p90_ms"), " ms")
+        measured_frames = _format_plain(result.get("measured_frames"))
+        frame_stride = _format_plain(result.get("frame_stride"))
+        return f"""
+          <div class="verdict-band">
+            <div class="verdict-card">
+              <span>业务目标口径</span>
+              <strong>视频 P90 帧推理时延，越低越好</strong>
+              <p>管理端按同 GPU+模型 profile 历史基线 × 1.5 判定是否达标；本页用于展示目的端收到的检测结果。</p>
+            </div>
+            <div class="verdict-card">
+              <span>本工单结果</span>
+              <strong>{escape(metric)}</strong>
+              <p>参与统计帧数：{escape(measured_frames)}；抽帧间隔：{escape(frame_stride)}。</p>
+            </div>
+          </div>
+        """
+    return ""
 
 
 def _render_video_result(result: dict[str, Any]) -> str:
@@ -573,6 +621,7 @@ def _render_receiver_info(config: ReceiverConfig, callback_url: str, order_id: s
       <div class="grid">
         <div class="metric"><span>节点别名</span><strong>{escape(config.node_alias or "未注入")}</strong></div>
         <div class="metric"><span>拓扑节点 ID</span><strong>{escape(config.topology_node_id or "未注入")}</strong></div>
+        <div class="metric"><span>管理面 IP</span><strong>{escape(config.management_ip or "未注入")}</strong></div>
         <div class="metric"><span>数据面 IPv6</span><strong>{escape(config.business_ipv6 or "未注入")}</strong></div>
         <div class="metric"><span>数据面 IPv4</span><strong>{escape(config.business_ip or "未注入")}</strong></div>
         <div class="metric"><span>监听端口</span><strong>{escape(str(config.port))}</strong></div>
@@ -795,7 +844,7 @@ def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
         confidence_text = f"，置信度 {float(confidence):.2f}" if isinstance(confidence, int | float) else ""
         title_parts = [f"第 {frame_index} 帧", f"推理时延 {latency_ms}", f"识别目标 {label}"]
         if isinstance(total_frames, int | float):
-            title_parts.append(f"本次有效推理 {int(total_frames)} 帧")
+            title_parts.append(f"P90统计帧数 {int(total_frames)}")
         if isinstance(p90_latency, int | float):
             title_parts.append(f"P90 {float(p90_latency):.2f} ms")
         title = "；".join(title_parts)

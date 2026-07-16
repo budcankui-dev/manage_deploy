@@ -8,7 +8,7 @@ import {
 assert.equal(
   isDynamicImportLoadError(
     new TypeError(
-      'Failed to fetch dynamically imported module: http://10.112.244.94:8182/assets/NodesView-aNnP3YQL.js'
+      'Failed to fetch dynamically imported module: http://10.112.73.149:8182/assets/NodesView-aNnP3YQL.js'
     )
   ),
   true
