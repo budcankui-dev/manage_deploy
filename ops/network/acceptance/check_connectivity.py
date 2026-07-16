@@ -60,6 +60,15 @@ class RemoteProbeError(RuntimeError):
         self.stderr = stderr
 
 
+def _local_command_timeout(timeout: int) -> int:
+    return max(timeout + 2, 3)
+
+
+def _remote_command_timeout(target_count: int, timeout: int, *, password_login: bool = False) -> int:
+    base = 50 if password_login else 20
+    return max(base, base + max(target_count, 1) * max(timeout, 1))
+
+
 def _load_inventory(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -279,15 +288,32 @@ def _run_local(targets: list[Target], *, timeout: int) -> list[tuple[Target, boo
     results: list[tuple[Target, bool]] = []
     for target in targets:
         command = _ping_command(target.address, timeout=timeout)
-        completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        results.append((target, completed.returncode == 0))
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_local_command_timeout(timeout),
+            )
+            results.append((target, completed.returncode == 0))
+        except subprocess.TimeoutExpired:
+            results.append((target, False))
     return results
 
 
 def _run_remote(targets: list[Target], *, ssh: str, timeout: int) -> list[tuple[Target, bool]]:
     by_name = {target.name: target for target in targets}
     command = ["ssh", *shlex.split(ssh), _remote_probe_script(targets, timeout=timeout)]
-    completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_remote_command_timeout(len(targets), timeout),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RemoteProbeError(124, f"remote probe timed out after {exc.timeout}s") from exc
     if completed.returncode != 0:
         raise RemoteProbeError(completed.returncode, completed.stderr)
 
@@ -341,7 +367,16 @@ def _run_remote_source(targets: list[Target], *, source: Source, timeout: int) -
     by_name = {target.name: target for target in targets}
     remote_script = _remote_probe_script(targets, timeout=timeout)
     command = ["/usr/bin/expect", "-c", _expect_script_for_password_source(source, remote_script)]
-    completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_remote_command_timeout(len(targets), timeout, password_login=True),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RemoteProbeError(124, f"remote password probe timed out after {exc.timeout}s") from exc
     if completed.returncode != 0:
         raise RemoteProbeError(completed.returncode, completed.stderr or completed.stdout)
 

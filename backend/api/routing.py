@@ -256,6 +256,10 @@ async def confirm_routing_order_network_ready(
     already_ready = not network_ready_required(order)
     mark_network_ready(order, payload.metadata)
     order.routing_status = RoutingStatus.COMPLETED.value
+    if not order.materialized_instance_id:
+        deployment = (order.runtime_config or {}).get("platform_deployment")
+        if isinstance(deployment, dict) and deployment.get("mode") == "route_only":
+            order.status = OrderStatus.COMPLETED
     if order.conversation_id:
         conversation = (
             await db.execute(select(Conversation).where(Conversation.id == order.conversation_id))

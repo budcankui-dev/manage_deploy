@@ -1855,7 +1855,11 @@ async def _sync_conversation_after_order_routing(
         conversation.materialized_order_id = order.id
         deployment_mode = _platform_deployment_mode(order)
         if deployment_mode == "route_only" and order.materialized_instance_id is None:
-            conversation.status = ConversationStatus.AWAITING_ROUTING
+            conversation.status = (
+                ConversationStatus.READY_TO_SUBMIT
+                if require_network_ready
+                else ConversationStatus.SUBMITTED
+            )
         else:
             conversation.status = (
                 ConversationStatus.READY_TO_SUBMIT
@@ -2085,9 +2089,14 @@ async def receive_routing_result(
     if not enabled_template_node_names:
         deployment_mode = _platform_deployment_mode(order)
         route_only = deployment_mode == "route_only"
+        require_network_ready = bool(payload.require_network_ready)
         order.materialized_instance_id = None
         order.status = OrderStatus.PENDING if route_only else OrderStatus.COMPLETED
-        order.routing_status = RoutingStatus.COMPLETED.value
+        order.routing_status = (
+            RoutingStatus.NETWORK_BINDING_READY.value
+            if require_network_ready
+            else RoutingStatus.COMPLETED.value
+        )
         rc["deployment_required"] = False
         if route_only:
             rc["manual_start_required"] = True
@@ -2096,8 +2105,8 @@ async def receive_routing_result(
         rc["routing_result"] = {
             **routing_result,
             "network_bindings": [],
-            "network_ready_required": False,
-            "network_ready": True,
+            "network_ready_required": require_network_ready,
+            "network_ready": not require_network_ready,
         }
         if route_only:
             rc["routing_result"]["deployment_mode"] = "route_only"
@@ -2110,19 +2119,19 @@ async def receive_routing_result(
             payload,
             effective_placements,
             [],
-            False,
+            require_network_ready,
         )
         await db.commit()
         return {
             "status": "ok",
             "order_id": order_id,
-            "routing_status": "completed",
+            "routing_status": order.routing_status,
             "deployment_required": False,
             "deployment_mode": deployment_mode,
             "instance_id": None,
             "network_bindings": [],
-            "network_ready_required": False,
-            "network_ready": True,
+            "network_ready_required": require_network_ready,
+            "network_ready": not require_network_ready,
         }
 
     # Create instance

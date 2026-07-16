@@ -31,6 +31,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 当前意图解析评测覆盖以下业务/模态：
 - 矩阵乘法计算任务（task_type: "high_throughput_matmul"）
 - 低时延视频链路/视频AI推理任务（task_type: "low_latency_video_pipeline"）
+- 端到端传输路由任务（task_type: "terminal_route_transfer"，只有源端和目的端，只建立路由链路，不部署平台计算容器）
 - 大模型文本生成/LLM 推理任务（task_type: "llm_text_generation"）
 - 文本模型训练任务（task_type: "ai_model_training"）
 - 分布式存算任务（task_type: "distributed_storage_compute"）
@@ -39,7 +40,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 - 高能效边缘推理任务（task_type: "energy_efficient_edge_inference"）
 - 高安全传输任务（task_type: "secure_transmission"）
 
-如果用户描述的不是上述任务，task_type 设为 null 并在 assistant_message 中告知用户当前支持矩阵计算、视频推理和八类模态测试样本。
+如果用户描述的不是上述任务，task_type 设为 null 并在 assistant_message 中告知用户当前支持矩阵计算、视频推理、端到端传输路由和八类模态测试样本。
 
 ## 必填参数
 
@@ -77,7 +78,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 ## 输出 JSON 格式（严格遵守，不得添加额外字段）
 
 {
-  "task_type": "high_throughput_matmul|low_latency_video_pipeline|llm_text_generation|ai_model_training|distributed_storage_compute|massive_connection_collect|deterministic_forwarding|energy_efficient_edge_inference|secure_transmission" 或 null,
+  "task_type": "high_throughput_matmul|low_latency_video_pipeline|terminal_route_transfer|llm_text_generation|ai_model_training|distributed_storage_compute|massive_connection_collect|deterministic_forwarding|energy_efficient_edge_inference|secure_transmission" 或 null,
   "source_name": "string 或 null",
   "destination_name": "string 或 null",
   "start_time": "ISO格式时间字符串 或 'now' 或 null",
@@ -142,6 +143,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 MODALITY_MAP = {
     "high_throughput_matmul": modality_for_task_type("high_throughput_matmul"),
     "low_latency_video_pipeline": modality_for_task_type("low_latency_video_pipeline"),
+    "terminal_route_transfer": modality_for_task_type("terminal_route_transfer"),
     "llm_text_generation": modality_for_task_type("llm_text_generation"),
     "ai_model_training": modality_for_task_type("ai_model_training"),
     "distributed_storage_compute": modality_for_task_type("distributed_storage_compute"),
@@ -352,6 +354,7 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
         None,
         "high_throughput_matmul",
         "low_latency_video_pipeline",
+        "terminal_route_transfer",
         "llm_text_generation",
         "ai_model_training",
         "distributed_storage_compute",
@@ -548,6 +551,8 @@ def _raw_to_parse_result(
     runtime_plan = {
         "routing_strategy": routing_strategy,
     }
+    if task_type == "terminal_route_transfer":
+        runtime_plan["route_only"] = True
 
     # Build business_objective from task_type defaults
     business_objective = {}
@@ -649,6 +654,10 @@ def _default_data_profile(task_type: str) -> dict[str, Any]:
             "source": "synthetic",
             "resolution": "1920x1080",
             "fps": 30,
+        },
+        "terminal_route_transfer": {
+            "profile_id": "terminal_route_transfer_default",
+            "source": "user_endpoint",
         },
         "llm_text_generation": {
             "profile_id": "llm_default",

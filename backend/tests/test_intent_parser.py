@@ -89,6 +89,23 @@ def test_parse_llm_text_generation_extracts_tokens():
     assert result.parse_status == "valid"
 
 
+def test_parse_terminal_route_transfer_is_route_only_source_to_sink():
+    result = parse_intent(
+        "端到端传输路由任务，从 h1 到 h2 建立链路，现在开始跑2小时，低时延策略",
+        valid_nodes=["h1", "h2"],
+    )
+
+    assert result.task_type == "terminal_route_transfer"
+    assert result.modality == "低时延转发模态"
+    assert result.source_name == "h1"
+    assert result.destination_name == "h2"
+    assert result.data_profile["profile_id"] == "terminal_route_transfer_default"
+    assert result.runtime_plan["route_only"] is True
+    assert result.runtime_plan["routing_strategy"] == "low_latency_forwarding"
+    assert result.business_objective["metric_key"] == "service_success_rate"
+    assert result.parse_status == "valid"
+
+
 def test_parse_unknown_task_is_incomplete():
     result = parse_intent("帮我订外卖")
     assert result.task_type is None

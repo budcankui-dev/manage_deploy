@@ -151,6 +151,8 @@ def _build_list_item(
         routing_policy=_routing_policy_from_order(order),
         business_priority=_business_priority_from_order(order, business_task),
         order_status=order.status,
+        routing_status=order.routing_status,
+        runtime_config=order.runtime_config,
         instance_id=order.materialized_instance_id,
         instance_exists=instance_exists,
         deployment_status=instance.status if instance else None,

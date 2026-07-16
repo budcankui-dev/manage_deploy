@@ -2,10 +2,11 @@
 
 通用多节点 Docker 任务编排系统（DAG 执行器）。Task Manager 负责编排和业务评估，Node Agent 负责在 worker 机器上控制 Docker 容器，Frontend 提供管理端和意图对话入口。
 
-当前维护两类演示业务：
+当前维护三类演示/联调业务：
 
 - **矩阵乘法计算任务**，内部 `task_type` 为 `high_throughput_matmul`，用于高通量计算模态验收。
 - **视频AI推理任务**，内部 `task_type` 为 `low_latency_video_pipeline`，用于低时延转发模态演示，支持 YOLO 抽帧推理、检测框和带框预览图展示。
+- **端到端传输路由任务**，内部 `task_type` 为 `terminal_route_transfer`，只生成 `source -> sink` 路由工单，不创建平台受控计算容器。
 
 ## 文档入口
 
@@ -72,7 +73,13 @@ WORKER_KIND=video WORKER_IMAGE=10.112.73.149:5000/low-latency-video WORKER_TAG=d
 cd backend && WORKER_IMAGE=10.112.73.149:5000/low-latency-video WORKER_TAG=dev PYTHONPATH=. ./venv/bin/python scripts/rebuild_video_template.py
 ```
 
-前端入口：普通用户进入 `/intent-chat`，可输入矩阵乘法或视频AI推理自然语言需求；确认参数后生成统一工单 ID，并在页面展示结构化解析结果、源/目的端点和任务参数。系统设置选择“系统自动分配”时使用本系统内置路由完成计算节点分配；选择“外部路由系统”时等待路由模块回写节点分配。路由 DAG JSON 属于管理员调试和路由对接信息，不作为普通用户功能验证的默认观察项。
+端到端传输路由模板：
+
+```bash
+cd backend && PYTHONPATH=. ./venv/bin/python scripts/rebuild_terminal_route_template.py
+```
+
+前端入口：普通用户进入 `/intent-chat`，可输入矩阵乘法、视频AI推理或端到端传输路由自然语言需求；确认参数后生成统一工单 ID，并在页面展示结构化解析结果、源/目的端点和任务参数。系统设置选择“系统自动分配”时使用本系统内置路由完成计算节点分配；选择“外部路由系统”时等待路由模块回写节点分配。路由 DAG JSON 属于管理员调试和路由对接信息，不作为普通用户功能验证的默认观察项。
 
 ## 常用测试
 

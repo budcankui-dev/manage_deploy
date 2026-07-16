@@ -83,8 +83,9 @@ DAG 边在平台层主要表达容器生命周期依赖：谁先启动、谁等�
 |------|-------------|------|------|------|
 | 矩阵乘法计算任务 | `high_throughput_matmul` | 高通量计算模态 | `effective_gflops` | source / compute / sink 使用同一镜像，通过 HTTP 传递 job/result，sink 上报有效计算吞吐量。详见 `docs/scientific-matmul-demo.md`。 |
 | 视频AI推理任务 | `low_latency_video_pipeline` | 低时延转发模态 | `frame_latency_p90_ms` | source 读取固定测试视频抽帧，compute 运行 YOLO 推理并生成检测框，sink 上报 P90 帧时延和带框预览图。 |
+| 端到端传输路由任务 | `terminal_route_transfer` | 低时延转发模态 | `service_success_rate` | 只生成 source -> sink 路由 DAG，外部路由系统建立链路；平台不创建 Docker 实例。 |
 
-两类业务都采用 source -> compute -> sink 的随路计算数据流。用户端 `/intent-chat` 支持从自然语言解析两类任务，确认后创建统一工单 ID 并生成提交给外部路由系统的 DAG JSON。外部路由未接入时，可在系统设置中启用平台内置自动分配流程，用于验证工单创建、实例物化和业务指标上报闭环。
+矩阵乘法和视频AI推理采用 source -> compute -> sink 的随路计算数据流；端到端传输路由任务采用 source -> sink 数据流。用户端 `/intent-chat` 支持从自然语言解析这些任务，确认后创建统一工单 ID 并生成提交给外部路由系统的 DAG JSON。外部路由未接入时，可在系统设置中启用平台内置自动分配流程，用于验证工单创建、实例物化和业务指标上报闭环；纯路由任务需要外部路由回写 source/sink placements。
 
 ## 主要 API
 

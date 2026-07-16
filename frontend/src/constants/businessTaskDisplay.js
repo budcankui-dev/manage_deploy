@@ -1,6 +1,7 @@
 export const TASK_TYPE_LABELS = {
   high_throughput_matmul: '矩阵乘法计算任务',
   low_latency_video_pipeline: '视频AI推理任务',
+  terminal_route_transfer: '端到端传输路由任务',
   llm_text_generation: '大模型文本生成任务',
   ai_model_training: '文本模型训练任务',
   distributed_storage_compute: '分布式存算任务',
@@ -45,6 +46,8 @@ export const TASK_TYPE_SUMMARIES = {
     '在数据源、计算节点、结果接收端之间传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
     '在数据源、计算节点、结果接收端之间传递视频帧，使用内置检测模型进行工业检测推理，以帧推理时延 P90 作为验收指标。',
+  terminal_route_transfer:
+    '仅在源终端和目的终端之间建立端到端业务链路，由外部路由系统下发网络路径，不创建平台受控计算容器。',
   llm_text_generation:
     '完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
@@ -55,6 +58,7 @@ const METRIC_LABELS = {
   effective_gflops: '有效计算吞吐量',
   tokens_per_second: '生成速率',
   frame_latency_p90_ms: '帧推理时延 P90',
+  service_success_rate: '业务成功率',
 }
 
 const OPERATOR_LABELS = {
@@ -122,6 +126,9 @@ export function describeObjectiveMeaning(taskType, objective) {
   if (taskType === 'low_latency_video_pipeline') {
     return `验收标准：${sentence}。数值越小表示推理越快；以参与统计阶段的 P90 帧处理时延和节点历史基线对比判定。`
   }
+  if (taskType === 'terminal_route_transfer') {
+    return `验收标准：${sentence}。本任务只验证源端到目的端的业务链路建立状态，不部署计算容器。`
+  }
   return `验收标准：${sentence}。`
 }
 
@@ -146,6 +153,12 @@ export function describeDataProfile(taskType, profile) {
       { label: '参与统计帧数', value: profile.measured_frames != null ? `${profile.measured_frames} 帧` : '-' },
       { label: '固定测试视频', value: profile.video_asset || 'bottle-detection.mp4' },
       { label: '检测模型', value: profile.model_name || 'yolov5n' },
+    ])
+  }
+  if (taskType === 'terminal_route_transfer') {
+    return compactRows([
+      { label: '任务形态', value: '源端到目的端的端到端传输链路' },
+      { label: '平台部署', value: '不创建计算容器，只等待外部路由系统建立网络' },
     ])
   }
   return Object.entries(profile).map(([key, value]) => ({
@@ -175,6 +188,13 @@ export function describeRuntimePlan(taskType, plan) {
       { label: '执行方式', value: '固定视频抽帧后进行目标检测推理' },
       { label: '计算资源', value: '优先使用路由分配的 GPU 推理节点' },
       { label: '结果采集', value: '统计帧推理时延并生成带框预览图' },
+    ]
+  }
+  if (taskType === 'terminal_route_transfer') {
+    return [
+      { label: '执行方式', value: '只生成 source -> sink 路由 DAG' },
+      { label: '部署资源', value: '无平台受控计算节点，源端和目的端由用户侧业务接入' },
+      { label: '网络确认', value: '外部路由系统回写结果并确认 network-ready 后完成' },
     ]
   }
   return Object.entries(plan).map(([key, value]) => ({

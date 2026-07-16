@@ -143,7 +143,7 @@
           </el-table-column>
           <el-table-column label="工单状态" width="110">
             <template #default="{ row }">
-              <el-tag :type="orderStatusType(row.order_status)" size="small">{{ ORDER_STATUS_LABELS[row.order_status] || row.order_status || '-' }}</el-tag>
+              <el-tag :type="combinedStatusType(row)" size="small">{{ combinedStatusLabel(row) }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="部署状态" width="110">
@@ -297,7 +297,7 @@
                       </el-row>
                       <el-row :gutter="10">
                         <el-col :span="10">
-                          <el-form-item label="目的端接收端口">
+                          <el-form-item v-if="!isTerminalRouteDraft" label="目的端接收端口">
                             <el-input-number
                               v-model="endpointForm.destination_port"
                               :min="1"
@@ -309,7 +309,7 @@
                           </el-form-item>
                         </el-col>
                         <el-col :span="14">
-                          <el-form-item label="目的端接收地址">
+                          <el-form-item v-if="!isTerminalRouteDraft" label="目的端接收地址">
                             <el-input
                               v-model="endpointForm.callback_url"
                               placeholder="默认按目的端 IP 和端口生成"
@@ -319,8 +319,12 @@
                         </el-col>
                       </el-row>
                     </el-form>
-                    <el-checkbox v-model="endpointForm.route_only">只生成节点分配方案，暂不启动计算节点</el-checkbox>
-                    <p class="submit-options-note">一般无需修改。源/目的端点可填节点别名、拓扑 ID 或业务面 IP；端口默认按任务类型固定。</p>
+                    <el-checkbox v-model="endpointForm.route_only" :disabled="isTerminalRouteDraft">
+                      {{ isTerminalRouteDraft ? '该任务只建立端到端路由，不部署计算节点' : '只生成节点分配方案，暂不启动计算节点' }}
+                    </el-checkbox>
+                    <p class="submit-options-note">
+                      {{ isTerminalRouteDraft ? '源/目的端点可填节点别名、拓扑 ID 或业务面 IP；系统会提交 source -> sink 路由请求。' : '一般无需修改。源/目的端点可填节点别名、拓扑 ID 或业务面 IP；端口默认按任务类型固定。' }}
+                    </p>
                   </div>
                 </el-collapse-item>
               </el-collapse>
@@ -433,7 +437,7 @@
             >
               {{ taskTypeLabel(selectedOrderDetail?.business_task?.task_type || selectedOrderDetail?.task_type) }}
             </el-tag>
-            <el-tag v-if="selectedOrderDetail?.status" :type="orderStatusType(selectedOrderDetail.status)" size="small">
+            <el-tag v-if="selectedOrderDetail?.status" :type="combinedStatusType(selectedOrderDetail)" size="small">
               {{ formatOrderStatus(selectedOrderDetail.status) }}
             </el-tag>
           </div>
@@ -606,6 +610,7 @@ function toggleOrders() { showOrders.value = !showOrders.value }
 const exampleChips = [
   '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
   '视频AI推理任务，从 h3 到 h4，720p视频片段100帧，统计30帧P90，30fps，现在开始跑2小时，低时延策略',
+  '端到端传输路由任务，从 h1 到 h2 建立链路，现在开始跑2小时，低时延策略',
   '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
   '从 h6 到 h7 做工业检测视频推理，720p，视频片段100帧，统计30帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
@@ -621,9 +626,15 @@ const supportedTaskHints = [
     label: taskTypeLabel('low_latency_video_pipeline'),
     hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、固定视频规格、视频片段帧范围、参与统计帧数和帧率。',
   },
+  {
+    type: 'terminal_route_transfer',
+    label: taskTypeLabel('terminal_route_transfer'),
+    hint: '适合表达为“端到端传输、只建立路由、打通链路”，只需给出源节点、目的节点、开始/结束时间和路由策略。',
+  },
 ]
 
 const draft = computed(() => conversation.value?.latest_draft || null)
+const isTerminalRouteDraft = computed(() => draft.value?.task_type === 'terminal_route_transfer')
 const draftDataProfileRows = computed(() => describeDataProfile(draft.value?.task_type, draft.value?.data_profile) || [])
 const intentSummaryRows = computed(() => {
   if (!draft.value) return []
@@ -675,7 +686,7 @@ const effectiveCallbackUrl = computed(() => {
   return normalizeDisplayUrl(url)
 })
 const isRouteOnlyDraft = computed(() =>
-  Boolean(endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
+  Boolean(isTerminalRouteDraft.value || endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
 )
 const isDraftSubmittable = computed(() =>
   draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
@@ -700,7 +711,10 @@ const conversationInputLockMessage = computed(() =>
     : '系统正在处理该任务，请稍后在“我的工单”查看进度，或新建对话提交其他任务。'
 )
 const canDemoRoute = computed(() =>
-  auth.isAdmin && conversation.value?.status === 'awaiting_routing' && !!conversation.value?.materialized_order_id
+  auth.isAdmin
+  && !isTerminalRouteDraft.value
+  && conversation.value?.status === 'awaiting_routing'
+  && !!conversation.value?.materialized_order_id
 )
 const operatorNodeHint = computed(() => nodeHintByKinds(['terminal'], 'h1-h13', isOfficialTerminalNodeName))
 const computeNodeHint = computed(() => nodeHintByKinds(['worker', 'compute'], 'compute-1、compute-2、compute-3', isOfficialComputeNodeName))
@@ -731,7 +745,7 @@ function buildDraftWithEndpointForm(currentDraft) {
     source_endpoint_input: endpointForm.value.source_endpoint_input || currentDraft.source_name,
     destination_endpoint_input: endpointForm.value.destination_endpoint_input || currentDraft.destination_name,
     destination_port: endpointForm.value.destination_port,
-    route_only: Boolean(endpointForm.value.route_only),
+    route_only: Boolean(currentDraft.task_type === 'terminal_route_transfer' || endpointForm.value.route_only),
   }
   if (endpointForm.value.callback_url_customized) {
     runtimePlan.callback_url = endpointForm.value.callback_url?.trim() || ''
@@ -758,7 +772,7 @@ function syncEndpointFormFromDraft(currentDraft) {
     destination_port: runtimePlan.destination_port ?? DEFAULT_DESTINATION_PORT_BY_TASK_TYPE[currentDraft?.task_type] ?? null,
     callback_url: callbackCustomized ? savedCallbackUrl : '',
     callback_url_customized: callbackCustomized,
-    route_only: Boolean(runtimePlan.route_only),
+    route_only: Boolean(currentDraft?.task_type === 'terminal_route_transfer' || runtimePlan.route_only),
   }
 }
 
@@ -959,37 +973,55 @@ const PARSE_STATUS_LABEL = {
 }
 
 function formatOrderStatus(status) {
-  if (isRouteOnlyWaitingOrder(selectedOrderDetail.value)) return '待启动'
+  if (isRouteOnlyCompletedOrder(selectedOrderDetail.value)) return '路由已建立'
+  if (isRouteOnlyNetworkPreparingOrder(selectedOrderDetail.value)) return '网络准备中'
   return ORDER_STATUS_LABEL[status] || status || '-'
 }
 
 function combinedStatusType(row) {
-  if (row.status === 'materialized') return 'primary'
-  if (row.status === 'completed') return 'success'
-  if (row.status === 'failed') return 'danger'
-  if (row.status === 'cancelled') return 'info'
+  if (isRouteOnlyCompletedOrder(row)) return 'success'
+  if (isRouteOnlyNetworkPreparingOrder(row)) return 'primary'
+  const status = getOrderStatus(row)
+  if (status === 'materialized') return 'primary'
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'cancelled') return 'info'
   if (row.routing_status === 'network_binding_ready') return 'primary'
   if (row.routing_status === 'computing') return 'warning'
   return 'warning'
 }
 
 function combinedStatusLabel(row) {
-  if (isRouteOnlyWaitingOrder(row)) return '待启动'
-  if (row.status === 'materialized') return '已生成实例/待启动'
-  if (row.status === 'completed') return '已完成'
-  if (row.status === 'failed') return '失败'
-  if (row.status === 'cancelled') return '已取消'
+  if (isRouteOnlyCompletedOrder(row)) return '路由已建立'
+  if (isRouteOnlyNetworkPreparingOrder(row)) return '网络准备中'
+  const status = getOrderStatus(row)
+  if (status === 'materialized') return '已生成实例/待启动'
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  if (status === 'cancelled') return '已取消'
   if (row.routing_status === 'network_binding_ready') return '网络准备中'
   if (row.routing_status === 'computing') return '分配中'
   return '待分配'
 }
 
-function isRouteOnlyWaitingOrder(order) {
+function isRouteOnlyOrder(order) {
   const deployment = order?.runtime_config?.platform_deployment
-  return getOrderStatus(order) === 'pending'
+  const routingResult = order?.runtime_config?.routing_result
+  return deployment?.mode === 'route_only' || routingResult?.route_only === true
+}
+
+function isRouteOnlyCompletedOrder(order) {
+  return ['pending', 'completed'].includes(getOrderStatus(order))
     && order?.routing_status === 'completed'
-    && deployment?.mode === 'route_only'
-    && order?.materialized_instance_id == null
+    && isRouteOnlyOrder(order)
+    && (order?.materialized_instance_id ?? order?.instance_id ?? null) == null
+}
+
+function isRouteOnlyNetworkPreparingOrder(order) {
+  return getOrderStatus(order) === 'pending'
+    && order?.routing_status === 'network_binding_ready'
+    && isRouteOnlyOrder(order)
+    && (order?.materialized_instance_id ?? order?.instance_id ?? null) == null
 }
 
 function getOrderStatus(order) {
@@ -1006,6 +1038,8 @@ function handleOrderSelectionChange(rows) {
 
 function canCancelOrder(order) {
   return getOrderStatus(order) === 'pending'
+    && !isRouteOnlyCompletedOrder(order)
+    && !isRouteOnlyNetworkPreparingOrder(order)
 }
 
 function canStopOrder(order) {
@@ -1490,10 +1524,13 @@ async function confirmIntent() {
     conversation.value = data
     await refreshList()
     const routeOnly = isRouteOnlyDraft.value
+    const terminalRoute = isTerminalRouteDraft.value
     const autoRouted = data.status === 'submitted'
     ElMessage.success(
-      routeOnly
-        ? '已提交，节点分配方案生成后将等待手动启动'
+      terminalRoute
+        ? '已提交，等待外部路由建立链路'
+        : routeOnly
+          ? '已提交，节点分配方案生成后将等待手动启动'
         : autoRouted
           ? '任务已提交，系统已完成节点分配'
           : '任务已提交，系统将继续处理'
@@ -1501,8 +1538,10 @@ async function confirmIntent() {
     localMessages.value.push({
       id: 'submit-success',
       role: 'assistant',
-      content: routeOnly
-        ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，方案生成后状态为“待启动”，可手动启动计算节点。`
+      content: terminalRoute
+        ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成 source -> sink 路由请求，不创建计算容器；外部路由确认 network-ready 后链路即完成。`
+        : routeOnly
+          ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。本次只生成节点分配方案，方案生成后状态为“待启动”，可手动启动计算节点。`
         : autoRouted
           ? `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统已完成节点分配并生成计算节点接入信息，您可以在“我的工单”查看详情。`
         : `任务已提交，任务 ID：${data.id.slice(0, 8)}。系统将等待节点分配并部署计算节点，您可以在“我的工单”查看进度。`,
@@ -1533,7 +1572,7 @@ function normalizedEndpointFormPayload() {
     destination_endpoint_input: endpointForm.value.destination_endpoint_input?.trim() || null,
     destination_port: port === '' || port === null || port === undefined ? null : Number(port),
     callback_url: callbackUrl,
-    route_only: Boolean(endpointForm.value.route_only),
+    route_only: Boolean(draft.value?.task_type === 'terminal_route_transfer' || endpointForm.value.route_only),
   }
 }
 

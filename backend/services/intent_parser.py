@@ -294,6 +294,18 @@ def _extract_routing_strategy(text: str) -> str:
     return extract_routing_strategy(text)
 
 
+def _looks_like_terminal_route_transfer(text: str) -> bool:
+    lower = text.lower()
+    route_keywords = (
+        "端到端传输", "传输路由", "只建路由", "只建立路由", "建立路由", "建立链路",
+        "打通链路", "打通路由", "源到目的", "源端到目的端", "端到端链路",
+        "e2e route", "route only", "source to sink",
+    )
+    if any(keyword in lower for keyword in route_keywords):
+        return True
+    return bool(re.search(r"(?:从|source\s*[:=]).*?(?:到|dest\s*[:=]).*?(?:链路|路由|转发)", text, re.IGNORECASE))
+
+
 def _merge_draft(existing: dict[str, Any] | None, result: ParseResult) -> ParseResult:
     if not existing:
         return result
@@ -344,7 +356,20 @@ def parse_intent(
     if end_t:
         result.business_end_time = end_t
 
-    if any(k in lower for k in ("矩阵", "matmul", "matrix_size", "matrix", "乘法")):
+    if _looks_like_terminal_route_transfer(text) and not any(
+        k in lower for k in (
+            "矩阵", "matmul", "matrix_size", "matrix", "乘法", "视频", "video", "帧", "fps",
+            "llm", "大模型", "文本生成", "token", "prompt", "训练", "高安全", "安全传输",
+        )
+    ):
+        result.task_type = result.task_type or "terminal_route_transfer"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "terminal_route_transfer_default")
+        result.data_profile.setdefault("source", "user_endpoint")
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.runtime_plan["route_only"] = True
+        result.business_objective = result.business_objective or default_objective_for_task_type(result.task_type)
+    elif any(k in lower for k in ("矩阵", "matmul", "matrix_size", "matrix", "乘法")):
         result.task_type = result.task_type or "high_throughput_matmul"
         result.modality = result.modality or modality_for_task_type(result.task_type)
         result.data_profile.setdefault("profile_id", "matmul_synthetic")

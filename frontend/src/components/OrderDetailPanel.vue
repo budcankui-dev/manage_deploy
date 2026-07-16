@@ -575,6 +575,12 @@ import {
   videoPreviewFrames as buildVideoPreviewFrames,
   videoPreviewNeedsOverlay,
 } from '@/constants/businessTaskDisplay'
+import {
+  deploymentModeText as formatDeploymentModeText,
+  orderStatusLabel as formatOrderStatusLabel,
+  orderStatusType as formatOrderStatusType,
+  routingStatusLabel as formatRoutingStatusLabel,
+} from '@/constants/orderDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
 const props = defineProps({
   detail: { type: Object, default: null },
@@ -888,12 +894,7 @@ const networkReadyText = computed(() => {
   return '无需额外确认'
 })
 const deploymentModeText = computed(() => {
-  const mode = platformDeployment.value?.mode
-  if (mode === 'automated_benchmark') return '可控测评部署'
-  if (mode === 'user_access_demo') return '用户端外部接入'
-  if (mode === 'route_only') return '方案已生成，待手动启动计算节点'
-  if (detail.value?.is_benchmark) return '可控测评部署'
-  return ''
+  return formatDeploymentModeText(detail.value)
 })
 const isInstanceCleaned = computed(() => (
   detail.value?.materialized_instance_id
@@ -1170,49 +1171,15 @@ function formatTime(value) {
 }
 
 function orderStatusLabel(value) {
-  if (isRouteOnlyWaitingOrder(detail.value)) return '待启动'
-  return {
-    pending: '待分配',
-    routing: '分配中',
-    routed: '待部署',
-    materialized: '已生成实例/待启动',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-    awaiting_routing: '待分配',
-  }[value] || value || '-'
+  return formatOrderStatusLabel({ ...(detail.value || {}), status: value || detail.value?.status })
 }
 
 function orderStatusType(value) {
-  if (isRouteOnlyWaitingOrder(detail.value)) return 'warning'
-  return {
-    pending: 'info',
-    materialized: 'warning',
-    running: 'success',
-    completed: 'success',
-    failed: 'danger',
-    cancelled: 'info',
-  }[value] || 'info'
-}
-
-function isRouteOnlyWaitingOrder(order) {
-  const deployment = order?.runtime_config?.platform_deployment
-  return order?.status === 'pending'
-    && order?.routing_status === 'completed'
-    && deployment?.mode === 'route_only'
-    && order?.materialized_instance_id == null
+  return formatOrderStatusType({ ...(detail.value || {}), status: value || detail.value?.status })
 }
 
 function routingStatusLabel(value) {
-  return {
-    not_required: '无需分配',
-    pending: '待分配',
-    computing: '分配中',
-    network_binding_ready: '网络准备中',
-    completed: '已完成分配',
-    failed: '分配失败',
-  }[value] || value || '-'
+  return formatRoutingStatusLabel(value, detail.value)
 }
 
 function instanceStatusLabel(value) {

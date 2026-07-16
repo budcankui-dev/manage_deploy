@@ -36,6 +36,8 @@ def estimate_resources(task_type: str, data_profile: dict[str, Any] | None = Non
         return _estimate_matmul(profile)
     elif task_type == "low_latency_video_pipeline":
         return _estimate_video(profile)
+    elif task_type == "terminal_route_transfer":
+        return _estimate_terminal_route_transfer(profile)
     elif task_type == "llm_text_generation":
         return _estimate_llm(profile)
     else:
@@ -64,6 +66,13 @@ def _estimate_video(profile: dict[str, Any]) -> dict[str, dict[str, int]]:
         "source": _base_node(cpu=2, cpu_mem=512, gpu=0, gpu_mem=0, disk=512),
         "compute": _base_node(cpu=4, cpu_mem=2048, gpu=1, gpu_mem=gpu_mem_mb, disk=1024),
         "sink": _base_node(cpu=2, cpu_mem=512, gpu=0, gpu_mem=0, disk=512),
+    }
+
+
+def _estimate_terminal_route_transfer(profile: dict[str, Any]) -> dict[str, dict[str, int]]:
+    return {
+        "source": _base_node(cpu=1, cpu_mem=256, gpu=0, gpu_mem=0, disk=128),
+        "sink": _base_node(cpu=1, cpu_mem=256, gpu=0, gpu_mem=0, disk=128),
     }
 
 
@@ -124,6 +133,9 @@ def estimate_data_mb(task_type: str, data_profile: dict[str, Any] | None = None)
         output = int(profile.get("max_new_tokens", 256) or 256)
         return max(1, int(math.ceil((prompt + output) * 4 / (1024 * 1024))))
 
+    if task_type == "terminal_route_transfer":
+        return max(1, int(profile.get("data_mb", 1) or 1))
+
     return 20
 
 
@@ -149,5 +161,8 @@ def estimate_bandwidth_mbps(task_type: str, data_profile: dict[str, Any] | None 
 
     if task_type == "llm_text_generation":
         return 10
+
+    if task_type == "terminal_route_transfer":
+        return _clamp(int(profile.get("bandwidth_mbps", 10) or 10), 1, 1000)
 
     return _clamp(max(10, data_mb * 2), 10, 500)

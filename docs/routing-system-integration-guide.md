@@ -186,7 +186,7 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 }
 ```
 
-典型响应会包含 `routing_status=network_binding_ready` 和 `network_bindings`。如果是 `route_only` 工单，平台会保存 placements/metadata，但不会物化实例；响应以 `deployment_required=false` 和 `deployment_mode=route_only` 为准，`network_bindings=[]`，通常无需再调用 `/network-ready`。`route_only=true` 只作为平台内部 `runtime_config.routing_result` 的辅助标记，不作为顶层响应字段依赖。
+典型响应会包含 `routing_status=network_binding_ready` 和 `network_bindings`。如果是 `route_only` 工单，平台会保存 placements/metadata，但不会物化实例；响应以 `deployment_required=false` 和 `deployment_mode=route_only` 为准，`network_bindings=[]`。是否需要继续调用 `/network-ready` 由响应中的 `network_ready_required` 决定；端到端传输路由任务建议保留 `require_network_ready=true`，让路由系统下发真实链路后再确认完成。`route_only=true` 只作为平台内部 `runtime_config.routing_result` 的辅助标记，不作为顶层响应字段依赖。
 
 `/result` 请求字段已冻结，额外字段会被平台拒绝：
 
@@ -206,11 +206,11 @@ ROUTER_HTTP_TIMEOUT_SEC=120
 |------|----------|--------------|----------------|
 | `status` | `ok` | `ok` | 接口调用成功。 |
 | `order_id` | 当前工单 ID | 当前工单 ID | 用于日志关联。 |
-| `routing_status` | 通常为 `network_binding_ready` | `completed` | 普通部署需要继续下发网络规则；只路由不部署到这里已结束。 |
+| `routing_status` | 通常为 `network_binding_ready` | `network_binding_ready` 或 `completed` | 为 `network_binding_ready` 时继续下发网络规则并调用 `/network-ready`。 |
 | `instance_id` | 平台物化后的实例 ID | `null` | 普通部署可用于排障；路由系统通常不用。 |
 | `network_bindings` | 非空数组 | `[]` | 下发 A->B、B->C 流表/QoS 的最终依据。 |
-| `network_ready_required` | `true` 或请求指定值 | `false` | 为 `true` 时下发网络后必须调用 `/network-ready`。 |
-| `network_ready` | `false` | `true` | 表示平台是否认为网络阶段已完成。 |
+| `network_ready_required` | `true` 或请求指定值 | `true` 或请求指定值 | 为 `true` 时下发网络后必须调用 `/network-ready`。 |
+| `network_ready` | `false` | `false` 或 `true` | 表示平台是否认为网络阶段已完成。 |
 
 `network_bindings[]` 常用字段如下。下发真实业务流规则时优先使用这些字段，而不是提前猜测容器端口：
 
@@ -260,7 +260,7 @@ curl -sS -X POST "http://127.0.0.1:8181/api/routing-orders/${ORDER_ID}/network-r
 验收判断：
 
 - 普通部署工单：第 3 步应返回 `routing_status=network_binding_ready` 且 `network_bindings` 非空；第 4 步后应变为 `routing_status=completed`。
-- `route_only` 工单：第 3 步应返回 `routing_status=completed`、`network_bindings=[]`、`network_ready=true`，通常不需要第 4 步。
+- `route_only` 工单：不会创建实例，`network_bindings=[]`；如果第 3 步返回 `network_ready_required=true` 和 `routing_status=network_binding_ready`，路由系统下发链路后仍需执行第 4 步。
 - 重复 claim 同一工单应返回 `409`，证明并发领取控制生效。
 - 如果第 3 步 HTTP 超时，路由系统应先查询该工单状态。平台已经物化实例的重复 `/result` 会按同一工单幂等返回，不应再次扣减路由侧资源。
 

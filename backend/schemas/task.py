@@ -482,6 +482,8 @@ class BusinessTaskListItem(BaseModel):
     routing_policy: Optional[str] = None
     business_priority: Optional[int] = None
     order_status: OrderStatus
+    routing_status: Optional[str] = None
+    runtime_config: Optional[dict] = None
     instance_id: Optional[str] = None
     instance_exists: Optional[bool] = None
     deployment_status: Optional[TaskStatus] = None

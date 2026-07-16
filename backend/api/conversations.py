@@ -46,6 +46,8 @@ DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
     "low_latency_video_pipeline": 9100,
 }
 
+ROUTE_ONLY_TASK_TYPES = {"terminal_route_transfer"}
+
 
 def _node_kind(node: Node) -> str:
     return str(node.node_kind or "worker").lower()
@@ -137,7 +139,13 @@ def _default_destination_port_for_task(task_type: str | None) -> int | None:
     return DEFAULT_DESTINATION_PORT_BY_TASK_TYPE.get(str(task_type or ""))
 
 
+def _is_forced_route_only_task(task_type: str | None) -> bool:
+    return str(task_type or "") in ROUTE_ONLY_TASK_TYPES
+
+
 def _effective_destination_port(task_type: str | None, runtime_plan: dict | None) -> int | None:
+    if _is_forced_route_only_task(task_type):
+        return None
     if isinstance(runtime_plan, dict) and runtime_plan.get("destination_port_disabled"):
         return None
     if _callback_url_from_runtime_plan(runtime_plan) and _destination_port_from_runtime_plan(runtime_plan) is None:
@@ -161,6 +169,10 @@ def _effective_callback_url(
 
 def _route_only_from_runtime_plan(runtime_plan: dict | None) -> bool:
     return bool(_runtime_value(runtime_plan, "route_only"))
+
+
+def _is_route_only_task(task_type: str | None, runtime_plan: dict | None = None) -> bool:
+    return _is_forced_route_only_task(task_type) or _route_only_from_runtime_plan(runtime_plan)
 
 
 def _endpoint_dict(endpoint: ResolvedEndpoint | None) -> dict | None:
@@ -550,7 +562,7 @@ async def update_draft(
             runtime_plan.pop("destination_port_disabled", None)
 
     if route_only is not None:
-        runtime_plan["route_only"] = bool(route_only)
+        runtime_plan["route_only"] = True if _is_forced_route_only_task(draft.task_type) else bool(route_only)
 
     if callback_url_was_set:
         if callback_url is None:
@@ -657,15 +669,18 @@ async def confirm_intent(
     )
     destination_port = _effective_destination_port(draft.task_type, draft.runtime_plan)
     callback_url = _effective_callback_url(draft.task_type, draft.runtime_plan, destination_endpoint)
-    route_only = _route_only_from_runtime_plan(draft.runtime_plan)
+    route_only = _is_route_only_task(draft.task_type, draft.runtime_plan)
     deployable_roles = [] if route_only else ["compute"]
+    effective_runtime_plan = dict(draft.runtime_plan or {})
+    if route_only:
+        effective_runtime_plan["route_only"] = True
     business_task_config = {
         "task_type": draft.task_type,
         "modality": draft.modality,
         "source_name": draft.source_name,
         "destination_name": draft.destination_name,
         "data_profile": draft.data_profile,
-        "runtime_plan": draft.runtime_plan,
+        "runtime_plan": effective_runtime_plan,
         "business_objective": draft.business_objective,
     }
     platform_deployment = {
@@ -717,7 +732,7 @@ async def confirm_intent(
         data_profile=draft.data_profile,
         resource_requirement=draft.resource_requirement,
         modality_priority_map=modality_priority_map,
-        routing_strategy=(draft.runtime_plan or {}).get("routing_strategy"),
+        routing_strategy=effective_runtime_plan.get("routing_strategy"),
         callback_url=callback_url,
         source_endpoint=_endpoint_dict(source_endpoint),
         destination_endpoint=_endpoint_dict(destination_endpoint),
@@ -741,7 +756,7 @@ async def confirm_intent(
         conversation_id=conversation.id,
         order_id=order.id,
         intent_draft_id=draft.id,
-        strategy=normalize_routing_policy((draft.runtime_plan or {}).get("routing_strategy"), "resource_guarantee"),
+        strategy=normalize_routing_policy(effective_runtime_plan.get("routing_strategy"), "resource_guarantee"),
         status=RoutingRequestStatus.PENDING,
         source_name=draft.source_name,
         destination_name=draft.destination_name,
@@ -758,7 +773,7 @@ async def confirm_intent(
     conversation.materialized_order_id = order.id
     conversation.updated_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 
-    if runtime_settings.get("benchmark_routing_mode") == "internal_auto":
+    if runtime_settings.get("benchmark_routing_mode") == "internal_auto" and not route_only:
         await _apply_platform_managed_route(db, conversation, order, start_deployment=False)
 
     await db.commit()
@@ -1069,7 +1084,7 @@ async def _get_conversation_detail(
         if draft.parse_status == ParseStatus.VALID:
             runtime_settings = await get_runtime_settings(db)
             resource_options = routing_resource_options_from_settings(runtime_settings)
-            deployable_roles = [] if _route_only_from_runtime_plan(draft.runtime_plan) else ["compute"]
+            deployable_roles = [] if _is_route_only_task(draft.task_type, draft.runtime_plan) else ["compute"]
             draft_response.routing_dag_preview = build_routing_payload(
                 order_id=conversation.id,
                 order_name=conversation.title or f"{draft.task_type}-{conversation.id[:8]}",

@@ -38,8 +38,9 @@
       "business_ip": "10.112.17.51",
       "acceptance_management_ip": "172.16.0.102",
       "acceptance_business_ip": "172.16.0.102",
-      "acceptance_business_ipv6": "3012:9::fc36:9ea:22bf:a73",
+      "acceptance_business_ipv6": "3012:9::9e69:d3ff:fe68:d3d",
       "acceptance_business_ipv6_candidates": [
+        "3012:9::9e69:d3ff:fe68:d3d",
         "3012:9::319a:124f:5a8:51e4",
         "3012:9::fc36:9ea:22bf:a73",
         "3012:9::c14e:d12f:1fd6:d2a1"

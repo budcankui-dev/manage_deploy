@@ -2,6 +2,8 @@
 
 本文是验收网络排障和交接的固定流程。目标是把“检测事实、更新清单、交给拓扑侧修复”分清楚，避免在排查时临时改路由表、临时加地址或把不稳定 IPv6 写进平台。
 
+完整生产闭环，包括工作总控、计算节点、终端节点、Node Agent、Portainer、WireGuard、远端 `nodes` 数据库更新和业务复测，见 [生产拓扑巡检与更新 SOP](/Users/yanjia/codes/manage_deploy/docs/deployment/生产拓扑巡检与更新SOP.md)。本文聚焦网络矩阵检测和 IP 判定。
+
 ## 安全边界
 
 默认只允许执行只读检测：
@@ -30,14 +32,14 @@
 
 - `admin`、`compute-1~compute-3`、`h1~h13` 共 17 个节点。
 - 地址来自 `ops/inventory/topology_nodes.json` 的 `acceptance_management_ip`。
-- 目标是 17 个源到 17 个目标都可达。
+- 目标是 17 个源到 17 个目标都可达，即管理网 `17x17` 两两互通矩阵全通。
 
 数据面目标：
 
 - `compute-1~compute-3`、`h1~h13` 共 16 个节点。
 - 地址来自 `ops/inventory/topology_nodes.json` 的 `acceptance_business_ipv6`。
 - `admin` 没有数据面，不参与数据面矩阵。
-- 目标是 16 个源到 16 个目标都可达。
+- 目标是 16 个源到 16 个目标都可达，即工作节点数据面 IPv6 `16x16` 两两互通矩阵全通。
 
 ## 快速检测
 

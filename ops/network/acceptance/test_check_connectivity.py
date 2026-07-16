@@ -1,10 +1,12 @@
 import importlib.util
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).with_name("check_connectivity.py")
@@ -123,6 +125,32 @@ class ConnectivitySourceTests(unittest.TestCase):
 
         self.assertIn("{set -u\nif command -v ping6 >/dev/null; then echo OK; fi}", script)
         self.assertIn("set password {secret}", script)
+
+    def test_local_probe_timeout_marks_target_failed(self):
+        target = check_connectivity.Target(name="compute-1", role="worker", address="172.16.0.101")
+
+        with patch.object(
+            check_connectivity.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["ping"], timeout=3),
+        ):
+            results = check_connectivity._run_local([target], timeout=1)
+
+        self.assertEqual(results, [(target, False)])
+
+    def test_remote_probe_timeout_is_reported_as_source_failure(self):
+        target = check_connectivity.Target(name="compute-1", role="worker", address="172.16.0.101")
+
+        with patch.object(
+            check_connectivity.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["ssh"], timeout=20),
+        ):
+            with self.assertRaises(check_connectivity.RemoteProbeError) as ctx:
+                check_connectivity._run_remote([target], ssh="-p 2345 user@host", timeout=1)
+
+        self.assertEqual(ctx.exception.returncode, 124)
+        self.assertIn("timed out", ctx.exception.stderr)
 
 
 if __name__ == "__main__":
