@@ -340,6 +340,32 @@ def parse_intent(
                 "operator": ">=",
                 "unit": "GFLOPS",
             }
+    elif any(k in lower for k in ("元宇宙", "沉浸式", "视频融合", "双路视频", "modnet")):
+        result.task_type = result.task_type or "metaverse_video_fusion"
+        result.modality = result.modality or modality_for_task_type(result.task_type)
+        result.data_profile.setdefault("profile_id", "metaverse_offline_fusion_720p")
+        result.data_profile.setdefault("source", "bundled_dual_video")
+        result.data_profile.setdefault("frame_count", 180)
+        result.data_profile.setdefault("resolution", "720p")
+        result.data_profile.setdefault("fps", 30)
+        result.data_profile.setdefault("frame_stride", 1)
+        result.data_profile.setdefault("warmup_frames", 10)
+        result.data_profile.setdefault("measured_frames", 170)
+        result.data_profile.setdefault("video0_asset", "cam0.mp4")
+        result.data_profile.setdefault("video1_asset", "cam1.mp4")
+        result.data_profile.setdefault("fusion_mode", "modnet_offline")
+        frame_count = _extract_frame_count(text)
+        fps = _extract_fps(text)
+        if frame_count is not None:
+            result.data_profile["frame_count"] = frame_count
+        if fps is not None:
+            result.data_profile["fps"] = fps
+        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.business_objective = {
+            "metric_key": "frame_latency_p90_ms",
+            "operator": "<=",
+            "unit": "ms",
+        }
     elif any(k in lower for k in ("视频", "video", "帧", "fps", "低时延视频", "低延时视频")) and not any(
         k in lower for k in (
             "高能效", "边缘计算", "边缘推理", "低功耗", "输电线路巡检", "就近处理",
@@ -483,7 +509,7 @@ def parse_intent(
             missing.append("矩阵规模（如：1024阶矩阵）")
         if not result.data_profile.get("batch_count"):
             missing.append("批次数（如：50批）")
-    elif result.task_type == "low_latency_video_pipeline":
+    elif result.task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         if not result.data_profile.get("frame_count"):
             missing.append("视频帧数（如：90帧）")
         if not result.data_profile.get("resolution"):
@@ -588,7 +614,7 @@ def validate_draft_fields(draft: dict[str, Any]) -> list[str]:
             min_value=1,
             max_value=10000,
         )
-    elif task_type == "low_latency_video_pipeline":
+    elif task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         _require_int_range(
             dp.get("frame_count"),
             "视频帧数不能为空（例如：100帧）",

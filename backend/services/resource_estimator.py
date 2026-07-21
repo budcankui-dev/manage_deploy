@@ -34,7 +34,7 @@ def estimate_resources(task_type: str, data_profile: dict[str, Any] | None = Non
 
     if task_type == "high_throughput_matmul":
         return _estimate_matmul(profile)
-    elif task_type == "low_latency_video_pipeline":
+    elif task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         return _estimate_video(profile)
     elif task_type == "llm_text_generation":
         return _estimate_llm(profile)
@@ -108,7 +108,7 @@ def estimate_data_mb(task_type: str, data_profile: dict[str, Any] | None = None)
         # Two FP32 input matrices plus a compact result/metadata envelope.
         return max(1, int(ms * ms * 4 * 2 / (1024 * 1024)))
 
-    if task_type == "low_latency_video_pipeline":
+    if task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         height = _parse_resolution_height(profile.get("resolution", 720))
         width = int(height * 16 / 9)
         frame_count = int(profile.get("frame_count", profile.get("measured_frames", 90)) or 90)
@@ -140,7 +140,7 @@ def estimate_bandwidth_mbps(task_type: str, data_profile: dict[str, Any] | None 
     if task_type == "high_throughput_matmul":
         return _clamp(max(10, data_mb * 2), 10, 1000)
 
-    if task_type == "low_latency_video_pipeline":
+    if task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         fps = int(profile.get("fps", 30) or 30)
         stride = max(1, int(profile.get("frame_stride", 30) or 30))
         effective_fps = max(1, math.ceil(fps / stride))

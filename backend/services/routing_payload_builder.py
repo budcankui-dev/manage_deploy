@@ -97,6 +97,7 @@ def _task_type_to_job_name(task_type: str) -> str:
     mapping = {
         "high_throughput_matmul": "科学计算矩阵乘法",
         "low_latency_video_pipeline": "视频AI推理",
+        "metaverse_video_fusion": "元宇宙沉浸式交互",
         "llm_text_generation": "大模型文本生成",
     }
     return mapping.get(task_type, task_type)

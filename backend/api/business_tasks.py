@@ -94,7 +94,7 @@ async def build_instance_create_from_business_task(
     gpu_roles = set()
     if payload.task_type == "high_throughput_matmul":
         gpu_roles.add("compute")
-    elif payload.task_type == "low_latency_video_pipeline":
+    elif payload.task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         gpu_roles.add("compute")
     elif payload.task_type == "llm_text_generation":
         gpu_roles.add("compute")
@@ -406,6 +406,17 @@ def _result_matches_baseline_profile(task_type: str | None, result_metadata: dic
             ("video_asset", "VIDEO_ASSET"),
             ("model_name", "VIDEO_MODEL_NAME"),
         )
+    elif task_type == "metaverse_video_fusion":
+        checks = (
+            ("frame_count", "FRAME_COUNT"),
+            ("resolution", "RESOLUTION"),
+            ("fps", "FPS"),
+            ("frame_stride", "FRAME_STRIDE"),
+            ("measured_frames", "MEASURED_FRAMES"),
+            ("video0_asset", "METAVERSE_VIDEO0_ASSET"),
+            ("video1_asset", "METAVERSE_VIDEO1_ASSET"),
+            ("fusion_mode", "METAVERSE_FUSION_MODE"),
+        )
     else:
         return True
     numeric_keys = {
@@ -567,7 +578,7 @@ def _apply_video_gpu_success_guard(
     evaluation: BusinessObjectiveEvaluationResult,
     result_metadata: dict[str, Any],
 ) -> None:
-    if evaluation.task_type != "low_latency_video_pipeline":
+    if evaluation.task_type not in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         return
     if evaluation.metric_key != "frame_latency_p90_ms":
         return
@@ -578,6 +589,19 @@ def _apply_video_gpu_success_guard(
         or ""
     )
     device = str(result_metadata.get("device") or "")
+    if evaluation.task_type == "metaverse_video_fusion":
+        if backend == "torch_cuda" and device.startswith("cuda"):
+            return
+        evaluation.business_success = False
+        reason = (
+            "元宇宙视频融合要求 GPU+MODNet 融合路径，"
+            f"当前 actual_backend={backend or '-'}, device={device or '-'}"
+        )
+        gpu_error = result_metadata.get("gpu_error")
+        if gpu_error:
+            reason = f"{reason}, gpu_error={gpu_error}"
+        evaluation.failure_reason = reason
+        return
     if backend in {"onnxruntime_cuda", "opencv_dnn_cuda"} and device.startswith("cuda"):
         return
     evaluation.business_success = False
@@ -692,6 +716,16 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
                 "annotated_frame_content_type",
                 "annotated_frame_data_url",
                 "annotated_frame_overlay",
+                "fusion_mode",
+                "video0_asset",
+                "video1_asset",
+                "fusion_frame_data_url",
+                "fusion_frames_data_urls",
+                "fusion_frame_count",
+                "fusion_frame_sequence_url",
+                "fusion_frame_sequence_count",
+                "fusion_frame_sequence_fps",
+                "fusion_frame_sequence_content_type",
                 "detection_count",
                 "top_label",
                 "top_label_zh",

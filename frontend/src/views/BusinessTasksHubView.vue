@@ -328,6 +328,7 @@ import {
 } from '@/constants/routingPolicy'
 import {
   MATMUL_PIPELINE_STEPS,
+  METAVERSE_PIPELINE_STEPS,
   TASK_TYPE_LABELS,
   VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
@@ -349,6 +350,7 @@ import {
   videoPreviewEvidenceRows,
   videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
+  isVideoLikeTask,
 } from '@/constants/businessTaskDisplay'
 import {
   officialNodeSort,
@@ -446,9 +448,11 @@ const detailRuntimePlanRows = computed(() =>
   describeRuntimePlan(detailTaskType.value, orderDetail.value?.business_task?.runtime_plan)
 )
 const isMatmulDetail = computed(() => detailTaskType.value === 'high_throughput_matmul')
-const isVideoDetail = computed(() => detailTaskType.value === 'low_latency_video_pipeline')
+const isVideoDetail = computed(() => isVideoLikeTask(detailTaskType.value))
 const matmulPipelineSteps = MATMUL_PIPELINE_STEPS
-const videoPipelineSteps = VIDEO_PIPELINE_STEPS
+const videoPipelineSteps = computed(() => (
+  detailTaskType.value === 'metaverse_video_fusion' ? METAVERSE_PIPELINE_STEPS : VIDEO_PIPELINE_STEPS
+))
 const detailMatmulInputRows = computed(() =>
   buildMatmulInputRows(orderDetail.value?.business_task?.data_profile)
 )

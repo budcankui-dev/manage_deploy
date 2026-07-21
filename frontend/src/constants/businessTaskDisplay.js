@@ -1,6 +1,7 @@
 export const TASK_TYPE_LABELS = {
   high_throughput_matmul: '矩阵乘法计算任务',
   low_latency_video_pipeline: '视频AI推理任务',
+  metaverse_video_fusion: '元宇宙沉浸式交互',
   llm_text_generation: '大模型文本生成任务',
   ai_model_training: '文本模型训练任务',
   distributed_storage_compute: '分布式存算任务',
@@ -45,6 +46,8 @@ export const TASK_TYPE_SUMMARIES = {
     '在数据源、计算节点、结果接收端之间传递任务与结果，以有效计算吞吐量作为矩阵乘法计算任务的验收指标。',
   low_latency_video_pipeline:
     '在数据源、计算节点、结果接收端之间传递视频帧，使用内置检测模型进行工业检测推理，以帧推理时延 P90 作为验收指标。',
+  metaverse_video_fusion:
+    '在 source -> compute -> sink 三节点链路上传递两路视频帧，使用 MODNet 完成前景背景融合，以单帧融合时延 P90 作为验收指标。',
   llm_text_generation:
     '完成提示词分发、文本生成和结果归档，以生成速率或响应时延作为验收指标。',
 }
@@ -74,6 +77,16 @@ export const VIDEO_PIPELINE_STEPS = [
   { role: 'compute', title: 'YOLO 检测推理', detail: '加载镜像内置 yolov5n-fp32.onnx，对抽样帧执行检测并生成分类画框预览图' },
   { role: 'sink', title: '汇总时延与结果', detail: '上报帧推理时延、检测框、模型信息和带框图片，用于业务目标判定与演示' },
 ]
+
+export const METAVERSE_PIPELINE_STEPS = [
+  { role: 'source', title: '读取双路视频', detail: '使用镜像内置 cam0.mp4 和 cam1.mp4，逐帧发送给 compute' },
+  { role: 'compute', title: 'MODNet 视频融合', detail: '使用路由分配的 GPU 计算前景 matte，并将第一路视频融合到第二路背景' },
+  { role: 'sink', title: '上报融合结果', detail: '回传 frame_latency_p90_ms、MODNet 后端信息和融合帧预览' },
+]
+
+export function isVideoLikeTask(taskType) {
+  return ['low_latency_video_pipeline', 'metaverse_video_fusion'].includes(taskType)
+}
 
 export function taskTypeLabel(taskType) {
   if (!taskType) return '-'
@@ -119,7 +132,7 @@ export function describeObjectiveMeaning(taskType, objective) {
   if (taskType === 'high_throughput_matmul') {
     return `验收标准：${sentence}。以有效计算吞吐量和节点历史基线对比判定业务目标是否达标；计算跑通并上报指标后即可参与成功率统计。`
   }
-  if (taskType === 'low_latency_video_pipeline') {
+  if (isVideoLikeTask(taskType)) {
     return `验收标准：${sentence}。数值越小表示推理越快；以有效推理阶段的 P90 帧处理时延和节点历史基线对比判定。`
   }
   return `验收标准：${sentence}。`
@@ -134,6 +147,19 @@ export function describeDataProfile(taskType, profile) {
       { label: '矩阵规模', value: `${size} × ${size}` },
       { label: '批次数', value: String(batch) },
       { label: '随机种子', value: profile.seed },
+    ])
+  }
+  if (taskType === 'metaverse_video_fusion') {
+    return compactRows([
+      { label: '分辨率', value: profile.resolution || '-' },
+      { label: '总帧数', value: profile.frame_count != null ? `${profile.frame_count} 帧` : '-' },
+      { label: '帧率', value: profile.fps != null ? `${profile.fps} FPS` : '-' },
+      { label: '传输方式', value: Number(profile.frame_stride || 1) === 1 ? '逐帧传输' : `每 ${profile.frame_stride} 帧取 1 帧` },
+      { label: '预热帧数', value: String(profile.warmup_frames ?? '-') },
+      { label: '有效统计帧', value: String(profile.measured_frames ?? '-') },
+      { label: '融合模式', value: profile.fusion_mode || 'modnet_offline' },
+      { label: '前景视频', value: profile.video0_asset || '-' },
+      { label: '背景视频', value: profile.video1_asset || '-' },
     ])
   }
   if (taskType === 'low_latency_video_pipeline') {
@@ -168,6 +194,13 @@ export function describeRuntimePlan(taskType, plan) {
       { label: '执行方式', value: '批量矩阵乘法计算' },
       { label: '计算资源', value: plan.use_gpu ? '优先使用路由分配的 GPU 计算节点' : '按路由分配的计算节点执行' },
       { label: '结果采集', value: '统计有效计算吞吐量并回传平台' },
+    ]
+  }
+  if (taskType === 'metaverse_video_fusion') {
+    return [
+      { label: '执行方式', value: '双路离线视频帧融合' },
+      { label: '计算资源', value: '使用路由分配的 GPU + MODNet' },
+      { label: '结果采集', value: '统计单帧融合时延并回传融合帧预览' },
     ]
   }
   if (taskType === 'low_latency_video_pipeline') {
@@ -300,8 +333,12 @@ export function buildMatmulVerdict(evaluation) {
 }
 
 export function buildVideoInputRows(dataProfile) {
-  const rows = describeDataProfile('low_latency_video_pipeline', dataProfile || {})
+  const isMetaverse = Boolean(dataProfile?.fusion_mode || dataProfile?.video0_asset || dataProfile?.video1_asset)
+  const rows = describeDataProfile(isMetaverse ? 'metaverse_video_fusion' : 'low_latency_video_pipeline', dataProfile || {})
   const profile = dataProfile || {}
+  if (profile.video0_asset) rows.push({ label: '前景视频', value: profile.video0_asset })
+  if (profile.video1_asset) rows.push({ label: '背景视频', value: profile.video1_asset })
+  if (profile.fusion_mode) rows.push({ label: '融合模式', value: profile.fusion_mode })
   if (profile.inference_mode) rows.push({ label: '推理模式', value: profile.inference_mode })
   return rows
 }
@@ -315,8 +352,12 @@ export function videoInputVideoUrl(dataProfile) {
 export function buildVideoOutputRows(resultMetadata, evaluation) {
   const rows = []
   const meta = resultMetadata || {}
+  const isMetaverse = Boolean(meta.fusion_mode || meta.video0_asset || meta.video1_asset)
   if (meta.model_name) rows.push({ label: '检测模型', value: String(meta.model_name) })
+  if (meta.fusion_mode) rows.push({ label: '融合模式', value: String(meta.fusion_mode) })
   if (meta.video_asset) rows.push({ label: '测试视频', value: String(meta.video_asset) })
+  if (meta.video0_asset) rows.push({ label: '前景视频', value: String(meta.video0_asset) })
+  if (meta.video1_asset) rows.push({ label: '背景视频', value: String(meta.video1_asset) })
   if (meta.detector_backend) rows.push({ label: '推理后端', value: String(meta.detector_backend) })
   if (meta.actual_backend) rows.push({ label: '实际执行后端', value: String(meta.actual_backend) })
   if (meta.device) rows.push({ label: '运行设备', value: String(meta.device) })
@@ -333,14 +374,17 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
     rows.push({ label: 'GPU 分配', value: meta.gpu_assigned ? '已分配' : '未检测到 GPU 分配' })
   }
   if (meta.gpu_error) rows.push({ label: 'GPU 诊断', value: String(meta.gpu_error) })
-  if (meta.measured_frames != null) rows.push({ label: '有效推理帧数', value: String(meta.measured_frames) })
+  if (meta.measured_frames != null) rows.push({ label: isMetaverse ? '有效融合帧数' : '有效推理帧数', value: String(meta.measured_frames) })
+  if (isMetaverse && meta.fusion_frame_sequence_count != null) {
+    rows.push({ label: '融合帧序列', value: `${meta.fusion_frame_sequence_count} 帧 / ${meta.fusion_frame_sequence_fps || meta.fps || 30} FPS` })
+  }
   if (meta.annotated_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.annotated_frame_index) })
   if (meta.annotated_frame_latency_ms != null) {
     rows.push({ label: '预览帧时延', value: `${Number(meta.annotated_frame_latency_ms).toFixed(2)} ms` })
   }
   if (meta.frame_latency_avg_ms != null) rows.push({ label: '平均帧时延', value: `${Number(meta.frame_latency_avg_ms).toFixed(2)} ms` })
   if (meta.frame_latency_p90_ms != null) rows.push({ label: 'P90 帧时延', value: `${Number(meta.frame_latency_p90_ms).toFixed(2)} ms` })
-  if (meta.detection_count != null) rows.push({ label: '预览图检测数量', value: String(meta.detection_count) })
+  if (!isMetaverse && meta.detection_count != null) rows.push({ label: '预览图检测数量', value: String(meta.detection_count) })
   if (meta.top_label) {
     const confidence = meta.top_confidence != null ? ` (${Number(meta.top_confidence).toFixed(2)})` : ''
     const label = meta.top_label_zh || VIDEO_LABEL_ZH[meta.top_label] || meta.top_label
@@ -353,7 +397,7 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
       value: `${metricLabel(evaluation.metric_key)} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim(),
     })
   }
-  if (!rows.length) rows.push({ label: '状态', value: '尚未收到视频推理输出' })
+  if (!rows.length) rows.push({ label: '状态', value: isMetaverse ? '尚未收到视频融合输出' : '尚未收到视频推理输出' })
   return rows
 }
 
@@ -383,23 +427,25 @@ export function buildVideoVerdict(evaluation) {
 }
 
 export function videoPreviewDataUrl(resultMetadata) {
-  const value = resultMetadata?.annotated_frame_data_url
+  const value = resultMetadata?.annotated_frame_data_url || resultMetadata?.fusion_frame_data_url
   return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
 }
 
 export function videoPreviewFrames(resultMetadata) {
   const meta = resultMetadata || {}
-  const frames = Array.isArray(meta.preview_frames) ? meta.preview_frames : []
+  const frames = Array.isArray(meta.preview_frames)
+    ? meta.preview_frames
+    : (Array.isArray(meta.fusion_frames_data_urls) ? meta.fusion_frames_data_urls : [])
   const normalized = frames
     .filter(item => typeof item?.data_url === 'string' && item.data_url.startsWith('data:image/'))
     .slice(0, 8)
     .map((item, index) => {
       const latency = item.latency_ms != null ? Number(item.latency_ms) : null
-      const label = item.top_label_zh || item.label_zh || VIDEO_LABEL_ZH[item.top_label] || item.top_label || item.label || '检测帧'
+      const label = item.top_label_zh || item.label_zh || VIDEO_LABEL_ZH[item.top_label] || item.top_label || item.label || (meta.fusion_mode ? '融合帧' : '检测帧')
       const confidence = item.top_confidence ?? item.confidence
       const frameIndex = item.frame_index ?? meta.annotated_frame_index ?? index
       const parts = [`第 ${frameIndex} 帧`]
-      if (Number.isFinite(latency)) parts.push(`单帧推理 ${latency.toFixed(2)} ms`)
+      if (Number.isFinite(latency)) parts.push(`单帧${meta.fusion_mode ? '融合' : '推理'} ${latency.toFixed(2)} ms`)
       if (meta.frame_latency_p90_ms != null) parts.push(`本次 P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
       if (label) parts.push(`识别目标：${label}`)
       if (confidence != null && Number.isFinite(Number(confidence))) parts.push(`置信度 ${Number(confidence).toFixed(2)}`)
@@ -416,10 +462,10 @@ export function videoPreviewFrames(resultMetadata) {
   const fallback = videoPreviewDataUrl(meta)
   if (!fallback) return []
   const latency = previewFrameLatency(meta)
-  const label = meta.top_label_zh || VIDEO_LABEL_ZH[meta.top_label] || meta.top_label || '检测帧'
+  const label = meta.top_label_zh || VIDEO_LABEL_ZH[meta.top_label] || meta.top_label || (meta.fusion_mode ? '融合帧' : '检测帧')
   const frameIndex = meta.annotated_frame_index ?? '-'
   const parts = [`第 ${frameIndex} 帧`]
-  if (latency != null && Number.isFinite(latency)) parts.push(`单帧推理 ${latency.toFixed(2)} ms`)
+  if (latency != null && Number.isFinite(latency)) parts.push(`单帧${meta.fusion_mode ? '融合' : '推理'} ${latency.toFixed(2)} ms`)
   if (meta.frame_latency_p90_ms != null) parts.push(`本次 P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
   if (label) parts.push(`识别目标：${label}`)
   return [{
@@ -450,7 +496,7 @@ export function videoPreviewEvidenceRows(resultMetadata) {
   const rows = []
   if (meta.annotated_frame_index != null) rows.push(`帧序号 ${meta.annotated_frame_index}`)
   const latency = previewFrameLatency(meta)
-  if (latency != null && Number.isFinite(latency)) rows.push(`单帧推理 ${latency.toFixed(2)} ms`)
+  if (latency != null && Number.isFinite(latency)) rows.push(`单帧${meta.fusion_mode ? '融合' : '推理'} ${latency.toFixed(2)} ms`)
   if (meta.frame_latency_p90_ms != null) rows.push(`P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
   if (meta.measured_frames != null) rows.push(`有效帧 ${meta.measured_frames}`)
   if (meta.gpu_assigned !== undefined) rows.push(`GPU ${meta.gpu_assigned ? '已分配' : '未分配'}`)

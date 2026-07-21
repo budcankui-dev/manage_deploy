@@ -44,6 +44,7 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
     "high_throughput_matmul": 9000,
     "low_latency_video_pipeline": 9100,
+    "metaverse_video_fusion": 9200,
 }
 
 

@@ -31,6 +31,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 当前意图解析评测覆盖以下业务/模态：
 - 矩阵乘法计算任务（task_type: "high_throughput_matmul"）
 - 低时延视频链路/视频AI推理任务（task_type: "low_latency_video_pipeline"）
+- 元宇宙沉浸式视频融合任务（task_type: "metaverse_video_fusion"）
 - 大模型文本生成/LLM 推理任务（task_type: "llm_text_generation"）
 - 文本模型训练任务（task_type: "ai_model_training"）
 - 分布式存算任务（task_type: "distributed_storage_compute"）
@@ -76,7 +77,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 ## 输出 JSON 格式（严格遵守，不得添加额外字段）
 
 {
-  "task_type": "high_throughput_matmul|low_latency_video_pipeline|llm_text_generation|ai_model_training|distributed_storage_compute|massive_connection_collect|deterministic_forwarding|energy_efficient_edge_inference|secure_transmission" 或 null,
+  "task_type": "high_throughput_matmul|low_latency_video_pipeline|metaverse_video_fusion|llm_text_generation|ai_model_training|distributed_storage_compute|massive_connection_collect|deterministic_forwarding|energy_efficient_edge_inference|secure_transmission" 或 null,
   "source_name": "string 或 null",
   "destination_name": "string 或 null",
   "start_time": "ISO格式时间字符串 或 'now' 或 null",
@@ -140,6 +141,7 @@ SYSTEM_PROMPT = """你是智联计算系统的意图解析引擎。你的唯一�
 MODALITY_MAP = {
     "high_throughput_matmul": modality_for_task_type("high_throughput_matmul"),
     "low_latency_video_pipeline": modality_for_task_type("low_latency_video_pipeline"),
+    "metaverse_video_fusion": modality_for_task_type("metaverse_video_fusion"),
     "llm_text_generation": modality_for_task_type("llm_text_generation"),
     "ai_model_training": modality_for_task_type("ai_model_training"),
     "distributed_storage_compute": modality_for_task_type("distributed_storage_compute"),
@@ -350,6 +352,7 @@ def _validate_and_clean(raw: dict, valid_nodes: list[str]) -> dict:
         None,
         "high_throughput_matmul",
         "low_latency_video_pipeline",
+        "metaverse_video_fusion",
         "llm_text_generation",
         "ai_model_training",
         "distributed_storage_compute",
@@ -535,6 +538,9 @@ def _raw_to_parse_result(
         "security_level",
     )
     data_profile = {key: raw.get(key) for key in data_profile_keys if raw.get(key) is not None}
+    if task_type == "metaverse_video_fusion":
+        data_profile = {**_default_data_profile(task_type), **data_profile}
+        data_profile["resolution"] = "720p"
 
     routing_strategy = raw.get("routing_strategy")
     if utterance:
@@ -553,7 +559,7 @@ def _raw_to_parse_result(
             "operator": ">=",
             "unit": "GFLOPS",
         }
-    elif task_type == "low_latency_video_pipeline":
+    elif task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"}:
         business_objective = {
             "metric_key": "frame_latency_p90_ms",
             "operator": "<=",
@@ -645,6 +651,19 @@ def _default_data_profile(task_type: str) -> dict[str, Any]:
             "source": "synthetic",
             "resolution": "1920x1080",
             "fps": 30,
+        },
+        "metaverse_video_fusion": {
+            "profile_id": "metaverse_offline_fusion_720p",
+            "source": "bundled_dual_video",
+            "resolution": "720p",
+            "fps": 30,
+            "frame_count": 180,
+            "frame_stride": 1,
+            "warmup_frames": 10,
+            "measured_frames": 170,
+            "video0_asset": "cam0.mp4",
+            "video1_asset": "cam1.mp4",
+            "fusion_mode": "modnet_offline",
         },
         "llm_text_generation": {
             "profile_id": "llm_default",

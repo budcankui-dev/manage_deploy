@@ -609,11 +609,13 @@ const endpointForm = ref({
 const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
   high_throughput_matmul: 9000,
   low_latency_video_pipeline: 9100,
+  metaverse_video_fusion: 9200,
 }
 
 const ENDPOINT_IMAGE_BY_TASK_TYPE = {
   high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
   low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
+  metaverse_video_fusion: '10.112.244.94:5000/metaverse-video-fusion-endpoint:dev',
 }
 
 let routingTimer = null
@@ -634,6 +636,7 @@ function toggleOrders() { showOrders.value = !showOrders.value }
 const exampleChips = [
   '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
   '视频AI推理任务，从 h3 到 h4，720p视频，100帧，30fps，现在开始跑2小时，低时延策略',
+  '元宇宙双路视频融合，从 h3 到 h4，720p，180帧，30fps，现在开始跑2小时，低时延策略',
   '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
   '从 h6 到 h7 做工业检测视频推理，720p，抽取100帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
@@ -648,6 +651,11 @@ const supportedTaskHints = [
     type: 'low_latency_video_pipeline',
     label: taskTypeLabel('low_latency_video_pipeline'),
     hint: '适合表达为“视频AI推理、工业检测、低时延转发”，需给出源节点、目的节点、固定视频规格、抽检帧数和帧率。',
+  },
+  {
+    type: 'metaverse_video_fusion',
+    label: taskTypeLabel('metaverse_video_fusion'),
+    hint: '适合表达为“元宇宙、沉浸式交互、双路视频融合”，使用内置双路视频和 GPU MODNet 融合。',
   },
 ]
 
@@ -736,7 +744,7 @@ const sourceCommand = computed(() => {
     '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
     '  -e SOURCE_LISTEN=false \\',
   ]
-  if (draft.value?.task_type === 'low_latency_video_pipeline') {
+  if (['low_latency_video_pipeline', 'metaverse_video_fusion'].includes(draft.value?.task_type)) {
     lines.push('  -e WAIT_FOR_COMPUTE_READY=false \\')
   }
   lines.push(
@@ -912,7 +920,7 @@ function getDraftValidationErrors(currentDraft) {
   if (currentDraft.task_type === 'high_throughput_matmul') {
     pushRangeError(errors, dp.matrix_size, '矩阵规模不能为空（例如：1024阶矩阵）', '矩阵规模需要是 128-32768 之间的整数', 128, 32768)
     pushRangeError(errors, dp.batch_count, '批次数不能为空（例如：50批）', '批次数需要是 1-10000 之间的整数', 1, 10000)
-  } else if (currentDraft.task_type === 'low_latency_video_pipeline') {
+  } else if (['low_latency_video_pipeline', 'metaverse_video_fusion'].includes(currentDraft.task_type)) {
     pushRangeError(errors, dp.frame_count, '视频帧数不能为空（例如：100帧）', '视频帧数需要是 1-100000 之间的整数', 1, 100000)
     if (isBlankValue(dp.resolution)) {
       add('视频分辨率不能为空（例如：720p 或 1080p）')
