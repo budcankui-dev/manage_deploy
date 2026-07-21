@@ -15,7 +15,7 @@ sys.path.insert(0, str(BACKEND_DIR / "scripts"))
 
 from httpx import AsyncClient
 
-from rebuild_matmul_template import get_compute_node_ids
+from rebuild_matmul_template import auto_port, get_compute_node_ids
 from services.deployment_profile import image_repo
 
 WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
@@ -33,11 +33,6 @@ METAVERSE_ENDPOINT_IMAGE = f"{ENDPOINT_IMAGE_REPO}:{WORKER_TAG}"
 SOURCE_PORT = 18821
 COMPUTE_PORT = 18822
 SINK_PORT = 18823
-
-
-def fixed_port(name: str, label: str, port: int) -> dict:
-    """Use distinct fixed ports for the shared-Docker local simulation."""
-    return {"name": name, "label": label, "default": port, "auto": False}
 
 
 async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict:
@@ -58,7 +53,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "name": "source",
                     "image": METAVERSE_ENDPOINT_IMAGE,
                     "command": "python3 /app/src/source_main.py",
-                    "port_defs": [fixed_port("source", "metaverse source HTTP", SOURCE_PORT)],
+                    "port_defs": [auto_port("source", "metaverse source HTTP", SOURCE_PORT)],
                     "node_id": node_ids["compute-1"],
                     "restart_policy": "no",
                 },
@@ -67,7 +62,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "name": "compute",
                     "image": METAVERSE_COMPUTE_IMAGE,
                     "command": "python3 /app/src/compute_main.py",
-                    "port_defs": [fixed_port("compute", "metaverse compute HTTP", COMPUTE_PORT)],
+                    "port_defs": [auto_port("compute", "metaverse compute HTTP", COMPUTE_PORT)],
                     "node_id": node_ids["compute-2"],
                     "restart_policy": "no",
                 },
@@ -76,7 +71,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "name": "sink",
                     "image": METAVERSE_ENDPOINT_IMAGE,
                     "command": "python3 /app/src/sink_main.py",
-                    "port_defs": [fixed_port("sink", "metaverse sink HTTP", SINK_PORT)],
+                    "port_defs": [auto_port("sink", "metaverse sink HTTP", SINK_PORT)],
                     "node_id": node_ids["compute-3"],
                     "restart_policy": "no",
                 },
