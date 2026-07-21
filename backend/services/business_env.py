@@ -12,6 +12,7 @@ from services.modality_catalog import modality_for_task_type, normalize_modality
 GPU_TASK_TYPES = {
     "high_throughput_matmul",
     "low_latency_video_pipeline",
+    "metaverse_video_fusion",
     "llm_text_generation",
 }
 

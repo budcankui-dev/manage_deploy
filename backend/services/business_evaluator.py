@@ -123,4 +123,4 @@ def _error_ratio(estimated_value: float | None, actual_value: float) -> float | 
 
 
 def _uses_video_latency_multiplier(task_type: str | None, metric_key: str) -> bool:
-    return task_type == "low_latency_video_pipeline" and metric_key == "frame_latency_p90_ms"
+    return task_type in {"low_latency_video_pipeline", "metaverse_video_fusion"} and metric_key == "frame_latency_p90_ms"

@@ -80,6 +80,31 @@ BENCHMARK_PROFILES = {
         "profile_id": "video_industrial_inspection_720p",
         "warmup_runs": 3,
     },
+    "metaverse_video_fusion": {
+        "metric_key": "frame_latency_p90_ms",
+        "operator": "<=",
+        "unit": "ms",
+        "image": image_ref("metaverse-video-fusion"),
+        "command": "python3 /app/src/compute_main.py",
+        "env": {
+            "BENCHMARK_MODE": "true",
+            "FRAME_COUNT": "180",
+            "RESOLUTION": "720p",
+            "FPS": "30",
+            "FRAME_STRIDE": "1",
+            "WARMUP_FRAMES": "10",
+            "MEASURED_FRAMES": "170",
+            "SEED": "42",
+            "USE_GPU": "true",
+            "STRICT_GPU": "true",
+            "METAVERSE_VIDEO0_ASSET": "cam0.mp4",
+            "METAVERSE_VIDEO1_ASSET": "cam1.mp4",
+            "METAVERSE_FUSION_MODE": "modnet_offline",
+            "MODNET_CKPT": "MODNet/pretrained/modnet_webcam_portrait_matting.ckpt",
+        },
+        "gpu_id": "0",
+        "profile_id": "metaverse_offline_fusion_720p",
+    },
 }
 
 STABILITY_THRESHOLD = 0.10  # 标准差 < 中位数 × 10%
@@ -90,6 +115,9 @@ DIAGNOSTIC_KEYS = (
     "detector_backend",
     "device",
     "model_name",
+    "fusion_mode",
+    "video0_asset",
+    "video1_asset",
     "gpu_device",
     "gpu_requested",
     "gpu_available",
@@ -139,7 +167,7 @@ async def run_baseline_on_node(
                 image,
                 env,
                 container_name,
-                profile["metric_key"],
+                profile["metric_key"], task_type,
                 command,
                 gpu_id,
             )
@@ -152,7 +180,7 @@ async def run_baseline_on_node(
                 image,
                 env,
                 container_name,
-                profile["metric_key"],
+                profile["metric_key"], task_type,
                 command,
                 gpu_id,
             )
@@ -202,6 +230,7 @@ async def _run_single_benchmark(
     env: dict[str, str],
     container_name: str,
     metric_key: str,
+    task_type: str | None = None,
     command: str | None = None,
     gpu_id: str | None = None,
 ) -> dict[str, Any]:
@@ -254,16 +283,18 @@ async def _run_single_benchmark(
     result = _parse_benchmark_payload(logs_text)
     if result is None:
         raise RuntimeError("无法从容器日志解析基准测试结果")
-    _validate_benchmark_result(result, metric_key)
+    _validate_benchmark_result(result, metric_key, task_type)
     return result
 
 
-def _parse_benchmark_result(logs: str, metric_key: str = "effective_gflops") -> float:
+def _parse_benchmark_result(
+    logs: str, metric_key: str = "effective_gflops", task_type: str | None = None
+) -> float:
     """从容器日志中解析 benchmark_result JSON。"""
     result = _parse_benchmark_payload(logs)
     if result is None:
         raise RuntimeError(f"无法从容器日志解析基准测试结果")
-    _validate_benchmark_result(result, metric_key)
+    _validate_benchmark_result(result, metric_key, task_type)
     return float(result[metric_key])
 
 
@@ -315,6 +346,10 @@ def _build_diagnostics(
         "VIDEO_MODEL_NAME",
         "VIDEO_MODEL_PATH",
         "VIDEO_ASSET",
+        "METAVERSE_VIDEO0_ASSET",
+        "METAVERSE_VIDEO1_ASSET",
+        "METAVERSE_FUSION_MODE",
+        "MODNET_CKPT",
         "USE_GPU",
     )
     return {
@@ -355,7 +390,9 @@ def _parse_benchmark_payload(logs: str) -> dict[str, Any] | None:
     return None
 
 
-def _validate_benchmark_result(result: dict[str, Any], metric_key: str) -> None:
+def _validate_benchmark_result(
+    result: dict[str, Any], metric_key: str, task_type: str | None = None
+) -> None:
     if metric_key not in result:
         raise RuntimeError(f"基准测试结果缺少指标字段: {metric_key}")
 
@@ -376,6 +413,17 @@ def _validate_benchmark_result(result: dict[str, Any], metric_key: str) -> None:
     backend = str(result.get("actual_backend") or result.get("backend") or result.get("detector_backend") or "")
     device = str(result.get("device") or "")
     model_name = str(result.get("model_name") or "")
+    if task_type == "metaverse_video_fusion":
+        if backend != "torch_cuda" or not device.startswith("cuda"):
+            raise RuntimeError(
+                "元宇宙视频融合基线未使用 GPU MODNet 路径，不能作为正式验收基线；"
+                f"actual_backend={backend or '-'}, device={device or '-'}, "
+                f"gpu_requested={result.get('gpu_requested')}, gpu_available={result.get('gpu_available')}, "
+                f"gpu_error={result.get('gpu_error')}"
+            )
+        if "modnet" not in model_name.lower():
+            raise RuntimeError(f"元宇宙视频融合基线模型不是 MODNet: model_name={model_name or '-'}")
+        return
     if backend not in {"onnxruntime_cuda", "opencv_dnn_cuda"} or not device.startswith("cuda"):
         raise RuntimeError(
             "视频基线未使用 GPU YOLO 推理路径，不能作为正式验收基线；"
@@ -400,7 +448,11 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
     if task_type not in BENCHMARK_PROFILES:
         raise ValueError(f"不支持的任务类型: {task_type}")
 
-    worker_dir = "low-latency-video" if task_type == "low_latency_video_pipeline" else "high-throughput-matmul"
+    worker_dir_by_type = {
+        "low_latency_video_pipeline": "low-latency-video",
+        "metaverse_video_fusion": "metaverse-video-fusion",
+    }
+    worker_dir = worker_dir_by_type.get(task_type, "high-throughput-matmul")
     _WORKER_SRC = os.path.join(
         os.path.dirname(__file__), f"../../workers/{worker_dir}/src"
     )
@@ -434,7 +486,50 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
         }
         for _ in range(runs):
             result = run_video_profile(job)
-            _validate_benchmark_result(result, profile["metric_key"])
+            _validate_benchmark_result(result, profile["metric_key"], task_type)
+            values.append(float(result[profile["metric_key"]]))
+
+        median_val = statistics.median(values)
+        std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
+        stable = std_dev < median_val * STABILITY_THRESHOLD if median_val > 0 else True
+        return {
+            "metric_key": profile["metric_key"],
+            "operator": profile["operator"],
+            "unit": profile["unit"],
+            "baseline_value": median_val,
+            "raw_values": values,
+            "run_count": runs,
+            "std_dev": round(std_dev, 4),
+            "stable": stable,
+            "profile_id": profile["profile_id"],
+        }
+
+    if task_type == "metaverse_video_fusion":
+        fusion_src = os.path.join(
+            os.path.dirname(__file__), "../../workers/metaverse-video-fusion/src"
+        )
+        if fusion_src not in sys.path:
+            sys.path.insert(0, os.path.abspath(fusion_src))
+        from fusion_core import run_fusion_profile
+
+        values: list[float] = []
+        job = {
+            "frame_count": env["FRAME_COUNT"],
+            "resolution": env["RESOLUTION"],
+            "fps": env["FPS"],
+            "frame_stride": env["FRAME_STRIDE"],
+            "warmup_frames": env["WARMUP_FRAMES"],
+            "measured_frames": env["MEASURED_FRAMES"],
+            "seed": env["SEED"],
+            "video0_asset": env["METAVERSE_VIDEO0_ASSET"],
+            "video1_asset": env["METAVERSE_VIDEO1_ASSET"],
+            "fusion_mode": env["METAVERSE_FUSION_MODE"],
+            "modnet_checkpoint": env["MODNET_CKPT"],
+            "strict_gpu": env["STRICT_GPU"],
+        }
+        for _ in range(runs):
+            result = run_fusion_profile(job)
+            _validate_benchmark_result(result, profile["metric_key"], task_type)
             values.append(float(result[profile["metric_key"]]))
 
         median_val = statistics.median(values)
@@ -464,7 +559,7 @@ def run_benchmark_local(task_type: str, runs: int = 3) -> dict[str, Any]:
         if warmup > 0:
             run_matmul(matrix_size, warmup, seed)
         result = run_matmul(matrix_size, batch_count, seed)
-        _validate_benchmark_result(result, profile["metric_key"])
+        _validate_benchmark_result(result, profile["metric_key"], task_type)
         values.append(result["effective_gflops"])
 
     median_val = statistics.median(values)

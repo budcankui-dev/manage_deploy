@@ -23,7 +23,8 @@
 #                    Set to e.g. 10.112.73.149:5000/scientific-matmul when pushing
 #                    to the test-lab private registry.
 #   WORKER_KIND      Worker type. Default: matmul.
-#                    Supported: matmul, video, matmul-endpoint, video-endpoint.
+#                    Supported: matmul, video, metaverse-fusion, matmul-endpoint,
+#                    video-endpoint, metaverse-fusion-endpoint.
 #                    Endpoint images are lightweight source/sink/receiver images
 #                    used by automated benchmark endpoints and manual user demos.
 #   WORKER_TAG       Image tag. Default: dev.
@@ -79,8 +80,16 @@ case "${KIND}" in
     DOCKERFILE="${CTX}/low-latency-video/Dockerfile.endpoint"
     DEFAULT_IMAGE="manage-deploy/low-latency-video-endpoint"
     ;;
+  metaverse-fusion)
+    DOCKERFILE="${CTX}/metaverse-video-fusion/Dockerfile"
+    DEFAULT_IMAGE="manage-deploy/metaverse-video-fusion"
+    ;;
+  metaverse-fusion-endpoint)
+    DOCKERFILE="${CTX}/metaverse-video-fusion/Dockerfile.endpoint"
+    DEFAULT_IMAGE="manage-deploy/metaverse-video-fusion-endpoint"
+    ;;
   *)
-    echo "ERROR: unsupported WORKER_KIND=${KIND}; expected matmul, video, matmul-endpoint, or video-endpoint." >&2
+    echo "ERROR: unsupported WORKER_KIND=${KIND}; expected matmul, video, metaverse-fusion, matmul-endpoint, video-endpoint, or metaverse-fusion-endpoint." >&2
     exit 1
     ;;
 esac

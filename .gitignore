@@ -28,3 +28,9 @@ htmlcov/
 .claude/worktrees/
 output/
 reports/
+backend/venv311/
+node_agent/venv311/
+.runtime/
+**/venv*/
+**/__pycache__/
+docs/metaverse-single-host-simulation-readme.md

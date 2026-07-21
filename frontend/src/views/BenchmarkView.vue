@@ -16,6 +16,7 @@
         <el-select v-model="taskType" class="task-select">
           <el-option label="矩阵乘法计算任务" value="high_throughput_matmul" />
           <el-option label="视频AI推理任务" value="low_latency_video_pipeline" />
+          <el-option label="元宇宙沉浸式交互" value="metaverse_video_fusion" />
         </el-select>
         <el-button
           type="primary"
@@ -148,6 +149,14 @@
             <el-input-number v-model="benchmarkForm.observation_duration_sec" :min="0" :max="120" controls-position="right" />
             <span>最少样本数</span>
             <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
+          </template>
+          <template v-else-if="taskType === 'metaverse_video_fusion'">
+            <span>传输帧</span>
+            <strong>180</strong>
+            <span>传输方式</span>
+            <strong>逐帧</strong>
+            <span>有效帧</span>
+            <strong>170</strong>
           </template>
           <template v-else-if="taskType === 'low_latency_video_pipeline'">
             <span>候选视频帧范围</span>
@@ -482,6 +491,7 @@ import { adminApi, baselinesApi, businessApi, ordersApi, nodesApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import {
   MATMUL_PIPELINE_STEPS,
+  METAVERSE_PIPELINE_STEPS,
   VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
@@ -501,6 +511,7 @@ import {
   videoPreviewNeedsOverlay,
   videoPreviewDataUrl,
   modalityLabel,
+  isVideoLikeTask,
 } from '@/constants/businessTaskDisplay'
 import {
   isOfficialComputeNodeName,
@@ -533,6 +544,12 @@ const taskConfigs = {
     unit: 'ms',
     requiresGpu: true,
     objectiveText: '业务目标：视频 P90 时延要求 actual_p90 ≤ 节点 GPU+YOLO 同 profile 历史基线 × 1.5。',
+  },
+  metaverse_video_fusion: {
+    label: '元宇宙沉浸式交互',
+    unit: 'ms',
+    requiresGpu: true,
+    objectiveText: '业务目标：视频融合 P90 时延要求 actual_p90 <= 节点 GPU+MODNet 同 profile 历史基线 × 1.5。',
   },
 }
 const taskType = ref('high_throughput_matmul')
@@ -638,6 +655,9 @@ const currentTaskConfig = computed(() =>
 const taskTypeValues = Object.keys(taskConfigs)
 
 const baselineHintText = computed(() => {
+  if (taskType.value === 'metaverse_video_fusion') {
+    return '元宇宙融合业务每轮读取 180 帧，前 10 帧预热，后 170 帧计入 P90；请确认 GPU、MODNet 权重和 worker 镜像可用。'
+  }
   if (taskType.value === 'low_latency_video_pipeline') {
     return '基线状态由多次测试样本计算得出：样本差异小显示稳定，差异明显显示波动大。若重测值与历史基线差距明显，优先核对 GPU 推理后端、镜像版本和同 GPU 并发占用情况。'
   }
@@ -648,7 +668,7 @@ const baselineHintText = computed(() => {
 })
 
 const baselineRunCount = computed(() => (
-  taskType.value === 'low_latency_video_pipeline' ? 5 : 3
+  taskType.value === 'metaverse_video_fusion' ? 2 : (isVideoLikeTask(taskType.value) ? 5 : 3)
 ))
 
 const baselineRunActive = computed(() => Boolean(baselineRunLock.value))
@@ -936,6 +956,7 @@ const detailObjectiveMeaning = computed(() =>
 )
 const detailPipelineSteps = computed(() => {
   if (detailTaskType.value === 'high_throughput_matmul') return MATMUL_PIPELINE_STEPS
+  if (detailTaskType.value === 'metaverse_video_fusion') return METAVERSE_PIPELINE_STEPS
   if (detailTaskType.value === 'low_latency_video_pipeline') return VIDEO_PIPELINE_STEPS
   return [
     { role: 'source', title: '提交输入', detail: '准备业务输入并发送给计算节点' },
@@ -946,14 +967,14 @@ const detailPipelineSteps = computed(() => {
 const detailInputRows = computed(() => {
   const profile = selectedOrderDetail.value?.business_task?.data_profile
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulInputRows(profile)
-  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoInputRows(profile)
+  if (isVideoLikeTask(detailTaskType.value)) return buildVideoInputRows(profile)
   return describeDataProfile(detailTaskType.value, profile)
 })
 const detailOutputRows = computed(() => {
   const evaluation = selectedOrderDetail.value?.evaluation
   const meta = detailResultMetadata.value || {}
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulOutputRows(meta, evaluation)
-  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoOutputRows(meta, evaluation)
+  if (isVideoLikeTask(detailTaskType.value)) return buildVideoOutputRows(meta, evaluation)
   if (evaluation) {
     return [{ label: '上报指标', value: `${metricLabel(evaluation.metric_key)} = ${Number(evaluation.actual_value).toFixed(2)} ${evaluation.unit || ''}`.trim() }]
   }
@@ -971,7 +992,7 @@ const detailParamConsistency = computed(() => {
 const detailVerdict = computed(() => {
   const evaluation = selectedOrderDetail.value?.evaluation
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulVerdict(evaluation)
-  if (detailTaskType.value === 'low_latency_video_pipeline') return buildVideoVerdict(evaluation)
+  if (isVideoLikeTask(detailTaskType.value)) return buildVideoVerdict(evaluation)
   if (!evaluation) {
     return {
       title: '等待业务结果',
@@ -1638,6 +1659,24 @@ async function createBatch(options = {}) {
 }
 
 function buildBenchmarkDataProfile() {
+  if (taskType.value === 'metaverse_video_fusion') {
+    return {
+      profile_id: 'metaverse_offline_fusion_720p',
+      frame_count: 180,
+      resolution: '720p',
+      fps: 30,
+      frame_stride: 1,
+      warmup_frames: 10,
+      measured_frames: 170,
+      seed: 42,
+      video0_asset: 'cam0.mp4',
+      video1_asset: 'cam1.mp4',
+      fusion_mode: 'modnet_offline',
+      modnet_checkpoint: 'MODNet/pretrained/modnet_webcam_portrait_matting.ckpt',
+      strict_gpu: true,
+      use_gpu: true,
+    }
+  }
   if (taskType.value === 'low_latency_video_pipeline') {
     return {
       profile_id: 'video_industrial_inspection_720p',

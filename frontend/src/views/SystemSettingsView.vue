@@ -314,7 +314,7 @@ const DEFAULT_MODALITY_PRIORITY_MAP = {
 
 const MODALITY_PRIORITY_HINTS = {
   高通量计算模态: '矩阵计算等吞吐型计算任务。',
-  低时延转发模态: '视频 AI 推理、工业检测等低时延业务。',
+  低时延转发模态: '视频 AI 推理、元宇宙视频融合、工业检测等低时延业务。',
   智算中心模态: '文本生成、模型训练等 AI 计算业务。',
   分布式存算模态: '分布式存储与计算协同业务。',
   大规模连接模态: '大量终端接入与采集类业务。',
@@ -326,6 +326,7 @@ const MODALITY_PRIORITY_HINTS = {
 const TASK_MODALITY_DEFAULTS = {
   high_throughput_matmul: '高通量计算模态',
   low_latency_video_pipeline: '低时延转发模态',
+  metaverse_video_fusion: '低时延转发模态',
   llm_text_generation: '智算中心模态',
   ai_model_training: '智算中心模态',
   distributed_storage_compute: '分布式存算模态',
@@ -342,6 +343,11 @@ const DEFAULT_TASK_RESOURCE_OVERRIDES = {
     sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
   },
   low_latency_video_pipeline: {
+    source: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+    compute: { cpu_units: 4, mem_mb: 2048, disk_mb: 1024, gpu_units: 1 },
+    sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
+  },
+  metaverse_video_fusion: {
     source: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
     compute: { cpu_units: 4, mem_mb: 2048, disk_mb: 1024, gpu_units: 1 },
     sink: { cpu_units: 2, mem_mb: 512, disk_mb: 512, gpu_units: 0 },
