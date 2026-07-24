@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     manager_public_url: Optional[str] = None
     platform_scratch_root: str = "/tmp/manage_deploy"
 
+    # Internal acceptance-demo credentials for the h1-h13 user endpoints.
+    # Kept in the deployment .env only; never add a real password to source.
+    demo_terminal_ssh_user: str = ""
+    demo_terminal_ssh_password: str = ""
+    demo_terminal_ssh_port: int = 22
+
     # SCHEDULED 模式默认运行时长（创建时未填 scheduled_end_time 则填 start+N 小时）
     default_scheduled_duration_hours: int = 2
 

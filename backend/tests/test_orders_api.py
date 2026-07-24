@@ -256,6 +256,66 @@ async def test_order_detail_uses_latest_metric_as_user_mode_runtime_evidence(cli
 
 
 @pytest.mark.asyncio
+async def test_user_access_order_detail_includes_dynamic_manual_startup_guide(client, db_session, monkeypatch):
+    monkeypatch.setattr("config.settings.demo_terminal_ssh_user", "switchpc1")
+    monkeypatch.setattr("config.settings.demo_terminal_ssh_password", "demo-password")
+    monkeypatch.setattr("config.settings.demo_terminal_ssh_port", 22)
+    headers, owner = await _auth_headers(client, db_session, username="user-access-guide-owner")
+    template = TaskTemplate(id="tpl-user-access-guide", name="用户接入指引模板")
+    source = Node(
+        id="node-guide-h1", hostname="h1", topology_node_id="h1", node_kind="terminal",
+        agent_address="http://172.16.0.151:8001", management_ip="172.16.0.151",
+        business_ip="10.1.1.1", business_ipv6="3012:9::11",
+    )
+    sink = Node(
+        id="node-guide-h2", hostname="h2", topology_node_id="h2", node_kind="terminal",
+        agent_address="http://172.16.0.152:8001", management_ip="172.16.0.152",
+        business_ip="10.1.1.2", business_ipv6="3012:9::12",
+    )
+    order = TaskOrder(
+        id="order-user-access-guide", template_id=template.id, user_id=owner.id,
+        name="用户端启动指引", status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value, materialized_instance_id="instance-user-access-guide",
+        runtime_config={
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "data_profile": {"matrix_size": 256, "batch_count": 10, "seed": 42},
+            },
+            "platform_deployment": {
+                "mode": "user_access_demo", "deployable_roles": ["compute"],
+                "external_endpoints": {
+                    "source": {"topology_node_id": "h1", "business_ipv6": "3012:9::11"},
+                    "sink": {"topology_node_id": "h2", "business_ipv6": "3012:9::12", "business_port": 9000},
+                },
+            },
+            "routing_result": {
+                "network_bindings": [{
+                    "from": "source", "to": "compute",
+                    "dst_access_url": "http://[3012:a::3]:18000",
+                }],
+            },
+        },
+    )
+    instance = TaskInstance(
+        id="instance-user-access-guide", template_id=template.id,
+        name="用户端启动指引实例", status=TaskStatus.RUNNING, source_order_id=order.id,
+    )
+    db_session.add_all([template, source, sink, order, instance])
+    await db_session.commit()
+
+    response = await client.get(f"/api/orders/{order.id}", headers=headers)
+
+    assert response.status_code == 200
+    guide = response.json()["user_access_guide"]
+    assert guide["receiver_url"] == "http://[3012:9::12]:9000"
+    assert guide["sink"]["ssh_command"] == "ssh -p 22 switchpc1@172.16.0.152"
+    assert guide["sink"]["ssh_password"] == "demo-password"
+    assert "receiver_main.py --port 9000" in guide["receiver_command"]
+    assert "PEER_COMPUTE_URL='http://[3012:a::3]:18000'" in guide["source_command"]
+    assert '"matrix_size":256' in guide["source_command"]
+
+
+@pytest.mark.asyncio
 async def test_materialize_order_requires_login(client, db_session):
     await _create_order(db_session, "materialize-requires-login", owner=None)
 

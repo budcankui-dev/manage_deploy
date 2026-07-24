@@ -305,6 +305,89 @@
         </el-tab-pane>
 
         <el-tab-pane label="部署" name="deployment">
+          <section v-if="userAccessGuide" class="user-access-guide">
+            <div class="user-access-guide-head">
+              <div>
+                <p class="eyebrow">用户端外部接入</p>
+                <h3>按顺序启动用户侧容器</h3>
+                <p>平台仅负责计算节点；请先启动目的端 receiver，待计算服务就绪后再启动源端 source。</p>
+              </div>
+              <el-tag type="warning" effect="plain">{{ userAccessGuide.task_label }}</el-tag>
+            </div>
+
+            <div class="user-access-guide-steps">
+              <article class="user-access-step">
+                <span class="guide-step-number">1</span>
+                <div>
+                  <h4>目的端：启动 receiver 并保持运行</h4>
+                  <p>节点 {{ guideEndpointName(userAccessGuide.sink) }}，接收端口 {{ userAccessGuide.sink?.port }}。</p>
+                  <div class="guide-addresses">
+                    <span>管理面：<code>{{ userAccessGuide.sink?.management_ip || '-' }}</code></span>
+                    <span>数据面：<code>{{ userAccessGuide.sink?.business_address || '-' }}</code></span>
+                  </div>
+                  <p v-if="userAccessGuide.sink?.ssh_password" class="guide-password">登录密码：<code>{{ userAccessGuide.sink.ssh_password }}</code></p>
+                  <div v-for="command in receiverGuideCommands" :key="command.label" class="guide-command">
+                    <div class="guide-command-head">
+                      <span>{{ command.label }}</span>
+                      <el-button size="small" text type="primary" @click="copyGuideCommand(command.value)">复制</el-button>
+                    </div>
+                    <code>{{ command.value }}</code>
+                  </div>
+                </div>
+              </article>
+
+              <article class="user-access-step">
+                <span class="guide-step-number">2</span>
+                <div>
+                  <h4>平台：等待计算容器就绪</h4>
+                  <template v-if="userAccessGuide.compute_url">
+                    <p>计算服务接入地址已生成。实例状态：<strong>{{ instanceStatusLabel(userAccessGuide.compute_status) }}</strong>。</p>
+                    <div class="guide-command">
+                      <div class="guide-command-head">
+                        <span>计算服务地址</span>
+                        <el-button size="small" text type="primary" @click="copyGuideCommand(userAccessGuide.compute_url)">复制</el-button>
+                      </div>
+                      <code>{{ userAccessGuide.compute_url }}</code>
+                    </div>
+                    <el-tag :type="userAccessGuide.compute_ready ? 'success' : 'warning'" effect="plain">
+                      {{ userAccessGuide.compute_ready ? '计算容器已就绪，可启动源端' : '等待计算容器就绪' }}
+                    </el-tag>
+                  </template>
+                  <p v-else class="guide-waiting">等待外部路由返回计算节点 placement 与接入地址。</p>
+                </div>
+              </article>
+
+              <article class="user-access-step">
+                <span class="guide-step-number">3</span>
+                <div>
+                  <h4>源端：最后启动 source 提交业务输入</h4>
+                  <p>节点 {{ guideEndpointName(userAccessGuide.source) }}。该命令会使用本工单的实际参数和计算服务地址。</p>
+                  <div class="guide-addresses">
+                    <span>管理面：<code>{{ userAccessGuide.source?.management_ip || '-' }}</code></span>
+                    <span>数据面：<code>{{ userAccessGuide.source?.business_address || '-' }}</code></span>
+                  </div>
+                  <p v-if="userAccessGuide.source?.ssh_password" class="guide-password">登录密码：<code>{{ userAccessGuide.source.ssh_password }}</code></p>
+                  <div v-if="userAccessGuide.source?.ssh_command" class="guide-command">
+                    <div class="guide-command-head">
+                      <span>SSH 登录</span>
+                      <el-button size="small" text type="primary" @click="copyGuideCommand(userAccessGuide.source.ssh_command)">复制</el-button>
+                    </div>
+                    <code>{{ userAccessGuide.source.ssh_command }}</code>
+                  </div>
+                  <div v-if="userAccessGuide.source_command" class="guide-command">
+                    <div class="guide-command-head">
+                      <span>启动 source</span>
+                      <el-button size="small" text type="primary" @click="copyGuideCommand(userAccessGuide.source_command)">复制</el-button>
+                    </div>
+                    <code>{{ userAccessGuide.source_command }}</code>
+                  </div>
+                  <p v-else class="guide-waiting">{{ userAccessGuide.source_waiting_reason }}</p>
+                </div>
+              </article>
+            </div>
+
+            <el-alert type="success" :closable="false" show-icon title="查看业务结果" :description="userAccessGuide.result_hint" />
+          </section>
           <el-alert
             v-if="isInstanceCleaned"
             class="deployment-notice"
@@ -582,6 +665,8 @@ import {
   routingStatusLabel as formatRoutingStatusLabel,
 } from '@/constants/orderDisplay'
 import { routingPolicyLabel } from '@/constants/routingPolicy'
+import { ElMessage } from 'element-plus'
+import { copyTextToClipboard } from '@/utils/clipboard'
 const props = defineProps({
   detail: { type: Object, default: null },
   resultObjects: { type: Array, default: () => [] },
@@ -602,6 +687,16 @@ const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
 const routingDecision = computed(() => detail.value?.routing_decision || null)
 const nodeCapabilityProfile = computed(() => detail.value?.node_capability_profile || null)
+const userAccessGuide = computed(() => detail.value?.user_access_guide || null)
+const receiverGuideCommands = computed(() => {
+  const guide = userAccessGuide.value
+  if (!guide) return []
+  return [
+    { label: 'SSH 登录', value: guide.sink?.ssh_command },
+    { label: '启动 receiver', value: guide.receiver_command },
+    { label: '结果页面', value: guide.receiver_url },
+  ].filter(item => item.value)
+})
 const taskRoutingPolicy = computed(() => (
   detail.value?.routing_policy
   || businessTask.value?.runtime_plan?.routing_strategy
@@ -1153,6 +1248,19 @@ function prettyJson(value) {
   return JSON.stringify(value, null, 2)
 }
 
+async function copyGuideCommand(value) {
+  try {
+    await copyTextToClipboard(value)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+function guideEndpointName(endpoint) {
+  return endpoint?.hostname || endpoint?.topology_node_id || '-'
+}
+
 function formatMetric(value) {
   if (value == null) return '-'
   const numeric = Number(value)
@@ -1507,6 +1615,113 @@ function nodeStatusLabel(value) {
   display: flex;
   gap: 8px;
   margin: 12px 0;
+}
+
+.user-access-guide {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #bae6fd;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 32%),
+    linear-gradient(135deg, #f0f9ff 0%, #ffffff 74%);
+}
+
+.user-access-guide-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.user-access-guide-head h3,
+.user-access-step h4 {
+  margin: 0 0 6px;
+  color: #0f172a;
+}
+
+.user-access-guide-head p:last-child,
+.user-access-step p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.user-access-guide-steps {
+  display: grid;
+  gap: 12px;
+}
+
+.user-access-step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(14, 116, 144, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.guide-step-number {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #0369a1;
+  color: #fff;
+  font-weight: 800;
+}
+
+.guide-addresses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.guide-command {
+  margin-top: 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.guide-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 9px 3px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.guide-command code {
+  display: block;
+  overflow-x: auto;
+  padding: 8px 9px 10px;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.guide-password {
+  margin-top: 8px !important;
+  color: #7c2d12 !important;
+}
+
+.guide-waiting {
+  margin-top: 8px !important;
+  color: #a16207 !important;
 }
 
 .pipeline-steps {

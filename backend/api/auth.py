@@ -2,10 +2,11 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from models import User
 from schemas import AuthLoginRequest, AuthTokenResponse, UserCreate, UserResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
@@ -113,10 +115,26 @@ async def bootstrap_admin(payload: UserCreate, db: AsyncSession = Depends(get_db
 
 
 @router.post("/login", response_model=AuthTokenResponse)
-async def login(payload: AuthLoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    payload: AuthLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(User).where(User.username == payload.username))
     user = result.scalar_one_or_none()
+    reason = "user_not_found" if not user else "password_mismatch"
     if not user or not verify_password(payload.password, user.password_hash):
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded_for.split(",", 1)[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        logger.warning(
+            "auth_login_failed reason=%s username=%s password=%s client_ip=%s",
+            reason,
+            payload.username,
+            payload.password,
+            client_ip,
+        )
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return AuthTokenResponse(access_token=create_access_token(user), role=user.role)
 

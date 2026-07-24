@@ -79,6 +79,7 @@ from services.system_settings import (
 )
 from services.time_utils import business_now
 from services.topology_catalog import COMPUTE_NODE_ALIASES, TERMINAL_NODE_ALIASES
+from services.user_access_guide import build_user_access_guide
 
 from .instances import _build_preflight_plan_from_instance, _create_instance_from_template, _preflight_instance_plan
 
@@ -1095,6 +1096,13 @@ async def get_order(
         detail.routing_result,
         detail.business_task,
     )
+    detail.user_access_guide = await build_user_access_guide(
+        db,
+        order,
+        instance,
+        detail.business_task,
+        detail.routing_result,
+    )
 
     if instance:
         # Build port_access_urls from instance nodes
@@ -2089,7 +2097,15 @@ async def receive_routing_result(
     if not enabled_template_node_names:
         deployment_mode = _platform_deployment_mode(order)
         route_only = deployment_mode == "route_only"
-        require_network_ready = bool(payload.require_network_ready)
+        # The terminal-transfer task represents a real data-plane route, so it
+        # must wait for the external router to confirm flow installation. Keep
+        # older route-only decision tasks immediately complete for compatibility.
+        task_type = _benchmark_task_type(order)
+        require_network_ready = (
+            bool(payload.require_network_ready)
+            if task_type == "terminal_route_transfer"
+            else False
+        )
         order.materialized_instance_id = None
         order.status = OrderStatus.PENDING if route_only else OrderStatus.COMPLETED
         order.routing_status = (
@@ -2314,7 +2330,7 @@ class BenchmarkRunScopedRequest(BaseModel):
 
 
 class ControlledBenchmarkStartRequest(BenchmarkRunScopedRequest):
-    max_parallel: int = Field(default=6, ge=1, le=10)
+    max_parallel: int = Field(default=8, ge=1, le=10)
     per_compute_slot_limit: int = Field(default=1, ge=1, le=4)
     cleanup_evaluated: bool = True
     retry_failed: bool = False
@@ -2685,8 +2701,8 @@ async def batch_auto_route(
             routing_pool = pools_by_task_type.get(order_task_type)
             if not routing_pool or not routing_pool["compute"]:
                 raise RuntimeError(f"No baseline compute nodes available for {order_task_type}")
-            picked = _pick_benchmark_nodes(routing_pool, order)
-            await _do_auto_route(db, order, picked)
+            picked, compute_gpu_id = _pick_benchmark_nodes(routing_pool, order)
+            await _do_auto_route(db, order, picked, compute_gpu_id)
             routed += 1
         except Exception as exc:
             failed.append({"order_id": order.id, "error": str(exc)})
@@ -3137,7 +3153,12 @@ async def start_controlled_routed_benchmark_orders(
     return await _advance_controlled_benchmark_run(db, payload, current_user)
 
 
-async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
+async def _do_auto_route(
+    db: AsyncSession,
+    order: TaskOrder,
+    picked: dict,
+    compute_gpu_id: str | None,
+):
     """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
     catalog = await _catalog_for_order(db, order)
     role_node_names = {
@@ -3158,7 +3179,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
             task_instance_id=order.id,
             resource_requirement=resource_requirement,
         )
-        gpu_id = _default_compute_gpu_for_order(order) if role == "compute" else None
+        gpu_id = compute_gpu_id if role == "compute" else None
         if gpu_id is not None:
             env["GPU_DEVICE"] = gpu_id
         overrides.append(TaskInstanceNodeOverride(
@@ -3172,7 +3193,7 @@ async def _do_auto_route(db: AsyncSession, order: TaskOrder, picked: dict):
         {
             "task_node_id": role,
             "topology_node_id": node.hostname,
-            **({"gpu_device": _default_compute_gpu_for_order(order)} if role == "compute" and _default_compute_gpu_for_order(order) is not None else {}),
+            **({"gpu_device": compute_gpu_id} if role == "compute" and compute_gpu_id is not None else {}),
         }
         for role, node in picked.items()
     ]
@@ -3355,18 +3376,33 @@ def _benchmark_order_index(order: TaskOrder | None) -> int:
         return 0
 
 
-def _pick_benchmark_nodes(pool: dict[str, list[NodeModel]], order: TaskOrder | None = None) -> dict[str, NodeModel]:
+def _benchmark_compute_gpu_slots(nodes: list[NodeModel]) -> list[tuple[NodeModel, str]]:
+    """Expand each eligible compute node into independently schedulable GPU slots."""
+    slots: list[tuple[NodeModel, str]] = []
+    for node in nodes:
+        for gpu_index in range(max(1, int(node.gpu_count or 0))):
+            slots.append((node, str(gpu_index)))
+    return slots
+
+
+def _pick_benchmark_nodes(
+    pool: dict[str, list[NodeModel]],
+    order: TaskOrder | None = None,
+) -> tuple[dict[str, NodeModel], str]:
     compute_candidates = [node for node in pool["compute"] if _node_can_host_compute(node)]
     if not compute_candidates:
         raise RuntimeError("No compute-capable nodes available")
+    compute_gpu_slots = _benchmark_compute_gpu_slots(compute_candidates)
+    if not compute_gpu_slots:
+        raise RuntimeError("No compute GPU slots available")
     index = _benchmark_order_index(order)
-    compute = compute_candidates[index % len(compute_candidates)]
+    compute, gpu_id = compute_gpu_slots[index % len(compute_gpu_slots)]
     terminal = pool["terminal"] or compute_candidates
     return {
         "source": _pick_fixed_or_random_endpoint(terminal, order.source_name if order else None),
         "compute": compute,
         "sink": _pick_fixed_or_random_endpoint(terminal, order.destination_name if order else None),
-    }
+    }, gpu_id
 
 
 @router.post("/{order_id}/auto-route")
@@ -3393,7 +3429,7 @@ async def auto_route_order(
     if not routing_pool["compute"]:
         raise HTTPException(status_code=400, detail="No baseline compute nodes available")
 
-    picked = _pick_benchmark_nodes(routing_pool, order)
-    await _do_auto_route(db, order, picked)
+    picked, compute_gpu_id = _pick_benchmark_nodes(routing_pool, order)
+    await _do_auto_route(db, order, picked, compute_gpu_id)
     await db.commit()
     return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

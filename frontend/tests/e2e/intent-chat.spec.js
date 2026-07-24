@@ -322,7 +322,7 @@ test('admin user cannot stay on intent chat route', async ({ page, request }) =>
   await expect(page.getByRole('heading', { name: '新对话' })).toHaveCount(0)
 })
 
-test('user order detail keeps deployment commands out of the work order page', async ({ page }, testInfo) => {
+test('user matmul order detail shows authenticated endpoint startup guide', async ({ page }, testInfo) => {
   const orderId = 'order-user-access-matmul'
   const instanceId = 'instance-user-access-matmul'
   const detail = {
@@ -354,6 +354,18 @@ test('user order detail keeps deployment commands out of the work order page', a
           },
         },
       },
+    },
+    user_access_guide: {
+      task_label: '矩阵乘法计算任务',
+      receiver_url: 'http://[3012:9::12]:9000',
+      receiver_command: 'docker run -d --name user-order-receiver --network host scientific-matmul-endpoint python3 /app/src/receiver_main.py --port 9000',
+      compute_url: 'http://[3012:a::ec4:7aff:fe85:7815]:18000',
+      compute_status: 'running',
+      compute_ready: true,
+      source_command: 'docker run --rm --name user-order-source --network host PEER_COMPUTE_URL=http://[3012:a::ec4:7aff:fe85:7815]:18000 scientific-matmul-endpoint python3 /app/src/source_main.py',
+      result_hint: 'receiver 页面会展示实际有效计算吞吐量、参数和业务目标判定。',
+      source: { hostname: 'h1', management_ip: '172.16.0.151', business_address: '3012:9::11', ssh_command: 'ssh -p 22 switchpc1@172.16.0.151', ssh_password: 'demo-password' },
+      sink: { hostname: 'h2', port: 9000, management_ip: '172.16.0.152', business_address: '3012:9::12', ssh_command: 'ssh -p 22 switchpc1@172.16.0.152', ssh_password: 'demo-password' },
     },
     business_task: {
       task_type: 'high_throughput_matmul',
@@ -502,10 +514,12 @@ test('user order detail keeps deployment commands out of the work order page', a
   await page.getByText('矩阵乘法计算任务').first().click()
 
   await expect(page.getByText('矩阵乘法计算任务').first()).toBeVisible()
-  await expect(page.getByText('docker login 172.16.0.254:5000')).toHaveCount(0)
-  await expect(page.getByText('python3 /app/src/receiver_main.py --port 9000')).toHaveCount(0)
-  await expect(page.getByText('PEER_COMPUTE_URL=http://[3012:a::ec4:7aff:fe85:7815]:18000')).toHaveCount(0)
-  await expect(page.getByText("DATA_PROFILE='{\"matrix_size\":1024,\"batch_count\":50,\"seed\":42}'")).toHaveCount(0)
+  await page.getByRole('tab', { name: '部署' }).click()
+  await expect(page.getByText('按顺序启动用户侧容器')).toBeVisible()
+  await expect(page.getByText('目的端：启动 receiver 并保持运行')).toBeVisible()
+  await expect(page.getByText('ssh -p 22 switchpc1@172.16.0.152')).toBeVisible()
+  await expect(page.getByText(/python3 \/app\/src\/receiver_main.py --port 9000/)).toBeVisible()
+  await expect(page.getByText(/PEER_COMPUTE_URL=http:\/\/\[3012:a::ec4:7aff:fe85:7815\]:18000/)).toBeVisible()
 
   await page.getByText('矩阵乘法计算任务').first().scrollIntoViewIfNeeded()
   await page.screenshot({
@@ -526,7 +540,7 @@ test('user order detail keeps deployment commands out of the work order page', a
   })
 })
 
-test('user video order detail keeps deployment commands out of the work order page', async ({ page }, testInfo) => {
+test('user video order detail shows startup guide and receiver result evidence', async ({ page }, testInfo) => {
   const orderId = 'order-user-access-video'
   const instanceId = 'instance-user-access-video'
   const previewSvg = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#0f172a"/><rect x="210" y="92" width="180" height="170" fill="none" stroke="#22c55e" stroke-width="8"/><text x="220" y="84" fill="#fff" font-size="28">瓶子 0.91</text></svg>')
@@ -556,6 +570,18 @@ test('user video order detail keeps deployment commands out of the work order pa
           },
         },
       },
+    },
+    user_access_guide: {
+      task_label: '视频AI推理任务',
+      receiver_url: 'http://[3012:9::14]:9100',
+      receiver_command: 'docker run -d --name user-video-receiver --network host low-latency-video-endpoint python3 /app/src/receiver_main.py --port 9100',
+      compute_url: 'http://[3012:a::2]:18000',
+      compute_status: 'running',
+      compute_ready: true,
+      source_command: 'docker run --rm --name user-video-source --network host PEER_COMPUTE_URL=http://[3012:a::2]:18000 low-latency-video-endpoint python3 /app/src/source_main.py',
+      result_hint: '视频 receiver 页面会自动展示带框推理帧、检测类别、置信度与时延。',
+      source: { hostname: 'h3', management_ip: '172.16.0.153', business_address: '3012:9::13', ssh_command: 'ssh -p 22 switchpc1@172.16.0.153', ssh_password: 'demo-password' },
+      sink: { hostname: 'h4', port: 9100, management_ip: '172.16.0.154', business_address: '3012:9::14', ssh_command: 'ssh -p 22 switchpc1@172.16.0.154', ssh_password: 'demo-password' },
     },
     business_task: {
       task_type: 'low_latency_video_pipeline',
@@ -715,10 +741,11 @@ test('user video order detail keeps deployment commands out of the work order pa
   await page.getByText('视频AI推理任务').first().click()
 
   await expect(page.getByText('视频AI推理任务').first()).toBeVisible()
-  await expect(page.getByText('python3 /app/src/receiver_main.py --port 9100')).toHaveCount(0)
-  await expect(page.getByText('PEER_COMPUTE_URL=http://[3012:a::2]:18000')).toHaveCount(0)
-  await expect(page.getByText('WAIT_FOR_COMPUTE_READY=false')).toHaveCount(0)
-  await expect(page.getByText(/\"measured_frames\":30/)).toHaveCount(0)
+  await page.getByRole('tab', { name: '部署' }).click()
+  await expect(page.getByText('按顺序启动用户侧容器')).toBeVisible()
+  await expect(page.getByText('ssh -p 22 switchpc1@172.16.0.154')).toBeVisible()
+  await expect(page.getByText(/python3 \/app\/src\/receiver_main.py --port 9100/)).toBeVisible()
+  await expect(page.getByText(/PEER_COMPUTE_URL=http:\/\/\[3012:a::2\]:18000/)).toBeVisible()
 
   await page.getByText('视频AI推理任务').first().scrollIntoViewIfNeeded()
   await page.screenshot({

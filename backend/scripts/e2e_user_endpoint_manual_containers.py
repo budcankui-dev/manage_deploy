@@ -47,7 +47,7 @@ TASK_CONFIG = {
         },
     },
     "low_latency_video_pipeline": {
-        "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，30fps，低时延转发策略，现在开始跑30分钟",
+        "message": "视频AI推理任务，从 h1 到 h2，720p测试视频，60帧，统计12帧，30fps，低时延转发策略，现在开始跑30分钟",
         "endpoint_image_name": "low-latency-video-endpoint",
         "destination_port": 9100,
         "source_command": "python3 /app/src/source_main.py",

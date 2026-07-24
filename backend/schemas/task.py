@@ -553,6 +553,7 @@ class TaskOrderDetailResponse(TaskOrderResponse):
     instance: Optional[TaskOrderInstanceSummary] = None
     evaluation: Optional[TaskOrderEvaluationSummary] = None
     node_placements: list[TaskOrderNodePlacementSummary] = Field(default_factory=list)
+    user_access_guide: Optional[dict[str, Any]] = None
 
 
 class BusinessTemplateCatalogCreate(BaseModel):
