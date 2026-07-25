@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import traceback
+from io import BytesIO
 from pathlib import Path
 
 if "/app" not in sys.path:
@@ -56,6 +57,8 @@ METADATA_KEYS = (
     "fusion_frames_data_urls",
     "fusion_frame_count",
     "fusion_frame_sequence_url",
+    "fusion_frame_sequence_uri",
+    "fusion_frame_sequence_storage",
     "fusion_frame_sequence_count",
     "fusion_frame_sequence_fps",
     "fusion_frame_sequence_content_type",
@@ -66,6 +69,54 @@ METADATA_KEYS = (
 def _parse_objective() -> dict:
     raw = os.environ.get("BUSINESS_OBJECTIVE", "{}")
     return json.loads(raw) if raw else {}
+
+
+def _upload_frame_sequence_to_minio(instance_id: str, payload: dict) -> dict:
+    """Store the full fusion sequence in MinIO when platform credentials exist.
+
+    The Manager upload below remains the playback cache for the detail panel.
+    Object storage is the durable copy and is deliberately best-effort so a
+    MinIO outage cannot turn an otherwise valid fusion run into a failed task.
+    """
+    access = os.environ.get("MINIO_ACCESS_KEY") or os.environ.get("MINIO_ROOT_USER")
+    secret = os.environ.get("MINIO_SECRET_KEY") or os.environ.get("MINIO_ROOT_PASSWORD")
+    endpoint = os.environ.get("MINIO_ENDPOINT", "http://host.docker.internal:9000")
+    bucket = os.environ.get("MINIO_BUCKET", "task-results")
+    if not access or not secret:
+        print("METAVERSE_SINK_MINIO_SKIPPED credentials unavailable", flush=True)
+        return {}
+
+    try:
+        from minio import Minio
+
+        host = endpoint.replace("http://", "").replace("https://", "")
+        client = Minio(
+            host,
+            access_key=access,
+            secret_key=secret,
+            secure=endpoint.startswith("https://"),
+        )
+        if not client.bucket_exists(bucket):
+            client.make_bucket(bucket)
+
+        key = f"{instance_id}/metaverse-fusion-frames.json"
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        client.put_object(
+            bucket,
+            key,
+            BytesIO(body),
+            length=len(body),
+            content_type="application/json",
+        )
+        uri = f"s3://{bucket}/{key}"
+        print(f"METAVERSE_SINK_MINIO_UPLOADED uri={uri} bytes={len(body)}", flush=True)
+        return {
+            "fusion_frame_sequence_uri": uri,
+            "fusion_frame_sequence_storage": "minio",
+        }
+    except Exception as exc:
+        print(f"METAVERSE_SINK_MINIO_SKIPPED {type(exc).__name__}: {exc}", flush=True)
+        return {}
 
 
 def _upload_frame_sequence(result: dict) -> dict:
@@ -85,8 +136,10 @@ def _upload_frame_sequence(result: dict) -> dict:
         headers["X-Service-Token"] = token
     payload = {
         "fps": int(result.get("fps") or 30),
+        "frame_count": len(frames),
         "frames": frames,
     }
+    storage_meta = _upload_frame_sequence_to_minio(instance_id, payload)
     print(
         f"METAVERSE_SINK_UPLOAD_SEQUENCE url={url} frames={len(frames)} fps={payload['fps']}",
         flush=True,
@@ -115,6 +168,7 @@ def _upload_frame_sequence(result: dict) -> dict:
         flush=True,
     )
     return {
+        **storage_meta,
         "fusion_frame_sequence_url": uploaded.get("url"),
         "fusion_frame_sequence_count": int(uploaded.get("frame_count") or len(frames)),
         "fusion_frame_sequence_fps": int(uploaded.get("fps") or result.get("fps") or 30),
@@ -141,7 +195,11 @@ def main() -> int:
     metric_value = float(result.get(metric_key, result.get("frame_latency_p90_ms", 0.0)))
     result_meta = {key: result[key] for key in METADATA_KEYS if key in result}
     instance_id = os.environ["TASK_INSTANCE_ID"]
-    result_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/metaverse-fusion-result.json"
+    sequence_uri = (
+        result_meta.get("fusion_frame_sequence_uri")
+        or result_meta.get("fusion_frame_sequence_url")
+        or "inline://result_metadata/fusion_frames_data_urls"
+    )
 
     report_metric(
         metric_key,
@@ -149,7 +207,11 @@ def main() -> int:
         unit=objective.get("unit") or "ms",
         tags={
             "objects": [
-                {"name": "metaverse-fusion-result.json", "uri": result_uri, "content_type": "application/json"},
+                {
+                    "name": "metaverse-fusion-frames.json",
+                    "uri": sequence_uri,
+                    "content_type": result_meta.get("fusion_frame_sequence_content_type", "application/json"),
+                },
                 {
                     "name": "metaverse-fusion-frame-sequence",
                     "uri": result_meta.get("fusion_frame_sequence_url") or "inline://result_metadata/fusion_frames_data_urls",
