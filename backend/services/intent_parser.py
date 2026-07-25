@@ -15,6 +15,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type, task_name_for_task_type
+from services.deployment_profile import image_ref
 
 METRIC_LABELS = {
     "effective_gflops": "有效计算吞吐量",
@@ -408,6 +409,9 @@ def parse_intent(
         if fps is not None:
             result.data_profile["fps"] = fps
         result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        # Use the deployment profile instead of a browser-side fixed registry
+        # address. This setting is consumed only by the metaverse task UI.
+        result.runtime_plan["endpoint_image"] = image_ref("metaverse-video-fusion-endpoint")
         result.business_objective = {
             "metric_key": "frame_latency_p90_ms",
             "operator": "<=",

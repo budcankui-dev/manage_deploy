@@ -398,9 +398,10 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
     label: isMetaverse ? '有效融合帧数' : '参与统计帧数',
     value: `${meta.measured_frames} 帧`,
   })
-  if (isMetaverse && meta.fusion_frame_sequence_count != null) {
-    rows.push({ label: '融合帧序列', value: `${meta.fusion_frame_sequence_count} 帧 / ${meta.fusion_frame_sequence_fps || meta.fps || 30} FPS` })
+  if (isMetaverse && meta.fusion_video_uri) {
+    rows.push({ label: '融合结果归档', value: 'MinIO MP4' })
   }
+  if (isMetaverse && meta.preview_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.preview_frame_index) })
   if (meta.annotated_frame_index != null) rows.push({ label: '预览帧序号', value: String(meta.annotated_frame_index) })
   if (meta.annotated_frame_latency_ms != null) {
     rows.push({ label: '预览帧时延', value: `${Number(meta.annotated_frame_latency_ms).toFixed(2)} ms` })

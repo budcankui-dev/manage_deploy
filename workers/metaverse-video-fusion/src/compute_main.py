@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from io import BytesIO
 from pathlib import Path
 
 from fusion_core import run_fusion_profile
@@ -55,18 +56,14 @@ METADATA_KEYS = (
     "gpu_available",
     "gpu_assigned",
     "gpu_error",
-    "annotated_frame_index",
+    "preview_frame_index",
     "preview_frame_width",
     "preview_frame_height",
-    "annotated_frame_latency_ms",
-    "annotated_frame_content_type",
-    "annotated_frame_data_url",
-    "annotated_frame_overlay",
-    "fusion_frame_data_url",
-    "fusion_frames_data_urls",
-    "fusion_frame_count",
-    "fusion_frame_sequence_count",
-    "samples",
+    "fusion_result_uri",
+    "fusion_video_uri",
+    "fusion_video_url",
+    "fusion_preview_uri",
+    "fusion_preview_url",
 )
 
 
@@ -79,20 +76,73 @@ def _result_meta(result: dict) -> dict:
     return {key: result[key] for key in METADATA_KEYS if key in result}
 
 
+def _archive_to_minio(result: dict) -> dict:
+    """Persist durable metaverse evidence before passing a compact result downstream."""
+    access = os.environ.get("MINIO_ACCESS_KEY") or os.environ.get("MINIO_ROOT_USER")
+    secret = os.environ.get("MINIO_SECRET_KEY") or os.environ.get("MINIO_ROOT_PASSWORD")
+    if not access or not secret:
+        raise RuntimeError("MinIO credentials are required for metaverse result archival")
+    from minio import Minio
+
+    endpoint = os.environ.get("MINIO_ENDPOINT", "http://host.docker.internal:9000")
+    bucket = os.environ.get("MINIO_BUCKET", "task-results")
+    instance_id = os.environ["TASK_INSTANCE_ID"]
+    client = Minio(
+        endpoint.replace("http://", "").replace("https://", ""),
+        access_key=access,
+        secret_key=secret,
+        secure=endpoint.startswith("https://"),
+    )
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+    prefix = f"{instance_id}/metaverse"
+    archive_path = Path(str(result.pop("fusion_archive_path")))
+    preview = bytes(result.pop("fusion_preview_jpeg"))
+    if not preview:
+        raise RuntimeError("fusion preview is empty; refusing to archive an incomplete result")
+    try:
+        archive = archive_path.read_bytes()
+    finally:
+        archive_path.unlink(missing_ok=True)
+    video_key = f"{prefix}/fusion-result.mp4"
+    preview_key = f"{prefix}/fusion-preview.jpg"
+    result_key = f"{prefix}/result.json"
+    client.put_object(bucket, video_key, BytesIO(archive), len(archive), content_type="video/mp4")
+    client.put_object(bucket, preview_key, BytesIO(preview), len(preview), content_type="image/jpeg")
+    compact = _result_meta(result)
+    compact.update({
+        "fusion_video_uri": f"s3://{bucket}/{video_key}",
+        "fusion_preview_uri": f"s3://{bucket}/{preview_key}",
+        "fusion_result_uri": f"s3://{bucket}/{result_key}",
+        "fusion_video_url": f"/api/demo-assets/metaverse-results/{instance_id}/fusion-result.mp4",
+        "fusion_preview_url": f"/api/demo-assets/metaverse-results/{instance_id}/fusion-preview.jpg",
+    })
+    body = json.dumps(compact, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    client.put_object(bucket, result_key, BytesIO(body), len(body), content_type="application/json")
+    print(f"METAVERSE_COMPUTE_MINIO_ARCHIVED prefix=s3://{bucket}/{prefix}", flush=True)
+    # Do not pass per-frame payloads to Sink/Manager.  The durable objects are
+    # the full result; this message carries only the platform result summary.
+    return compact
+
+
 def _metric_tags(result: dict) -> dict:
     result_meta = _result_meta(result)
-    instance_id = os.environ.get("TASK_INSTANCE_ID", "unknown-instance")
     return {
         "objects": [
             {
-                "name": "metaverse-fusion-result.json",
-                "uri": f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/metaverse-fusion-result.json",
+                "name": "metaverse/result.json",
+                "uri": result_meta.get("fusion_result_uri", ""),
                 "content_type": "application/json",
             },
             {
-                "name": "metaverse-fusion-preview",
-                "uri": "inline://result_metadata/annotated_frame_data_url",
-                "content_type": result_meta.get("annotated_frame_content_type", "image/jpeg"),
+                "name": "metaverse/fusion-result.mp4",
+                "uri": result_meta.get("fusion_video_uri", ""),
+                "content_type": "video/mp4",
+            },
+            {
+                "name": "metaverse/fusion-preview.jpg",
+                "uri": result_meta.get("fusion_preview_uri", ""),
+                "content_type": "image/jpeg",
             },
         ],
         "result": result_meta,
@@ -187,12 +237,12 @@ def main() -> int:
 
     job = wait_for_data_handler(port, timeout_sec=180.0)
     print(
-        f"METAVERSE_COMPUTE_GOT_JOB pairs={len(job.get('frame_pairs') or [])} "
+        f"METAVERSE_COMPUTE_GOT_JOB videos={job.get('video0_asset')},{job.get('video1_asset')} "
         f"measured={job.get('measured_frames')}",
         flush=True,
     )
 
-    result = run_fusion_profile(job)
+    result = _archive_to_minio(run_fusion_profile(job))
     print(
         f"METAVERSE_COMPUTE_DONE p90_ms={result['frame_latency_p90_ms']:.2f} "
         f"frames={result['measured_frames']}",

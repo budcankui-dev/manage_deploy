@@ -25,7 +25,7 @@ class GaussianBlurLayer(nn.Module):
     """
 
     def __init__(self, channels, kernel_size):
-        """ 
+        """
         Arguments:
             channels (int): Channel for input tensor
             kernel_size (int): Size of the kernel used in blurring
@@ -37,8 +37,8 @@ class GaussianBlurLayer(nn.Module):
         assert self.kernel_size % 2 != 0
 
         self.op = nn.Sequential(
-            nn.ReflectionPad2d(math.floor(self.kernel_size / 2)), 
-            nn.Conv2d(channels, channels, self.kernel_size, 
+            nn.ReflectionPad2d(math.floor(self.kernel_size / 2)),
+            nn.Conv2d(channels, channels, self.kernel_size,
                       stride=1, padding=0, bias=None, groups=channels)
         )
 
@@ -49,7 +49,7 @@ class GaussianBlurLayer(nn.Module):
         Arguments:
             x (torch.Tensor): input 4D tensor
         Returns:
-            torch.Tensor: Blurred version of the input 
+            torch.Tensor: Blurred version of the input
         """
 
         if not len(list(x.shape)) == 4:
@@ -59,9 +59,9 @@ class GaussianBlurLayer(nn.Module):
             print('In \'GaussianBlurLayer\', the required channel ({0}) is'
                   'not the same as input ({1})\n'.format(self.channels, x.shape[1]))
             exit()
-            
+
         return self.op(x)
-    
+
     def _init_kernel(self):
         sigma = 0.3 * ((self.kernel_size - 1) * 0.5 - 1) + 0.8
 
@@ -91,7 +91,7 @@ def supervised_training_iter(
 
     Arguments:
         modnet (torch.nn.Module): instance of MODNet
-        optimizer (torch.optim.Optimizer): optimizer for supervised training 
+        optimizer (torch.optim.Optimizer): optimizer for supervised training
         image (torch.autograd.Variable): input RGB image
                                          its pixel values should be normalized
         trimap (torch.autograd.Variable): trimap used to calculate the losses
@@ -105,7 +105,7 @@ def supervised_training_iter(
                               NOTE: please adjust according to your dataset
         matte_scale (float): scale of the matte loss
                              NOTE: please adjust according to your dataset
-    
+
     Returns:
         semantic_loss (torch.Tensor): loss of the semantic estimation [Low-Resolution (LR) Branch]
         detail_loss (torch.Tensor): loss of the detail prediction [High-Resolution (HR) Branch]
@@ -165,7 +165,7 @@ def supervised_training_iter(
     matte_loss = torch.mean(matte_l1_loss + matte_compositional_loss)
     matte_loss = matte_scale * matte_loss
 
-    # calculate the final loss, backward the loss, and update the model 
+    # calculate the final loss, backward the loss, and update the model
     loss = semantic_loss + detail_loss + matte_loss
     loss.backward()
     optimizer.step()
@@ -179,20 +179,20 @@ def soc_adaptation_iter(
     soc_semantic_scale=100.0, soc_detail_scale=1.0):
     """ Self-Supervised sub-objective consistency (SOC) adaptation iteration of MODNet
     This function fine-tunes MODNet for one iteration in an unlabeled dataset.
-    Note that SOC can only fine-tune a converged MODNet, i.e., MODNet that has been 
+    Note that SOC can only fine-tune a converged MODNet, i.e., MODNet that has been
     trained in a labeled dataset.
 
     Arguments:
         modnet (torch.nn.Module): instance of MODNet
         backup_modnet (torch.nn.Module): backup of the trained MODNet
-        optimizer (torch.optim.Optimizer): optimizer for self-supervised SOC 
+        optimizer (torch.optim.Optimizer): optimizer for self-supervised SOC
         image (torch.autograd.Variable): input RGB image
                                          its pixel values should be normalized
-        soc_semantic_scale (float): scale of the SOC semantic loss 
+        soc_semantic_scale (float): scale of the SOC semantic loss
                                     NOTE: please adjust according to your dataset
         soc_detail_scale (float): scale of the SOC detail loss
                                   NOTE: please adjust according to your dataset
-    
+
     Returns:
         soc_semantic_loss (torch.Tensor): loss of the semantic SOC
         soc_detail_loss (torch.Tensor): loss of the detail SOC
@@ -266,7 +266,7 @@ def soc_adaptation_iter(
     downsampled_pred_matte = blurer(F.interpolate(pred_matte, scale_factor=1/16, mode='bilinear'))
     pseudo_gt_semantic = downsampled_pred_matte.detach()
     pseudo_gt_semantic = pseudo_gt_semantic * (pseudo_gt_semantic > 0.01).float()
-    
+
     # generate pseudo ground truth for `pred_matte`
     pseudo_gt_matte = pred_semantic.detach()
     pseudo_gt_matte = pseudo_gt_matte * (pseudo_gt_matte > 0.01).float()
@@ -288,7 +288,7 @@ def soc_adaptation_iter(
 
     soc_detail_loss = soc_detail_scale * (backup_detail_loss + backup_matte_loss)
 
-    # calculate the final loss, backward the loss, and update the model 
+    # calculate the final loss, backward the loss, and update the model
     loss = soc_semantic_loss + soc_detail_loss
 
     loss.backward()

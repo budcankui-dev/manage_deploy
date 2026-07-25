@@ -19,6 +19,7 @@ import httpx
 from config import settings
 from services.intent_parser import ParseResult, extract_routing_strategy, validate_draft_fields
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type
+from services.deployment_profile import image_ref
 
 logger = logging.getLogger(__name__)
 
@@ -559,6 +560,8 @@ def _raw_to_parse_result(
     }
     if task_type == "terminal_route_transfer":
         runtime_plan["route_only"] = True
+    if task_type == "metaverse_video_fusion":
+        runtime_plan["endpoint_image"] = image_ref("metaverse-video-fusion-endpoint")
 
     # Build business_objective from task_type defaults
     business_objective = {}

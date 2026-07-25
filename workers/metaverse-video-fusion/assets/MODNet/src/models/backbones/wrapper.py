@@ -26,7 +26,7 @@ class BaseBackbone(nn.Module):
 
 
 class MobileNetV2Backbone(BaseBackbone):
-    """ MobileNetV2 Backbone 
+    """ MobileNetV2 Backbone
     """
 
     def __init__(self, in_channels):
@@ -72,11 +72,11 @@ class MobileNetV2Backbone(BaseBackbone):
         return [enc2x, enc4x, enc8x, enc16x, enc32x]
 
     def load_pretrained_ckpt(self):
-        # the pre-trained model is provided by https://github.com/thuyngch/Human-Segmentation-PyTorch 
+        # the pre-trained model is provided by https://github.com/thuyngch/Human-Segmentation-PyTorch
         ckpt_path = './pretrained/mobilenetv2_human_seg.ckpt'
         if not os.path.exists(ckpt_path):
             print('cannot find the pretrained mobilenetv2 backbone')
             exit()
-        
+
         ckpt = torch.load(ckpt_path)
         self.model.load_state_dict(ckpt)

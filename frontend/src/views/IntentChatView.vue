@@ -596,7 +596,6 @@ const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
 const ENDPOINT_IMAGE_BY_TASK_TYPE = {
   high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
   low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
-  metaverse_video_fusion: '10.112.244.94:5000/metaverse-video-fusion-endpoint:dev',
 }
 
 let routingTimer = null
@@ -701,7 +700,11 @@ const effectiveCallbackUrl = computed(() => {
 const isRouteOnlyDraft = computed(() =>
   Boolean(isTerminalRouteDraft.value || endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
 )
-const endpointImage = computed(() => ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type] || '')
+const endpointImage = computed(() => (
+  draft.value?.runtime_plan?.endpoint_image
+  || ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type]
+  || ''
+))
 const showClientCommands = computed(() =>
   isDraftSubmittable.value && !isRouteOnlyDraft.value
 )

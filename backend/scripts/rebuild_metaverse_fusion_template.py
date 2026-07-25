@@ -15,7 +15,9 @@ sys.path.insert(0, str(BACKEND_DIR / "scripts"))
 
 from httpx import AsyncClient
 
-from rebuild_matmul_template import auto_port, get_compute_node_ids
+import pymysql
+
+from rebuild_matmul_template import _resolve_mysql_config, auto_port
 from services.deployment_profile import image_repo
 
 WORKER_TAG = os.environ.get("WORKER_TAG", "dev")
@@ -35,9 +37,24 @@ COMPUTE_PORT = 18822
 SINK_PORT = 18823
 
 
+def get_metaverse_node_ids() -> dict[str, str]:
+    """Place endpoint roles on terminal nodes and MODNet on a GPU compute node."""
+    conn = pymysql.connect(**_resolve_mysql_config())
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, hostname FROM nodes WHERE hostname IN ('h1', 'h2', 'compute-2') AND deleted_at IS NULL"
+    )
+    nodes = {hostname: node_id for node_id, hostname in cursor.fetchall()}
+    conn.close()
+    required = {"h1", "h2", "compute-2"}
+    if set(nodes) != required:
+        raise RuntimeError(f"Missing metaverse nodes: {required - set(nodes)}")
+    return {"source": nodes["h1"], "compute": nodes["compute-2"], "sink": nodes["h2"]}
+
+
 async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict:
     base_url = base_url or os.environ.get("DEMO_BASE_URL", "http://127.0.0.1:8000")
-    node_ids = get_compute_node_ids()
+    node_ids = get_metaverse_node_ids()
 
     async with AsyncClient(base_url=base_url, timeout=60.0) as client:
         listed = await client.get("/api/templates")
@@ -54,7 +71,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "image": METAVERSE_ENDPOINT_IMAGE,
                     "command": "python3 /app/src/source_main.py",
                     "port_defs": [auto_port("source", "metaverse source HTTP", SOURCE_PORT)],
-                    "node_id": node_ids["compute-1"],
+                    "node_id": node_ids["source"],
                     "restart_policy": "no",
                 },
                 {
@@ -63,7 +80,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "image": METAVERSE_COMPUTE_IMAGE,
                     "command": "python3 /app/src/compute_main.py",
                     "port_defs": [auto_port("compute", "metaverse compute HTTP", COMPUTE_PORT)],
-                    "node_id": node_ids["compute-2"],
+                    "node_id": node_ids["compute"],
                     "restart_policy": "no",
                 },
                 {
@@ -72,7 +89,7 @@ async def rebuild_metaverse_fusion_template(base_url: str | None = None) -> dict
                     "image": METAVERSE_ENDPOINT_IMAGE,
                     "command": "python3 /app/src/sink_main.py",
                     "port_defs": [auto_port("sink", "metaverse sink HTTP", SINK_PORT)],
-                    "node_id": node_ids["compute-3"],
+                    "node_id": node_ids["sink"],
                     "restart_policy": "no",
                 },
             ],

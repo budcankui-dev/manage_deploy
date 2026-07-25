@@ -1,8 +1,16 @@
 # Metaverse Video Fusion Worker
 
-`metaverse_video_fusion` is an additive three-node worker: `source` reads two
-bundled videos, `compute` performs GPU MODNet foreground/background fusion,
-and `sink` reports the P90 frame-fusion latency and preview frames.
+`metaverse_video_fusion` is an additive three-node worker: `source` sends the
+two bundled-video asset description, `compute` performs GPU MODNet
+foreground/background fusion and stores durable evidence in MinIO, and `sink`
+reports only the P90 frame-fusion summary and result object URIs.
+
+For every completed instance, Compute archives the following objects in
+`task-results/<instance-id>/metaverse/`:
+
+- `fusion-result.mp4`
+- `fusion-preview.jpg`
+- `result.json`
 
 Build the compute image:
 

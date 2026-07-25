@@ -10,18 +10,19 @@
 - 业务名称：元宇宙沉浸式交互
 - 模态：低时延转发模态
 - DAG：`source -> compute -> sink`
-- 输入：两路固定视频 `cam0.mp4`、`cam1.mp4`，按 30 FPS 逐帧传输 180 对帧
+- 输入：两路固定视频 `cam0.mp4`、`cam1.mp4`；Source 将视频资产描述和 180 帧画像发送到 Compute，Compute 从随镜像内置的素材读取同名输入
 - 计算：`compute` 节点使用 MODNet 在 GPU 上做视频融合
-- 输出：`sink` 上报 `frame_latency_p90_ms` 和融合帧预览
+- 输出：Compute 将 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 MinIO；Sink 仅上报 `frame_latency_p90_ms`、GPU/backend 摘要和对象 URI
 - 统计口径：前 10 对帧预热，后 170 对帧全部计入 P90 单帧融合时延
 - 业务目标：P90 单帧融合时延 `<= target_value ms`
 
 ## 关键文件
 
 - `workers/metaverse-video-fusion/`：新业务 worker 镜像源码和内置资源
-- `workers/metaverse-video-fusion/src/source_main.py`：读取两路视频并发送帧对
-- `workers/metaverse-video-fusion/src/compute_main.py`：运行 MODNet 融合并统计时延
-- `workers/metaverse-video-fusion/src/sink_main.py`：接收结果并回传 Manager
+- `workers/metaverse-video-fusion/src/source_main.py`：发送双路视频资产描述和融合画像；支持与低延迟视频一致的外部终端手动启动参数
+- `workers/metaverse-video-fusion/src/compute_main.py`：运行 MODNet 融合、统计时延并归档 MinIO
+- `workers/metaverse-video-fusion/src/sink_main.py`：接收轻量结果摘要并回传 Manager
+- `workers/metaverse-video-fusion/src/receiver_main.py`：用户端回调接收器入口
 - `workers/metaverse-video-fusion/src/fusion_core.py`：MODNet 加载、GPU 检查、融合核心逻辑
 - `backend/scripts/rebuild_metaverse_fusion_template.py`：注册任务模板和业务目录
 - `scripts/build_workers.sh`：已支持 `WORKER_KIND=metaverse_fusion`
@@ -82,6 +83,8 @@ backend/venv/bin/python backend/scripts/rebuild_metaverse_fusion_template.py
 - 业务目录：`metaverse_video_fusion -> template_id`
 - 默认三节点放置：`source -> compute -> sink`
 
+其中 Source 固定在终端节点 `h1`，Compute 固定在 GPU 节点 `compute-2`，Sink 固定在终端节点 `h2`。注册前请确认这三个 hostname 已在 Manager 节点表登记。
+
 ## 4. 后端启动建议
 
 本地开发时建议禁止基线测试拉远端镜像，直接使用本地构建的镜像：
@@ -99,6 +102,27 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 Node Agent 和前端按原项目方式启动即可。
 
+### MinIO 是必需项
+
+元宇宙任务不会把完整帧序列写入数据库，也不会降级为 Manager 本地缓存。启动 Manager 和三个节点 Agent/worker 时，必须让它们能访问相同的 MinIO：
+
+```bash
+export MINIO_ENDPOINT=http://<minio-host>:9000
+export MINIO_BUCKET=task-results
+export MINIO_ACCESS_KEY=<access-key>
+export MINIO_SECRET_KEY=<secret-key>
+```
+
+完成一次任务后，应在 bucket 中看到：
+
+```text
+<task-instance-id>/metaverse/fusion-result.mp4
+<task-instance-id>/metaverse/fusion-preview.jpg
+<task-instance-id>/metaverse/result.json
+```
+
+工单详情中的播放器请求 `/api/demo-assets/metaverse-results/<task-instance-id>/fusion-result.mp4`。这是 Manager 的同源只读代理，支持 HTTP Range 请求以便浏览器流式播放和拖动进度，也不会把 MinIO 密钥暴露给浏览器。
+
 ## 5. 业务测评页面运行
 
 进入前端业务测评页面：
@@ -108,7 +132,7 @@ Node Agent 和前端按原项目方式启动即可。
 3. 点击 `创建测评工单`
 4. 使用本地 mock 路由给工单回写节点放置
 5. 点击 `运行测评`
-6. 查看详情页中的融合帧预览和 P90 时延结果
+6. 查看详情页中的融合 MP4 播放器和 P90 时延结果
 
 mock 路由命令示例：
 
@@ -156,4 +180,5 @@ docker logs <container_name_or_id> --tail 100
 - `待分配`：外部路由还没有回写 placements，先运行 mock router。
 - `GPU slot conflict`：同一节点同一 GPU 已被其他任务占用，先清理实例或换 `--gpu-device`。
 - `actual_backend` 不是 `torch_cuda`：容器没有拿到 GPU，检查 `docker run --gpus all ... nvidia-smi`。
+- `MinIO credentials are required` 或结果对象不存在：检查 Manager 与 Compute 的四个 `MINIO_*` 环境变量、网络连通性和 bucket 权限；归档失败时任务会明确失败。
 - `Business evaluation not found`：任务还没运行完或 sink 没有上报指标，先查容器日志。

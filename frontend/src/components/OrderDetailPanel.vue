@@ -502,13 +502,13 @@
           <template v-if="isMetaverseTask">
             <div class="video-result-card">
               <div class="video-preview">
-                <template v-if="metaversePlaybackFrame">
+                <template v-if="metaversePlaybackUrl">
                   <div class="video-proof-summary">
                     <strong>融合结果视频</strong>
-                    <span>融合帧序列按任务记录的 {{ metaverseFps }} FPS 自动播放。</span>
+                    <span>融合结果已归档至 MinIO，通过平台结果 URI 播放。</span>
                   </div>
                   <div class="video-proof-frame">
-                    <img :src="metaversePlaybackFrame" alt="元宇宙融合结果视频" />
+                    <video :src="metaversePlaybackUrl" controls preload="metadata" class="fusion-result-video" />
                     <div class="video-proof-overlay">
                       <div class="video-proof-badge">
                         <span v-for="row in metaversePlaybackRows" :key="row">{{ row }}</span>
@@ -518,7 +518,7 @@
                 </template>
                 <el-empty
                   v-else
-                  :description="evaluation ? '等待融合帧序列文件' : '暂无融合视频结果'"
+                  :description="evaluation ? '等待融合视频归档' : '暂无融合视频结果'"
                   :image-size="80"
                 />
               </div>
@@ -678,7 +678,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { businessApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
@@ -1139,68 +1139,21 @@ const videoDetectionRows = computed(() => videoDetections(resultMetadata.value))
 const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(resultMetadata.value))
 const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(resultMetadata.value))
 
-// Metaverse results are persisted as a JSON frame sequence, not a video file.
-// Keep this playback path isolated so other video tasks retain their thumbnails.
-const metaversePlaybackIndex = ref(0)
-const metaverseSequenceFrames = ref([])
-const metaverseSequenceError = ref('')
-let metaversePlaybackTimer = null
-const metaverseSequenceUrl = computed(() => {
-  const value = resultMetadata.value?.fusion_frame_sequence_url
-  return typeof value === 'string' ? value : ''
-})
-const metaverseFps = computed(() => {
-  const value = Number(resultMetadata.value?.fusion_frame_sequence_fps ?? resultMetadata.value?.fps ?? 30)
-  return Number.isFinite(value) && value > 0 ? value : 30
-})
-const metaversePlaybackFrames = computed(() => (
-  metaverseSequenceFrames.value.length ? metaverseSequenceFrames.value : videoPreviewFrames.value.map((frame) => frame.data_url)
-))
-const metaversePlaybackFrame = computed(() => {
-  const frames = metaversePlaybackFrames.value
-  return frames.length ? frames[metaversePlaybackIndex.value % frames.length] : ''
+// Metaverse results are durable MinIO objects; metadata carries only the proxy URI.
+const metaversePlaybackUrl = computed(() => {
+  const value = resultMetadata.value?.fusion_video_url
+  // The worker stores a same-origin Manager proxy path so the browser never
+  // needs MinIO credentials. Absolute URLs remain supported for deployments
+  // that intentionally configure one.
+  return typeof value === 'string' && (value.startsWith('/') || value.startsWith('http')) ? value : ''
 })
 const metaversePlaybackRows = computed(() => {
   const meta = resultMetadata.value || {}
-  const frames = metaversePlaybackFrames.value
   const rows = []
-  if (frames.length) rows.push(`播放帧 ${metaversePlaybackIndex.value % frames.length + 1}/${frames.length}`)
-  rows.push(`${metaverseFps.value} FPS`)
+  rows.push(`${meta.fps || 30} FPS`)
   if (meta.measured_frames != null) rows.push(`有效帧 ${meta.measured_frames}`)
   if (meta.frame_latency_p90_ms != null) rows.push(`P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
-  if (metaverseSequenceError.value) rows.push('使用预览帧序列')
   return rows
-})
-
-watch(metaverseSequenceUrl, async (url) => {
-  metaversePlaybackIndex.value = 0
-  metaverseSequenceFrames.value = []
-  metaverseSequenceError.value = ''
-  if (!url) return
-  try {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const payload = await response.json()
-    const frames = Array.isArray(payload?.frames) ? payload.frames : []
-    metaverseSequenceFrames.value = frames
-      .map((frame) => (typeof frame === 'string' ? frame : frame?.data_url))
-      .filter((frame) => typeof frame === 'string' && frame.startsWith('data:image/'))
-  } catch (error) {
-    metaverseSequenceError.value = error?.message || 'load failed'
-  }
-}, { immediate: true })
-
-function scheduleMetaversePlayback() {
-  metaversePlaybackTimer = window.setTimeout(() => {
-    if (metaversePlaybackFrames.value.length > 1) metaversePlaybackIndex.value += 1
-    scheduleMetaversePlayback()
-  }, 1000 / metaverseFps.value)
-}
-
-onMounted(() => scheduleMetaversePlayback())
-
-onBeforeUnmount(() => {
-  if (metaversePlaybackTimer) window.clearTimeout(metaversePlaybackTimer)
 })
 const networkReadyText = computed(() => {
   if (!routingResult.value) return '-'
@@ -2044,7 +1997,8 @@ function nodeStatusLabel(value) {
   position: relative;
 }
 
-.video-proof-frame img {
+.video-proof-frame img,
+.video-proof-frame video {
   display: block;
   width: 100%;
   height: auto;

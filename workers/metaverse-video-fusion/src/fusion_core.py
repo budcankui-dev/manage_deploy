@@ -6,11 +6,11 @@ as the same benchmark/runtime contract used by the low-latency video worker.
 
 from __future__ import annotations
 
-import base64
 import math
 import os
 import statistics
 import subprocess
+import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
@@ -42,8 +42,6 @@ DEFAULT_VIDEO0 = "cam0.mp4"
 DEFAULT_VIDEO1 = "cam1.mp4"
 DEFAULT_PROFILE = "metaverse_offline_fusion_720p"
 DEFAULT_CKPT = "MODNet/pretrained/modnet_webcam_portrait_matting.ckpt"
-MAX_INLINE_FRAMES = 12
-
 _MODEL_CACHE: dict[tuple[str, str], Any] = {}
 
 
@@ -160,45 +158,19 @@ def _resize_for_modnet(height: int, width: int) -> tuple[int, int]:
     return max(32, rh - rh % 32), max(32, rw - rw % 32)
 
 
-def _jpeg_data_url(frame_rgb, quality: int = 82) -> str:
+def _jpeg_bytes(frame_rgb, quality: int = 90) -> bytes:
     if cv2 is None:
-        return ""
+        raise RuntimeError("opencv-python-headless is required to encode previews")
     frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     ok, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     if not ok:
-        return ""
-    payload = base64.b64encode(buf.tobytes()).decode("ascii")
-    return f"data:image/jpeg;base64,{payload}"
-
-
-def _decode_jpeg_payload(value: str):
-    if cv2 is None or np is None:
-        raise RuntimeError("opencv/numpy are required to decode frames")
-    raw = value.split(",", 1)[1] if value.startswith("data:image/") else value
-    arr = np.frombuffer(base64.b64decode(raw), dtype=np.uint8)
-    frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if frame_bgr is None:
-        raise RuntimeError("failed to decode JPEG frame payload")
-    return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        raise RuntimeError("failed to encode fusion preview")
+    return buf.tobytes()
 
 
 def _read_video_pairs(job: dict[str, Any]) -> list[tuple[int, Any, Any]]:
     if cv2 is None:
         raise RuntimeError("opencv-python-headless is required for video fusion")
-
-    embedded = job.get("frame_pairs")
-    if isinstance(embedded, list) and embedded:
-        pairs = []
-        for item in embedded:
-            if not isinstance(item, dict):
-                continue
-            pairs.append((
-                int(item.get("frame_index", len(pairs))),
-                _decode_jpeg_payload(str(item["video0_jpeg"])),
-                _decode_jpeg_payload(str(item["video1_jpeg"])),
-            ))
-        if pairs:
-            return pairs
 
     video0 = _asset_path(str(job.get("video0_asset") or DEFAULT_VIDEO0), default_subdir="videos")
     video1 = _asset_path(str(job.get("video1_asset") or DEFAULT_VIDEO1), default_subdir="videos")
@@ -225,20 +197,6 @@ def _read_video_pairs(job: dict[str, Any]) -> list[tuple[int, Any, Any]]:
     if not pairs:
         raise RuntimeError("no input frame pairs were available for fusion")
     return pairs
-
-
-def encode_frame_pairs_from_assets(job: dict[str, Any], *, max_pairs: int | None = None) -> list[dict[str, Any]]:
-    pairs = _read_video_pairs(job)
-    if max_pairs is not None:
-        pairs = pairs[:max_pairs]
-    return [
-        {
-            "frame_index": index,
-            "video0_jpeg": _jpeg_data_url(frame0, quality=78),
-            "video1_jpeg": _jpeg_data_url(frame1, quality=78),
-        }
-        for index, frame0, frame1 in pairs
-    ]
 
 
 def _fuse_pair(model, transform, device: str, fg_frame, bg_frame):
@@ -285,8 +243,9 @@ def run_fusion_profile(job: dict[str, Any]) -> dict[str, Any]:
             torch.cuda.synchronize()
 
     samples = []
-    preview_frames = []
-    sequence_frames = []
+    preview_jpeg: bytes | None = None
+    archive_path = Path(tempfile.mkstemp(prefix="metaverse-fusion-", suffix=".mp4")[1])
+    video_writer = None
     start = time.perf_counter()
     for sample_index, (frame_index, frame0, frame1) in enumerate(measured):
         if torch is not None and device.startswith("cuda"):
@@ -297,18 +256,24 @@ def run_fusion_profile(job: dict[str, Any]) -> dict[str, Any]:
             torch.cuda.synchronize()
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         samples.append({"frame_index": frame_index, "latency_ms": round(elapsed_ms, 4)})
-        frame_item = {
-            "frame_index": frame_index,
-            "latency_ms": round(elapsed_ms, 4),
-            "data_url": _jpeg_data_url(fused),
-        }
-        sequence_frames.append(frame_item)
-        if len(preview_frames) < MAX_INLINE_FRAMES:
-            preview_frames.append(frame_item)
+        if video_writer is None:
+            height, width = fused.shape[:2]
+            video_writer = cv2.VideoWriter(
+                str(archive_path),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                float(int(job.get("fps", 30) or 30)),
+                (width, height),
+            )
+            if not video_writer.isOpened():
+                raise RuntimeError("failed to create fusion MP4 archive")
+        video_writer.write(cv2.cvtColor(fused, cv2.COLOR_RGB2BGR))
+        if preview_jpeg is None:
+            preview_jpeg = _jpeg_bytes(fused)
+    if video_writer is not None:
+        video_writer.release()
     observed_duration_sec = time.perf_counter() - start
     latencies = [float(item["latency_ms"]) for item in samples]
     p90 = percentile(latencies, 0.90)
-    preview = preview_frames[0] if preview_frames else {}
     height = int(measured[0][1].shape[0]) if measured else 0
     width = int(measured[0][1].shape[1]) if measured else 0
 
@@ -339,17 +304,10 @@ def run_fusion_profile(job: dict[str, Any]) -> dict[str, Any]:
         "gpu_available": _gpu_available(),
         "gpu_assigned": _gpu_assigned(),
         "gpu_error": gpu_error,
-        "annotated_frame_index": preview.get("frame_index"),
+        "preview_frame_index": samples[0]["frame_index"] if samples else None,
         "preview_frame_width": width,
         "preview_frame_height": height,
-        "annotated_frame_latency_ms": preview.get("latency_ms"),
-        "annotated_frame_content_type": "image/jpeg",
-        "annotated_frame_data_url": preview.get("data_url", ""),
-        "annotated_frame_overlay": "metaverse_fusion_preview_v1",
-        "fusion_frame_data_url": preview.get("data_url", ""),
-        "fusion_frames_data_urls": preview_frames,
-        "fusion_frame_count": len(preview_frames),
-        "fusion_frame_sequence": sequence_frames,
-        "fusion_frame_sequence_count": len(sequence_frames),
+        "fusion_archive_path": str(archive_path),
+        "fusion_preview_jpeg": preview_jpeg or b"",
         "samples": samples,
     }

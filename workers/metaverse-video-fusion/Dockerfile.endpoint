@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir \
 COPY _common /app/_common
 COPY metaverse-video-fusion/src/source_main.py /app/src/source_main.py
 COPY metaverse-video-fusion/src/sink_main.py /app/src/sink_main.py
+COPY metaverse-video-fusion/src/receiver_main.py /app/src/receiver_main.py
 COPY metaverse-video-fusion/src/fusion_core.py /app/src/fusion_core.py
 COPY metaverse-video-fusion/assets/videos /app/assets/videos
 

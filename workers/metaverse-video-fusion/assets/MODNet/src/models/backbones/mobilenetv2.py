@@ -166,7 +166,7 @@ class MobileNetV2(nn.Module):
 		if self.num_classes is not None:
 			x = x.mean(dim=(2,3))
 			x = self.classifier(x)
-			
+
 		# Output
 		return x
 

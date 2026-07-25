@@ -9,8 +9,6 @@ import sys
 import time
 from pathlib import Path
 
-from fusion_core import encode_frame_pairs_from_assets
-
 if "/app" not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, "/app")
@@ -49,23 +47,37 @@ def _build_job() -> dict:
         "strict_gpu": profile.get("strict_gpu", True),
         "use_gpu": profile.get("use_gpu", True),
     }
-    max_pairs = int(job["warmup_frames"]) + int(job["measured_frames"])
-    job["frame_pairs"] = encode_frame_pairs_from_assets(job, max_pairs=max_pairs)
     return job
+
+
+def _should_wait_for_compute_ready() -> bool:
+    raw = os.environ.get("WAIT_FOR_COMPUTE_READY", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _source_listen_enabled() -> bool:
+    raw = os.environ.get("SOURCE_LISTEN", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def main() -> int:
     job = _build_job()
-    port = get_listen_port("source")
+    listen_enabled = _source_listen_enabled()
+    port = get_listen_port("source") if listen_enabled else None
     print(
-        f"METAVERSE_SOURCE_STARTING port={port} pairs={len(job.get('frame_pairs') or [])}",
+        f"METAVERSE_SOURCE_STARTING port={port or 'disabled'} "
+        f"videos={job['video0_asset']},{job['video1_asset']}",
         flush=True,
     )
 
-    start_server(port, PostDataHandler)
-    print("METAVERSE_SOURCE_READY waiting for compute signal", flush=True)
-    ready = wait_for_data_handler(port, timeout_sec=300.0)
-    print(f"METAVERSE_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)
+    if listen_enabled:
+        start_server(port, PostDataHandler)
+    if listen_enabled and _should_wait_for_compute_ready():
+        print("METAVERSE_SOURCE_READY waiting for compute signal", flush=True)
+        ready = wait_for_data_handler(port, timeout_sec=300.0)
+        print(f"METAVERSE_SOURCE_GOT_COMPUTE_SIGNAL {ready}", flush=True)
+    else:
+        print("METAVERSE_SOURCE_READY skip compute-ready wait", flush=True)
     post_json_to_peer("source", "/data", job, timeout_sec=180.0)
     print("METAVERSE_SOURCE_POSTED_JOB to compute", flush=True)
 
