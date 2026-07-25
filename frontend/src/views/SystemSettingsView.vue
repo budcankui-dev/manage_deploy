@@ -62,6 +62,13 @@
             <h3>业务测评执行</h3>
             <div class="execution-defaults">
               <label>
+                <span>计算资源并发粒度</span>
+                <el-radio-group v-model="form.benchmark_compute_allocation_mode">
+                  <el-radio-button label="node">节点级</el-radio-button>
+                  <el-radio-button label="gpu_slot">GPU 槽位级</el-radio-button>
+                </el-radio-group>
+              </label>
+              <label>
                 <span>默认并发任务数</span>
                 <el-input-number
                   v-model="form.benchmark_execution_defaults.max_parallel"
@@ -72,7 +79,9 @@
               </label>
             </div>
             <p class="form-hint">
-              业务测评页默认使用该并发数分批执行；系统会按节点资源、路由结果和当前占用情况自动等待，避免资源争用影响基线判定。
+              节点级模式下每台计算节点最多分配一个 GPU 测评任务；GPU 槽位级模式会按节点的 GPU 编号分别分配。
+              默认并发任务数仍限制整轮测评总量，系统会按当前占用情况等待，避免资源争用影响基线判定。
+              该设置仅在“系统自动分配”时生效；外部路由系统回写哪个计算节点和 GPU，平台就按回写结果部署。
             </p>
           </el-card>
 
@@ -385,6 +394,7 @@ const form = reactive({
   intent_parser_mode: 'llm',
   intent_rule_fallback_enabled: true,
   benchmark_routing_mode: 'internal_auto',
+  benchmark_compute_allocation_mode: 'node',
   expert_mode: true,
   show_internal_controls: false,
   show_routing_dag_json: false,
@@ -483,6 +493,7 @@ function applySettings(data) {
     intent_parser_mode: data?.intent_parser_mode || 'llm',
     intent_rule_fallback_enabled: data?.intent_rule_fallback_enabled ?? true,
     benchmark_routing_mode: data?.benchmark_routing_mode || 'internal_auto',
+    benchmark_compute_allocation_mode: data?.benchmark_compute_allocation_mode || 'node',
     expert_mode: data?.expert_mode ?? true,
     show_internal_controls: data?.show_internal_controls ?? false,
     show_routing_dag_json: data?.show_routing_dag_json ?? false,

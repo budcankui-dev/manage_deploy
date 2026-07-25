@@ -73,6 +73,7 @@ from services.routing_network import (
 )
 from services.scheduler import TaskScheduler
 from services.system_settings import (
+    benchmark_compute_allocation_mode_from_settings,
     get_runtime_settings,
     modality_priority_map_from_settings,
     routing_resource_options_from_settings,
@@ -2666,6 +2667,8 @@ async def batch_auto_route(
 ):
     """Auto-route all pending benchmark orders."""
     await _ensure_internal_benchmark_routing_enabled(db)
+    runtime_settings = await get_runtime_settings(db)
+    compute_allocation_mode = benchmark_compute_allocation_mode_from_settings(runtime_settings)
     query = select(TaskOrder).where(
         TaskOrder.status == OrderStatus.PENDING.value,
         TaskOrder.routing_status == RoutingStatus.PENDING.value,
@@ -2701,7 +2704,11 @@ async def batch_auto_route(
             routing_pool = pools_by_task_type.get(order_task_type)
             if not routing_pool or not routing_pool["compute"]:
                 raise RuntimeError(f"No baseline compute nodes available for {order_task_type}")
-            picked, compute_gpu_id = _pick_benchmark_nodes(routing_pool, order)
+            picked, compute_gpu_id = _pick_benchmark_nodes(
+                routing_pool,
+                order,
+                compute_allocation_mode=compute_allocation_mode,
+            )
             await _do_auto_route(db, order, picked, compute_gpu_id)
             routed += 1
         except Exception as exc:
@@ -3388,11 +3395,16 @@ def _benchmark_compute_gpu_slots(nodes: list[NodeModel]) -> list[tuple[NodeModel
 def _pick_benchmark_nodes(
     pool: dict[str, list[NodeModel]],
     order: TaskOrder | None = None,
+    *,
+    compute_allocation_mode: str = "node",
 ) -> tuple[dict[str, NodeModel], str]:
     compute_candidates = [node for node in pool["compute"] if _node_can_host_compute(node)]
     if not compute_candidates:
         raise RuntimeError("No compute-capable nodes available")
-    compute_gpu_slots = _benchmark_compute_gpu_slots(compute_candidates)
+    if compute_allocation_mode == "gpu_slot":
+        compute_gpu_slots = _benchmark_compute_gpu_slots(compute_candidates)
+    else:
+        compute_gpu_slots = [(node, "0") for node in compute_candidates]
     if not compute_gpu_slots:
         raise RuntimeError("No compute GPU slots available")
     index = _benchmark_order_index(order)
@@ -3413,6 +3425,7 @@ async def auto_route_order(
 ):
     """Built-in automatic routing strategy for evaluation orders."""
     await _ensure_internal_benchmark_routing_enabled(db)
+    runtime_settings = await get_runtime_settings(db)
     row = await db.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one_or_none()
     if not order:
@@ -3429,7 +3442,11 @@ async def auto_route_order(
     if not routing_pool["compute"]:
         raise HTTPException(status_code=400, detail="No baseline compute nodes available")
 
-    picked, compute_gpu_id = _pick_benchmark_nodes(routing_pool, order)
+    picked, compute_gpu_id = _pick_benchmark_nodes(
+        routing_pool,
+        order,
+        compute_allocation_mode=benchmark_compute_allocation_mode_from_settings(runtime_settings),
+    )
     await _do_auto_route(db, order, picked, compute_gpu_id)
     await db.commit()
     return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

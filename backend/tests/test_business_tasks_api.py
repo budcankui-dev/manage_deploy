@@ -3014,7 +3014,79 @@ async def test_batch_auto_route_rotates_compute_candidates(client, db_session, m
 
 
 @pytest.mark.asyncio
-async def test_batch_auto_route_rotates_distinct_compute_gpu_slots(client, db_session, monkeypatch):
+async def test_batch_auto_route_defaults_to_node_level_compute_allocation(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    async def all_agents_healthy(nodes):
+        return list(nodes), []
+
+    monkeypatch.setattr(orders_api, "_filter_nodes_with_healthy_agents", all_agents_healthy)
+
+    node_ids, template_id = await _seed_business_fixture(client)
+    compute_3 = await _create_compute_node(client, "compute-3", 3)
+    compute_3_row = await db_session.get(Node, compute_3["id"])
+    compute_3_row.gpu_count = 4
+    await _seed_stable_baselines(
+        db_session,
+        [node_ids[1], compute_3["id"]],
+        "high_throughput_matmul",
+    )
+    headers, _user = await _auth_headers(client, db_session, username="benchmark-node-allocation-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    catalog_response = await client.post(
+        "/api/business-template-catalog",
+        json={
+            "task_type": "high_throughput_matmul",
+            "modality": "high_throughput_compute",
+            "template_id": template_id,
+            "source_node_name": "source",
+            "compute_node_name": "compute",
+            "sink_node_name": "sink",
+        },
+    )
+    assert catalog_response.status_code == 200
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "high_throughput_matmul",
+            "count": 5,
+            "benchmark_run_id": "compute-node-allocation-run",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    route_response = await client.post(
+        "/api/orders/batch-auto-route",
+        headers=headers,
+        json={"benchmark_run_id": "compute-node-allocation-run", "task_type": "high_throughput_matmul"},
+    )
+    assert route_response.status_code == 200, route_response.text
+
+    routing_rows = (
+        await db_session.execute(
+            select(TaskOrder).where(TaskOrder.id.in_(create_response.json()["order_ids"]))
+        )
+    ).scalars().all()
+    compute_placements = [
+        next(
+            item for item in order.runtime_config["routing_result"]["placements"]
+            if item["task_node_id"] == "compute"
+        )
+        for order in routing_rows
+    ]
+    assert {
+        (placement["topology_node_id"], placement["gpu_device"])
+        for placement in compute_placements
+    } == {
+        ("compute-1", "0"),
+        ("compute-3", "0"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_auto_route_uses_distinct_gpu_slots_when_enabled(client, db_session, monkeypatch):
     import api.orders as orders_api
 
     async def all_agents_healthy(nodes):
@@ -3032,7 +3104,11 @@ async def test_batch_auto_route_rotates_distinct_compute_gpu_slots(client, db_se
         "high_throughput_matmul",
     )
     headers, _user = await _auth_headers(client, db_session, username="benchmark-gpu-slot-user")
-    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    await _set_runtime_settings(
+        db_session,
+        benchmark_routing_mode="internal_auto",
+        benchmark_compute_allocation_mode="gpu_slot",
+    )
     catalog_response = await client.post(
         "/api/business-template-catalog",
         json={

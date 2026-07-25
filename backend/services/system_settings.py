@@ -26,6 +26,7 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "intent_parser_mode": "llm",
     "intent_rule_fallback_enabled": True,
     "benchmark_routing_mode": "internal_auto",
+    "benchmark_compute_allocation_mode": "node",
     "expert_mode": True,
     "show_internal_controls": False,
     "show_routing_dag_json": False,
@@ -61,6 +62,11 @@ INTENT_PARSER_MODE_LABELS = {
 BENCHMARK_ROUTING_MODE_LABELS = {
     "internal_auto": "自动路由",
     "external": "外部路由系统",
+}
+
+BENCHMARK_COMPUTE_ALLOCATION_MODE_LABELS = {
+    "node": "节点级并发",
+    "gpu_slot": "GPU 槽位级并发",
 }
 
 TASK_RESOURCE_ROLES = ("source", "compute", "sink")
@@ -147,6 +153,10 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
         merged["intent_parser_mode"] = DEFAULT_RUNTIME_SETTINGS["intent_parser_mode"]
     if merged["benchmark_routing_mode"] not in BENCHMARK_ROUTING_MODE_LABELS:
         merged["benchmark_routing_mode"] = DEFAULT_RUNTIME_SETTINGS["benchmark_routing_mode"]
+    if merged["benchmark_compute_allocation_mode"] not in BENCHMARK_COMPUTE_ALLOCATION_MODE_LABELS:
+        merged["benchmark_compute_allocation_mode"] = DEFAULT_RUNTIME_SETTINGS[
+            "benchmark_compute_allocation_mode"
+        ]
 
     merged["intent_rule_fallback_enabled"] = bool(merged.get("intent_rule_fallback_enabled", True))
     merged["expert_mode"] = bool(merged.get("expert_mode", True))
@@ -180,6 +190,9 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
         "environment_mode": ENVIRONMENT_MODE_LABELS[merged["environment_mode"]],
         "intent_parser_mode": INTENT_PARSER_MODE_LABELS[merged["intent_parser_mode"]],
         "benchmark_routing_mode": BENCHMARK_ROUTING_MODE_LABELS[merged["benchmark_routing_mode"]],
+        "benchmark_compute_allocation_mode": BENCHMARK_COMPUTE_ALLOCATION_MODE_LABELS[
+            merged["benchmark_compute_allocation_mode"]
+        ],
     }
     return merged
 
@@ -239,6 +252,15 @@ def modality_priority_map_from_settings(runtime_settings: dict[str, Any] | None)
     return normalize_modality_priority_map(
         (runtime_settings or {}).get("modality_priority_map")
     )
+
+
+def benchmark_compute_allocation_mode_from_settings(
+    runtime_settings: dict[str, Any] | None,
+) -> str:
+    value = (runtime_settings or {}).get("benchmark_compute_allocation_mode")
+    if value in BENCHMARK_COMPUTE_ALLOCATION_MODE_LABELS:
+        return str(value)
+    return DEFAULT_RUNTIME_SETTINGS["benchmark_compute_allocation_mode"]
 
 
 def modality_for_task_from_settings(
