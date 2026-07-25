@@ -1642,6 +1642,9 @@ async function createBatch(options = {}) {
       count: benchmarkForm.count,
       benchmark_run_id: runId,
       data_profile: buildBenchmarkDataProfile(),
+      ...(taskType.value === 'metaverse_video_fusion'
+        ? { routing_strategy: 'low_latency_forwarding' }
+        : {}),
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条测评工单`)

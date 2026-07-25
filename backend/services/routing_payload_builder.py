@@ -70,7 +70,9 @@ def build_routing_payload(
     )
     edges = _build_dag_edges(task_type, nodes, data_profile, priority)
 
-    normalized_strategy = _normalize_routing_strategy(routing_strategy)
+    normalized_strategy = _normalize_routing_strategy(
+        routing_strategy or ("low_latency_forwarding" if task_type == "metaverse_video_fusion" else None)
+    )
 
     return {
         "job_id": job_id,

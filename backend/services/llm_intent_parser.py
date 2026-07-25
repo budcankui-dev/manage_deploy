@@ -552,7 +552,14 @@ def _raw_to_parse_result(
 
     routing_strategy = raw.get("routing_strategy")
     if utterance:
-        routing_strategy = extract_routing_strategy(str(utterance), default=routing_strategy or "resource_guarantee")
+        routing_strategy = extract_routing_strategy(
+            str(utterance),
+            default=routing_strategy or (
+                "low_latency_forwarding" if task_type == "metaverse_video_fusion" else "resource_guarantee"
+            ),
+        )
+    if not routing_strategy:
+        routing_strategy = "low_latency_forwarding" if task_type == "metaverse_video_fusion" else "resource_guarantee"
 
     # Build runtime_plan from routing_strategy
     runtime_plan = {

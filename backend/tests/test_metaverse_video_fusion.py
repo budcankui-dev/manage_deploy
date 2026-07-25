@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from api.business_tasks import _apply_video_gpu_success_guard, _result_matches_baseline_profile
+from api.orders import BatchBenchmarkRequest
 from schemas.task import BusinessObjectiveEvaluationResult
 from services.baseline_runner import BENCHMARK_PROFILES, _validate_benchmark_result
 from services.business_env import build_business_env
@@ -23,6 +24,7 @@ def test_metaverse_intent_uses_fixed_dual_video_profile():
     assert result.data_profile["video1_asset"] == "cam1.mp4"
     assert result.data_profile["fusion_mode"] == "modnet_offline"
     assert result.data_profile["resolution"] == "720p"
+    assert result.runtime_plan["routing_strategy"] == "low_latency_forwarding"
 
 
 def test_llm_metaverse_intent_receives_fixed_dual_video_defaults():
@@ -33,7 +35,6 @@ def test_llm_metaverse_intent_receives_fixed_dual_video_defaults():
             "destination_name": "h2",
             "start_time": "now",
             "duration_hours": 2,
-            "routing_strategy": "low_latency_forwarding",
         },
         existing_draft=None,
         utterance="元宇宙视频融合，从 h1 到 h2，现在开始跑2小时",
@@ -42,6 +43,7 @@ def test_llm_metaverse_intent_receives_fixed_dual_video_defaults():
     assert result.data_profile["frame_count"] == 180
     assert result.data_profile["video0_asset"] == "cam0.mp4"
     assert result.data_profile["fusion_mode"] == "modnet_offline"
+    assert result.runtime_plan["routing_strategy"] == "low_latency_forwarding"
 
 
 def test_metaverse_catalog_and_routing_resources_are_isolated():
@@ -65,6 +67,8 @@ def test_metaverse_catalog_and_routing_resources_are_isolated():
     assert estimate_bandwidth_mbps("metaverse_video_fusion", profile) >= 20
     assert payload["job_name"] == "元宇宙沉浸式交互"
     assert payload["modal"] == "低时延转发模态"
+    assert payload["routing_strategy"] == "low_latency_forwarding"
+    assert payload["policy_type"] == "LATENCY_CONSTRAINED"
 
 
 def test_metaverse_baseline_requires_cuda_modnet():
@@ -131,3 +135,9 @@ def test_compute_only_metaverse_receives_external_source_asset_url():
     )
 
     assert env["PEER_SOURCE_URL"] == "http://[3012:9::11]:18821"
+
+
+def test_metaverse_benchmark_defaults_to_latency_constrained_routing():
+    request = BatchBenchmarkRequest(task_type="metaverse_video_fusion")
+
+    assert request.routing_strategy == "low_latency_forwarding"

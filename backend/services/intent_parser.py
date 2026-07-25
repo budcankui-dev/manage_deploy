@@ -408,7 +408,10 @@ def parse_intent(
             result.data_profile["frame_count"] = frame_count
         if fps is not None:
             result.data_profile["fps"] = fps
-        result.runtime_plan.setdefault("routing_strategy", _extract_routing_strategy(text))
+        result.runtime_plan.setdefault(
+            "routing_strategy",
+            extract_routing_strategy(text, default="low_latency_forwarding"),
+        )
         # Use the deployment profile instead of a browser-side fixed registry
         # address. This setting is consumed only by the metaverse task UI.
         result.runtime_plan["endpoint_image"] = image_ref("metaverse-video-fusion-endpoint")

@@ -2245,12 +2245,18 @@ class BatchBenchmarkRequest(BaseModel):
     count: int = Field(default=10, ge=1, le=30)
     benchmark_run_id: Optional[str] = None
     data_profile: dict = Field(default_factory=dict)
-    routing_strategy: str = "resource_guarantee"
+    routing_strategy: Optional[str] = None
     source_name: Optional[str] = None
     destination_name: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_routing_strategy(self):
+        if not self.routing_strategy:
+            self.routing_strategy = (
+                "low_latency_forwarding"
+                if self.task_type == "metaverse_video_fusion"
+                else "resource_guarantee"
+            )
         self.routing_strategy = require_routing_policy(
             self.routing_strategy,
             field_name="routing_strategy",
