@@ -45,17 +45,18 @@ WORKER_TAG=dev \
 
 如果首次构建，Docker 需要下载 PyTorch CUDA 基础镜像，时间会比较长。
 
-验收构建应显式使用 Linux AMD64 和不可变 tag；维护方在管理网自行增加
-`WORKER_PUSH=1` 与私有仓库镜像名，开发分支不直接推送验收仓库：
+验收构建应显式使用 Linux AMD64、不可变 tag、私有仓库镜像名和
+`WORKER_PUSH=1`；该 buildx 结果不会 load 到本地 daemon，应使用 manifest
+而不是 `docker image inspect` 验证。开发分支不直接推送验收仓库：
 
 ```bash
 TAG="metaverse-$(git rev-parse --short HEAD)"
-WORKER_KIND=metaverse-fusion WORKER_IMAGE=manage-deploy/metaverse-video-fusion \
-  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 ./scripts/build_workers.sh
-WORKER_KIND=metaverse-fusion-endpoint WORKER_IMAGE=manage-deploy/metaverse-video-fusion-endpoint \
-  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 ./scripts/build_workers.sh
-docker image inspect "manage-deploy/metaverse-video-fusion:$TAG" \
-  "manage-deploy/metaverse-video-fusion-endpoint:$TAG" --format '{{.Architecture}}'
+WORKER_KIND=metaverse-fusion WORKER_IMAGE=<private-registry>/metaverse-video-fusion \
+  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh
+WORKER_KIND=metaverse-fusion-endpoint WORKER_IMAGE=<private-registry>/metaverse-video-fusion-endpoint \
+  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 WORKER_PUSH=1 ./scripts/build_workers.sh
+docker manifest inspect "<private-registry>/metaverse-video-fusion:$TAG"
+docker manifest inspect "<private-registry>/metaverse-video-fusion-endpoint:$TAG"
 ```
 
 ## 2. GPU 单容器自检
