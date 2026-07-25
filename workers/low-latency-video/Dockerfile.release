@@ -1,0 +1,18 @@
+# Release fallback for restricted build networks. The base is a GPU-verified
+# image mirrored in the acceptance registry; this layer carries current code.
+FROM 172.16.0.254:5000/low-latency-video:gpu-legacy-base-v1
+
+WORKDIR /app
+
+COPY _common /app/_common
+COPY low-latency-video/src /app/src
+COPY low-latency-video/assets /app/assets
+
+ENV PYTHONPATH=/app/src:/app
+ENV USE_GPU=true
+ENV VIDEO_ASSET_DIR=/app/assets
+ENV VIDEO_INFERENCE_MODE=yolo_onnx
+ENV VIDEO_DNN_TARGET=auto
+ENV VIDEO_MODEL_PATH=models/yolov5n-fp32.onnx
+
+CMD ["python3", "/app/src/source_main.py"]

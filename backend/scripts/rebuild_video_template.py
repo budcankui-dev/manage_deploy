@@ -30,8 +30,12 @@ ENDPOINT_WORKER_IMAGE = os.environ.get(
 # is provided, the legacy single-image template is preserved.
 COMPUTE_IMAGE_REPO = os.environ.get("VIDEO_COMPUTE_IMAGE", WORKER_IMAGE)
 ENDPOINT_IMAGE_REPO = os.environ.get("VIDEO_ENDPOINT_IMAGE", ENDPOINT_WORKER_IMAGE)
-VIDEO_COMPUTE_IMAGE = f"{COMPUTE_IMAGE_REPO}:{WORKER_TAG}"
-VIDEO_ENDPOINT_IMAGE = f"{ENDPOINT_IMAGE_REPO}:{WORKER_TAG}"
+# Keep WORKER_TAG as the backwards-compatible shared default.  Production can
+# promote the CUDA compute image independently from the lightweight endpoints.
+COMPUTE_IMAGE_TAG = os.environ.get("VIDEO_COMPUTE_TAG", WORKER_TAG)
+ENDPOINT_IMAGE_TAG = os.environ.get("VIDEO_ENDPOINT_TAG", WORKER_TAG)
+VIDEO_COMPUTE_IMAGE = f"{COMPUTE_IMAGE_REPO}:{COMPUTE_IMAGE_TAG}"
+VIDEO_ENDPOINT_IMAGE = f"{ENDPOINT_IMAGE_REPO}:{ENDPOINT_IMAGE_TAG}"
 
 SOURCE_PORT = 18811
 COMPUTE_PORT = 18812
