@@ -424,11 +424,15 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
   return rows
 }
 
-export function buildVideoVerdict(evaluation) {
+export function buildVideoVerdict(evaluation, taskType) {
+  const isMetaverse = taskType === 'metaverse_video_fusion'
+  const taskLabel = isMetaverse ? '视频融合' : '视频推理'
   if (!evaluation) {
     return {
-      title: '等待视频推理完成',
-      subtitle: '任务运行后将展示 P90 帧推理时延、检测框和带框预览图。',
+      title: `等待${taskLabel}完成`,
+      subtitle: isMetaverse
+        ? '任务运行后将展示 P90 帧融合时延、融合视频和 MODNet/GPU 运行证据。'
+        : '任务运行后将展示 P90 帧推理时延、检测框和带框预览图。',
       statusClass: 'pending',
     }
   }
@@ -437,13 +441,13 @@ export function buildVideoVerdict(evaluation) {
   const target = formatMetricValue(evaluation.target_value)
   if (evaluation.business_success) {
     return {
-      title: '视频推理已完成，时延达标',
+      title: `${taskLabel}已完成，时延达标`,
       subtitle: `实际 P90 ${actual} ${unit}，满足目标 ${formatObjectiveSentence({ metric_key: evaluation.metric_key, operator: evaluation.operator || '<=', target_value: target, unit })}。`,
       statusClass: 'success',
     }
   }
   return {
-    title: '视频推理已完成，时延未达标',
+    title: `${taskLabel}已完成，时延未达标`,
     subtitle: evaluation.failure_reason || `实际 P90 ${actual} ${unit}，未达到目标 ${target} ${unit}。`,
     statusClass: 'danger',
   }

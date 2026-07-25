@@ -488,7 +488,7 @@ const detailVideoOutputRows = computed(() =>
     orderDetail.value?.evaluation
   )
 )
-const detailVideoVerdict = computed(() => buildVideoVerdict(orderDetail.value?.evaluation))
+const detailVideoVerdict = computed(() => buildVideoVerdict(orderDetail.value?.evaluation, detailTaskType.value))
 const detailVideoPreview = computed(() =>
   videoPreviewDataUrl(orderDetail.value?.evaluation?.result_metadata)
 )

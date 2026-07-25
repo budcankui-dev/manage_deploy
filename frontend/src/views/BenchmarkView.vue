@@ -992,7 +992,7 @@ const detailParamConsistency = computed(() => {
 const detailVerdict = computed(() => {
   const evaluation = selectedOrderDetail.value?.evaluation
   if (detailTaskType.value === 'high_throughput_matmul') return buildMatmulVerdict(evaluation)
-  if (isVideoLikeTask(detailTaskType.value)) return buildVideoVerdict(evaluation)
+  if (isVideoLikeTask(detailTaskType.value)) return buildVideoVerdict(evaluation, detailTaskType.value)
   if (!evaluation) {
     return {
       title: '等待业务结果',

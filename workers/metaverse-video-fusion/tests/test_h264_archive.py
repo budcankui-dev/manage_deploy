@@ -28,4 +28,3 @@ def test_h264_archive_is_ffprobe_playable(tmp_path):
     encoder.stdin.write(bytes((0, 255, 0)) * 4)
     fusion_core._finish_h264_encoder(encoder)
     fusion_core._assert_h264_archive(archive)
-

@@ -964,7 +964,7 @@ const paramConsistency = computed(() => {
 
 const verdict = computed(() => {
   if (isMatmulTask.value) return buildMatmulVerdict(evaluation.value)
-  if (isVideoTask.value) return buildVideoVerdict(evaluation.value)
+  if (isVideoTask.value) return buildVideoVerdict(evaluation.value, taskType.value)
   if (!evaluation.value) {
     return {
       title: '等待业务结果',
