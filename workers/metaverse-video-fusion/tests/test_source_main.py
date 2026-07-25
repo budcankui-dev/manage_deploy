@@ -37,3 +37,19 @@ def test_external_user_source_can_disable_local_listener(monkeypatch):
 def test_metaverse_source_listens_by_default(monkeypatch):
     monkeypatch.delenv("SOURCE_LISTEN", raising=False)
     assert source_main._source_listen_enabled() is True
+
+
+def test_source_job_declares_http_video_assets(monkeypatch):
+    monkeypatch.setenv("DATA_PROFILE", '{"video0_asset":"cam0.mp4","video1_asset":"cam1.mp4"}')
+
+    job = source_main._build_job()
+
+    assert job["source_assets"] == {
+        "video0": {"name": "cam0.mp4", "path": "/assets/cam0.mp4", "content_type": "video/mp4"},
+        "video1": {"name": "cam1.mp4", "path": "/assets/cam1.mp4", "content_type": "video/mp4"},
+    }
+
+
+def test_source_asset_range_parsing():
+    assert source_main._asset_response_range("bytes=10-19", 100) == (10, 19)
+    assert source_main._asset_response_range("bytes=-10", 100) == (90, 99)

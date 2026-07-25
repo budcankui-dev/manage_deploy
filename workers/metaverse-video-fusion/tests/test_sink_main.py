@@ -80,3 +80,60 @@ def test_compute_requires_minio_credentials(monkeypatch):
 
     with __import__("pytest").raises(RuntimeError, match="MinIO credentials"):
         compute._archive_to_minio({})
+
+
+def test_compute_streams_dual_inputs_from_source(monkeypatch):
+    compute = _load_compute_module()
+    calls: list[tuple] = []
+
+    class FakeResponse:
+        headers = {"content-type": "video/mp4"}
+
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self, *, chunk_size):
+            yield self.payload
+
+    class FakeHttpx:
+        @staticmethod
+        def Timeout(*args, **kwargs):
+            return (args, kwargs)
+
+        @staticmethod
+        def stream(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return FakeResponse(b"video0" if url.endswith("cam0.mp4") else b"video1")
+
+    monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
+    monkeypatch.setenv("PEER_SOURCE_URL", "http://source-node:18821")
+    job = {
+        "video0_asset": "cam0.mp4",
+        "video1_asset": "cam1.mp4",
+        "source_assets": {
+            "video0": {"name": "cam0.mp4", "path": "/assets/cam0.mp4"},
+            "video1": {"name": "cam1.mp4", "path": "/assets/cam1.mp4"},
+        },
+    }
+
+    compute_job, paths = compute._download_source_inputs(job)
+    try:
+        assert [path.read_bytes() for path in paths] == [b"video0", b"video1"]
+        assert compute_job["video0_asset"] == str(paths[0])
+        assert compute_job["video1_asset"] == str(paths[1])
+        assert [call[1] for call in calls] == [
+            "http://source-node:18821/assets/cam0.mp4",
+            "http://source-node:18821/assets/cam1.mp4",
+        ]
+    finally:
+        for path in paths:
+            path.unlink(missing_ok=True)

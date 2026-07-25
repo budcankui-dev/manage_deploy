@@ -5,7 +5,7 @@
 本次以 `manage_deploy` 为底座，新增独立业务 `metaverse_video_fusion`（元宇宙沉浸式交互）。
 
 - 业务链路：`source -> compute -> sink`。
-- `source` 发送双路视频资产描述和融合画像，触发 compute 执行任务。
+- `source` 通过业务面 HTTP 流提供双路输入视频，并发送资产描述和融合画像触发 compute。
 - `compute` 在 GPU 上通过 MODNet 执行前景/背景视频融合。
 - `compute` 将 MP4、JPEG 预览和 JSON 摘要归档至 MinIO；`sink` 只上报 P90 和对象 URI。
 - 不替换、不删除矩阵乘法和低延迟视频 AI 业务的模板、镜像或 worker 源码。
@@ -20,6 +20,7 @@
 | Manager 的运行手册增加输入视频只读挂载 | Manager 可访问 `cam0.mp4` 与 `cam1.mp4` 输入预览；融合结果不再依赖 Manager 本地持久卷。 |
 | `.runtime/` 与各层 `venv*/` 加入忽略规则 | 运行帧缓存和误建虚拟环境属于本机生成物，不能进入 Git。 |
 | 融合结果改为 MinIO 耐久归档 | Compute 必须将 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 `task-results/<instance>/metaverse/`；归档失败会使任务失败，避免出现“成功但没有可播放结果”。 |
+| Source → Compute 输入改为视频字节流 | Source 仅公开白名单 `cam0.mp4`、`cam1.mp4` 的 `/assets/<name>` 流式接口；Compute 必须通过 `PEER_SOURCE_URL` 下载两路 MP4 后融合，不再在 Compute 本地读取同一份输入或传递 Base64 帧序列。 |
 | 前端改为 URI 播放 | 工单详情使用 Manager 的只读代理 URI 播放 MP4，浏览器不接触 MinIO 密钥，也不再加载 Base64 帧序列。 |
 | 补齐 receiver 入口并去除旧仓库地址 | 新增 `receiver_main.py`，并由运行时部署画像提供 endpoint 镜像；前端不再为元宇宙写死旧的 `10.112.244.94:5000` 仓库。 |
 | 三角色节点放置修正 | 模板将 Source 放在 `h1`、Compute 放在 GPU 节点 `compute-2`、Sink 放在 `h2`。 |
@@ -29,8 +30,8 @@
 | 位置 | 作用 |
 | --- | --- |
 | `workers/metaverse-video-fusion/` | 独立 worker、Dockerfile、MODNet 源码、权重和双路视频素材。 |
-| `workers/metaverse-video-fusion/src/source_main.py` | 发送双路视频资产描述和融合画像至 compute。 |
-| `workers/metaverse-video-fusion/src/compute_main.py` | 调用 MODNet 融合内置双路视频，统计 P90 并归档 MinIO 对象。 |
+| `workers/metaverse-video-fusion/src/source_main.py` | 对双路视频提供业务面 HTTP 流，并发送资产描述和融合画像至 compute。 |
+| `workers/metaverse-video-fusion/src/compute_main.py` | 通过 `PEER_SOURCE_URL` 流式拉取双路视频，调用 MODNet 融合、统计 P90 并归档 MinIO 对象。 |
 | `workers/metaverse-video-fusion/src/sink_main.py` | 接收轻量结果（P90、GPU/backend、对象 URI）并向平台上报。 |
 | `workers/metaverse-video-fusion/src/receiver_main.py` | 元宇宙用户端回调接收器入口，供 endpoint 镜像启动。 |
 | `workers/metaverse-video-fusion/assets/` | `cam0.mp4`、`cam1.mp4`、MODNet 权重 `modnet_webcam_portrait_matting.ckpt`。 |
@@ -77,7 +78,7 @@ cd ~/manage_deploy
 backend/venv311/bin/python -m pytest -q workers/metaverse-video-fusion/tests/test_sink_main.py workers/metaverse-video-fusion/tests/test_source_main.py
 ```
 
-上述两组当前结果分别为 `43 passed`、`6 passed`。
+上述两组当前结果分别为 `43 passed`、`9 passed`。另外，已用临时 Source 与 Compute 镜像完成实际业务面 MP4 传输校验：Compute 经 `PEER_SOURCE_URL` 下载两路文件，大小分别为 `1063326` 和 `503502` 字节。
 
 前端构建应在依赖完整时执行：
 

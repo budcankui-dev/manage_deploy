@@ -32,6 +32,16 @@ _TASK_CONFIG = {
         "receiver_command": "python3 /app/src/receiver_main.py",
         "source_env": {"SOURCE_LISTEN": "false", "WAIT_FOR_COMPUTE_READY": "false"},
     },
+    "metaverse_video_fusion": {
+        "label": "元宇宙沉浸式交互任务",
+        "endpoint_image": "metaverse-video-fusion-endpoint",
+        "receiver_port": 9200,
+        "source_command": "python3 /app/src/source_main.py",
+        "receiver_command": "python3 /app/src/receiver_main.py",
+        # Source must remain reachable: Compute streams both MP4 inputs from
+        # its /assets endpoint over the routed business plane.
+        "source_env": {"PORT_SOURCE": "18821"},
+    },
 }
 
 
@@ -206,6 +216,10 @@ async def build_user_access_guide(
         "result_hint": (
             "视频 receiver 页面会自动展示带框推理帧、检测类别、置信度与时延。"
             if task_type == "low_latency_video_pipeline"
-            else "receiver 页面会展示实际有效计算吞吐量、参数和业务目标判定。"
+            else (
+                "元宇宙 Source 会向 Compute 流式提供两路视频；receiver 页面会展示融合结果和业务目标判定。"
+                if task_type == "metaverse_video_fusion"
+                else "receiver 页面会展示实际有效计算吞吐量、参数和业务目标判定。"
+            )
         ),
     }

@@ -16,6 +16,8 @@ GPU_TASK_TYPES = {
     "llm_text_generation",
 }
 
+METAVERSE_SOURCE_PORT = 18821
+
 
 def json_env(value: Any) -> str:
     """Serialize JSON env vars compactly and consistently."""
@@ -90,6 +92,23 @@ def _external_callback_retry_timeout(platform_deployment: dict[str, Any]) -> str
     return str(seconds)
 
 
+def _metaverse_external_source_url(platform_deployment: dict[str, Any]) -> str:
+    """Build the Source asset-service URL for a compute-only metaverse task."""
+    endpoints = platform_deployment.get("external_endpoints")
+    source = endpoints.get("source") if isinstance(endpoints, dict) else None
+    if not isinstance(source, dict):
+        return ""
+    address = str(source.get("business_ipv6") or source.get("business_ip") or "").strip()
+    if not address:
+        return ""
+    try:
+        port = max(1, int(source.get("business_port") or METAVERSE_SOURCE_PORT))
+    except (TypeError, ValueError):
+        port = METAVERSE_SOURCE_PORT
+    host = f"[{address}]" if ":" in address and not address.startswith("[") else address
+    return f"http://{host}:{port}"
+
+
 def build_business_env(
     *,
     order: TaskOrder | None = None,
@@ -155,6 +174,10 @@ def build_business_env(
         env["TASK_ROLE"] = str(task_role)
     if _is_compute_only_external_source(task_role, platform_deployment):
         env.setdefault("PEER_WAIT_TIMEOUT_SEC", _external_input_wait_timeout(platform_deployment))
+        if task_type == "metaverse_video_fusion":
+            source_url = _metaverse_external_source_url(platform_deployment)
+            if source_url:
+                env.setdefault("PEER_SOURCE_URL", source_url)
         if callback_url:
             env.setdefault("CALLBACK_RETRY_TIMEOUT_SEC", _external_callback_retry_timeout(platform_deployment))
             env.setdefault("CALLBACK_RETRY_INTERVAL_SEC", "2")

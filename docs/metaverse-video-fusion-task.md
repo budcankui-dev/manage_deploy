@@ -10,7 +10,7 @@
 - 业务名称：元宇宙沉浸式交互
 - 模态：低时延转发模态
 - DAG：`source -> compute -> sink`
-- 输入：两路固定视频 `cam0.mp4`、`cam1.mp4`；Source 将视频资产描述和 180 帧画像发送到 Compute，Compute 从随镜像内置的素材读取同名输入
+- 输入：两路固定视频 `cam0.mp4`、`cam1.mp4`；Source 在业务面提供 `/assets/cam0.mp4`、`/assets/cam1.mp4` 流，Compute 必须经 `PEER_SOURCE_URL` 下载双路输入后融合
 - 计算：`compute` 节点使用 MODNet 在 GPU 上做视频融合
 - 输出：Compute 将 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 MinIO；Sink 仅上报 `frame_latency_p90_ms`、GPU/backend 摘要和对象 URI
 - 统计口径：前 10 对帧预热，后 170 对帧全部计入 P90 单帧融合时延
@@ -19,8 +19,8 @@
 ## 关键文件
 
 - `workers/metaverse-video-fusion/`：新业务 worker 镜像源码和内置资源
-- `workers/metaverse-video-fusion/src/source_main.py`：发送双路视频资产描述和融合画像；支持与低延迟视频一致的外部终端手动启动参数
-- `workers/metaverse-video-fusion/src/compute_main.py`：运行 MODNet 融合、统计时延并归档 MinIO
+- `workers/metaverse-video-fusion/src/source_main.py`：提供双路视频 HTTP 流并发送融合画像；支持与低延迟视频一致的外部终端启动参数
+- `workers/metaverse-video-fusion/src/compute_main.py`：从 `PEER_SOURCE_URL` 获取双路视频，运行 MODNet 融合、统计时延并归档 MinIO
 - `workers/metaverse-video-fusion/src/sink_main.py`：接收轻量结果摘要并回传 Manager
 - `workers/metaverse-video-fusion/src/receiver_main.py`：用户端回调接收器入口
 - `workers/metaverse-video-fusion/src/fusion_core.py`：MODNet 加载、GPU 检查、融合核心逻辑
@@ -122,6 +122,17 @@ export MINIO_SECRET_KEY=<secret-key>
 ```
 
 工单详情中的播放器请求 `/api/demo-assets/metaverse-results/<task-instance-id>/fusion-result.mp4`。这是 Manager 的同源只读代理，支持 HTTP Range 请求以便浏览器流式播放和拖动进度，也不会把 MinIO 密钥暴露给浏览器。
+
+### Source 到 Compute 的完整视频传输
+
+与低时延视频推理的抽帧处理不同，元宇宙融合会处理两路视频的全部 180 帧。用户端 Source 必须保持 `18821` 监听，Compute 会先发送就绪信号，再通过路由后的 `PEER_SOURCE_URL` 流式下载：
+
+```text
+http://<h1-business-address>:18821/assets/cam0.mp4
+http://<h1-business-address>:18821/assets/cam1.mp4
+```
+
+传输内容是原始压缩 MP4 字节流，不是 Base64/JPEG 帧 JSON；Compute 下载完成后才用 MODNet 解码并融合全部帧。不要给元宇宙 Source 设置 `SOURCE_LISTEN=false`。
 
 ## 5. 业务测评页面运行
 

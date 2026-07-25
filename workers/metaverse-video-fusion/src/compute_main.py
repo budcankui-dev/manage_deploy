@@ -6,9 +6,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urljoin
 
 from fusion_core import run_fusion_profile
 
@@ -74,6 +76,58 @@ def _parse_objective() -> dict:
 
 def _result_meta(result: dict) -> dict:
     return {key: result[key] for key in METADATA_KEYS if key in result}
+
+
+def _download_source_asset(source_url: str, descriptor: dict, label: str) -> Path:
+    """Stream one Source-hosted video to a local temporary file for MODNet."""
+    import httpx
+
+    name = str(descriptor.get("name") or "")
+    relative_path = str(descriptor.get("path") or "")
+    if name not in {"cam0.mp4", "cam1.mp4"} or relative_path != f"/assets/{name}":
+        raise RuntimeError(f"invalid {label} source asset descriptor")
+    url = urljoin(f"{source_url.rstrip('/')}/", relative_path.lstrip("/"))
+    fd, raw_path = tempfile.mkstemp(prefix=f"metaverse-{label}-", suffix=".mp4")
+    path = Path(raw_path)
+    try:
+        with os.fdopen(fd, "wb") as output, httpx.stream(
+            "GET", url, timeout=httpx.Timeout(180.0, connect=10.0), follow_redirects=False,
+        ) as response:
+            response.raise_for_status()
+            if "video/mp4" not in response.headers.get("content-type", "").lower():
+                raise RuntimeError(f"{label} source asset has an unexpected content type")
+            for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                output.write(chunk)
+        if path.stat().st_size == 0:
+            raise RuntimeError(f"{label} source asset is empty")
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _download_source_inputs(job: dict) -> tuple[dict, list[Path]]:
+    """Replace source descriptors with locally streamed files for the compute core."""
+    source_url = get_peer_url_by_name("source")
+    if not source_url:
+        raise RuntimeError("metaverse compute requires PEER_SOURCE_URL for dual-video input transfer")
+    descriptors = job.get("source_assets")
+    if not isinstance(descriptors, dict):
+        raise RuntimeError("metaverse source did not provide dual-video asset descriptors")
+    downloaded: list[Path] = []
+    try:
+        video0 = _download_source_asset(source_url, dict(descriptors.get("video0") or {}), "video0")
+        downloaded.append(video0)
+        video1 = _download_source_asset(source_url, dict(descriptors.get("video1") or {}), "video1")
+        downloaded.append(video1)
+        compute_job = dict(job)
+        compute_job["video0_asset"] = str(video0)
+        compute_job["video1_asset"] = str(video1)
+        return compute_job, downloaded
+    except Exception:
+        for path in downloaded:
+            path.unlink(missing_ok=True)
+        raise
 
 
 def _archive_to_minio(result: dict) -> dict:
@@ -242,7 +296,16 @@ def main() -> int:
         flush=True,
     )
 
-    result = _archive_to_minio(run_fusion_profile(job))
+    compute_job, downloaded_inputs = _download_source_inputs(job)
+    try:
+        fusion_result = run_fusion_profile(compute_job)
+        # Persist logical Source asset names, never transient Compute paths.
+        fusion_result["video0_asset"] = job["video0_asset"]
+        fusion_result["video1_asset"] = job["video1_asset"]
+        result = _archive_to_minio(fusion_result)
+    finally:
+        for path in downloaded_inputs:
+            path.unlink(missing_ok=True)
     print(
         f"METAVERSE_COMPUTE_DONE p90_ms={result['frame_latency_p90_ms']:.2f} "
         f"frames={result['measured_frames']}",

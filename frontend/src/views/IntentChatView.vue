@@ -731,10 +731,14 @@ const sourceCommand = computed(() => {
     '# 节点分配完成后，在工单详情中复制真实“计算服务接入地址”再启动源端',
     'docker run --rm --network host \\',
     '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
-    '  -e SOURCE_LISTEN=false \\',
   ]
-  if (['low_latency_video_pipeline', 'metaverse_video_fusion'].includes(draft.value?.task_type)) {
+  if (draft.value?.task_type === 'low_latency_video_pipeline') {
+    lines.push('  -e SOURCE_LISTEN=false \\')
     lines.push('  -e WAIT_FOR_COMPUTE_READY=false \\')
+  } else if (draft.value?.task_type === 'metaverse_video_fusion') {
+    lines.push('  -e PORT_SOURCE=18821 \\')
+  } else {
+    lines.push('  -e SOURCE_LISTEN=false \\')
   }
   lines.push(
     `  -e DATA_PROFILE='${profile}' \\`,

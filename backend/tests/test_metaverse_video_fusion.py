@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from api.business_tasks import _apply_video_gpu_success_guard, _result_matches_baseline_profile
 from schemas.task import BusinessObjectiveEvaluationResult
 from services.baseline_runner import BENCHMARK_PROFILES, _validate_benchmark_result
+from services.business_env import build_business_env
 from services.intent_parser import parse_intent
 from services.llm_intent_parser import _raw_to_parse_result
 from services.modality_catalog import default_objective_for_task_type, modality_for_task_type
@@ -106,3 +108,26 @@ def test_metaverse_profile_match_and_gpu_guard():
     _apply_video_gpu_success_guard(evaluation, {"actual_backend": "torch_cpu", "device": "cpu"})
     assert evaluation.business_success is False
     assert "GPU+MODNet" in evaluation.failure_reason
+
+
+def test_compute_only_metaverse_receives_external_source_asset_url():
+    order = SimpleNamespace(
+        id="metaverse-order",
+        runtime_config={
+            "platform_deployment": {
+                "mode": "user_access_demo",
+                "deployable_roles": ["compute"],
+                "external_endpoints": {
+                    "source": {"business_ipv6": "3012:9::11", "business_port": 18821},
+                },
+            }
+        },
+    )
+
+    env = build_business_env(
+        order=order,
+        business_task={"task_type": "metaverse_video_fusion"},
+        task_role="compute",
+    )
+
+    assert env["PEER_SOURCE_URL"] == "http://[3012:9::11]:18821"
