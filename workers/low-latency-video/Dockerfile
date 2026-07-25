@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY low-latency-video/assets/wheels /tmp/wheels
-RUN pip install --no-cache-dir \
+RUN pip --retries 10 --timeout 120 install --no-cache-dir \
     numpy==1.26.4 \
     opencv-python-headless==4.10.0.84 \
     onnxruntime-gpu==1.18.0 \
