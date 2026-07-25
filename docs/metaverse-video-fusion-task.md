@@ -25,7 +25,7 @@
 - `workers/metaverse-video-fusion/src/receiver_main.py`：用户端回调接收器入口
 - `workers/metaverse-video-fusion/src/fusion_core.py`：MODNet 加载、GPU 检查、融合核心逻辑
 - `backend/scripts/rebuild_metaverse_fusion_template.py`：注册任务模板和业务目录
-- `scripts/build_workers.sh`：已支持 `WORKER_KIND=metaverse_fusion`
+- `scripts/build_workers.sh`：已支持 `WORKER_KIND=metaverse-fusion` 与 `metaverse-fusion-endpoint`
 
 ## 1. 构建 worker 镜像
 
@@ -36,9 +36,27 @@ WORKER_KIND=metaverse-fusion \
 WORKER_IMAGE=manage-deploy/metaverse-video-fusion \
 WORKER_TAG=dev \
 ./scripts/build_workers.sh
+
+WORKER_KIND=metaverse-fusion-endpoint \
+WORKER_IMAGE=manage-deploy/metaverse-video-fusion-endpoint \
+WORKER_TAG=dev \
+./scripts/build_workers.sh
 ```
 
 如果首次构建，Docker 需要下载 PyTorch CUDA 基础镜像，时间会比较长。
+
+验收构建应显式使用 Linux AMD64 和不可变 tag；维护方在管理网自行增加
+`WORKER_PUSH=1` 与私有仓库镜像名，开发分支不直接推送验收仓库：
+
+```bash
+TAG="metaverse-$(git rev-parse --short HEAD)"
+WORKER_KIND=metaverse-fusion WORKER_IMAGE=manage-deploy/metaverse-video-fusion \
+  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 ./scripts/build_workers.sh
+WORKER_KIND=metaverse-fusion-endpoint WORKER_IMAGE=manage-deploy/metaverse-video-fusion-endpoint \
+  WORKER_TAG="$TAG" WORKER_PLATFORM=linux/amd64 ./scripts/build_workers.sh
+docker image inspect "manage-deploy/metaverse-video-fusion:$TAG" \
+  "manage-deploy/metaverse-video-fusion-endpoint:$TAG" --format '{{.Architecture}}'
+```
 
 ## 2. GPU 单容器自检
 
