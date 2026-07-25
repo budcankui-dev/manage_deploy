@@ -92,7 +92,7 @@ docker compose -f docker-compose.agents.yml up -d
 
 ## API 端点
 
-当前系统架构见 [`docs/architecture.md`](docs/architecture.md)，测试验收见 [`docs/testing.md`](docs/testing.md)，后续计划见 [`docs/roadmap.md`](docs/roadmap.md)。
+当前系统架构见 [`docs/architecture/overview.md`](docs/architecture/overview.md)，测试验收见 [`docs/testing/README.md`](docs/testing/README.md)，后续计划见 [`docs/project/roadmap.md`](docs/project/roadmap.md)。
 
 ### 部署编排
 - `POST /api/templates` - 创建任务模板

@@ -56,6 +56,7 @@
 ```bash
 netstat -rn -f inet | egrep '172\.16|10\.88|default' || true
 netstat -rn -f inet6 | egrep '3012|3028|3029|fd88|default' || true
+route -n get 172.16.0.254 || true
 ```
 
 预期：
@@ -63,6 +64,32 @@ netstat -rn -f inet6 | egrep '3012|3028|3029|fd88|default' || true
 - 直连管理网：本机有到 `172.16.0.0/24` 的物理网卡路由。
 - WireGuard：有 `10.88.0.2` / `fd88:88:88::2`，并有 `172.16.0.0/24`、`3012::/16`、`3028::/16`、`3029::/16` 路由。
 - 只有校园网：只能访问 `10.112`，不能代表验收管理面和数据面正常。
+
+WireGuard 客户端快速验证：
+
+```bash
+ifconfig | grep -E "10\.88\.0\.2|fd88:88:88::2"
+curl -sS --connect-timeout 5 http://172.16.0.254:8181/docs >/dev/null
+curl -sS --connect-timeout 5 http://172.16.0.254:5000/v2/
+curl -sS --connect-timeout 5 http://172.16.0.101:8001/health
+ping6 -c 2 3012:9::9e69:d3ff:fe68:d3d
+```
+
+如果本机有 `10.88.0.2`，且 `route -n get 172.16.0.254` 走 WireGuard 接口，但只能访问 compute-1 自己、不能访问总控 `172.16.0.254`，优先检查 compute-1 的 IPv4 转发防火墙。Docker 可能把 `FORWARD` 默认策略设为 `DROP`，需要 `wg-lab` 到管理网的最小放行规则：
+
+```bash
+ssh -p 2345 chengyubin@10.112.38.25 \
+  'sudo iptables -L FORWARD -n -v --line-numbers; sudo iptables -t nat -L POSTROUTING -n -v --line-numbers'
+```
+
+`wg-lab.conf` 应包含：
+
+```bash
+PostUp = iptables -C FORWARD -i wg-lab -o enp7s0 -s 10.88.0.0/24 -d 172.16.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i wg-lab -o enp7s0 -s 10.88.0.0/24 -d 172.16.0.0/24 -j ACCEPT
+PostUp = iptables -C FORWARD -i enp7s0 -o wg-lab -s 172.16.0.0/24 -d 10.88.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -i enp7s0 -o wg-lab -s 172.16.0.0/24 -d 10.88.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -D FORWARD -i wg-lab -o enp7s0 -s 10.88.0.0/24 -d 172.16.0.0/24 -j ACCEPT 2>/dev/null || true
+PostDown = iptables -D FORWARD -i enp7s0 -o wg-lab -s 172.16.0.0/24 -d 10.88.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+```
 
 ### 3.2 管理网两两互通
 
@@ -238,6 +265,13 @@ ssh <node> 'hostname; ip -br addr; ip -6 addr; ip -6 route'
 - 带 `deprecated` 的地址。
 - 只有本机可见、其它数据面源 ping 不通的地址。
 
+数据面 IPv6 主地址选择原则：
+
+- 优先选择重启后仍存在、`valid_lft/preferred_lft` 稳定、没有 `temporary` / `deprecated` 标记的地址。
+- 如果同一网卡上有多条全局 IPv6，优先选“不变的那条”，通常表现为后缀与网卡 MAC/EUI-64 相关，或多次刷新后地址不变。
+- `temporary dynamic` 只用于系统出站隐私地址，不写入 `nodes.business_ipv6`。
+- 新地址必须经过多源 ping 和 16x16 数据面矩阵验证后，才允许从候选升级为主地址。
+
 ### 4.2 多源验证新地址
 
 至少从 `compute-2`、`compute-3` 和若干 `h` 节点验证新地址。示例：
@@ -396,7 +430,57 @@ docker ps --format "{{.Names}} {{.Status}} {{.Image}} {{.Ports}}"
 
 如果 SSH 端口能连但 session 卡住，应交给节点维护同学检查 compute-1 本机负载、sshd、PAM、磁盘、Docker/firewalld 状态。不要从其它节点给 compute-1 临时加路由。
 
-### 5.2 Node Agent 不通
+### 5.2 compute 管理网 IPv4 丢失
+
+现象：
+
+- 节点可通过校园网 SSH 登录，例如 `10.112.*` 可达。
+- 管理网卡没有 `172.16.0.xxx/24`。
+- `ip addr add 172.16.0.xxx/24 dev <iface>` 短时间有效，但过一会儿被 NetworkManager 清掉。
+
+判断网卡和连接名：
+
+```bash
+ip -br addr
+nmcli -t -f NAME,DEVICE,TYPE,STATE connection show --active
+nmcli connection show
+```
+
+compute-1 当前管理网恢复命令：
+
+```bash
+sudo nmcli connection modify "有线连接 1" \
+  connection.autoconnect yes \
+  ipv4.method manual \
+  ipv4.addresses 172.16.0.101/24 \
+  ipv4.gateway "" \
+  ipv4.never-default yes
+sudo nmcli connection up "有线连接 1"
+```
+
+说明：
+
+- `ipv4.never-default yes` 是为了避免管理网连接抢走校园网默认路由。
+- 不要只执行 `sudo ip addr add 172.16.0.101/24 dev enp7s0`，该地址会被 NetworkManager 重新激活连接时清掉。
+- 其它 compute 节点按同样方法替换连接名、网卡名和 IP，例如 compute-3 的管理网卡是 `enx00e04c36b4e7`，IP 是 `172.16.0.103/24`。
+
+恢复后必须验证：
+
+```bash
+ip -br addr show <iface>
+ip route get 172.16.0.254
+curl -sS --connect-timeout 3 http://<本节点172.16地址>:8001/health
+python3 ops/network/acceptance/check_connectivity.py \
+  --plane management \
+  --matrix \
+  --source-scope plane \
+  --source-profile current \
+  --password-file ops/secrets/terminal-credentials.local.md \
+  --timeout 1 \
+  --ssh-connect-timeout 5
+```
+
+### 5.3 Node Agent 不通
 
 现象：
 
@@ -410,7 +494,7 @@ curl http://172.16.0.xxx:8001/health
 - 再确认 Docker 是否正常、`manage-node-agent` 容器是否存在。
 - 需要恢复时按《标准化部署与运维流程》的 Node Agent 标准化更新章节执行。
 
-### 5.3 数据面 IPv6 变化
+### 5.4 数据面 IPv6 变化
 
 处理顺序固定：
 
@@ -422,7 +506,7 @@ curl http://172.16.0.xxx:8001/health
 6. `register_topology_nodes.py` 写入远端。
 7. 复测数据面矩阵和业务 E2E。
 
-### 5.4 Portainer 看不到节点
+### 5.5 Portainer 看不到节点
 
 `9001` 不通只影响辅助观察，不等同于系统部署不可用。系统部署以 Node Agent `8001` 为准。
 

@@ -1,7 +1,7 @@
 # 业务目标成功率与路由结果接入设计
 
 > 历史设计归档：本文用于解释业务目标成功率口径，不作为当前路由系统接口规范。
-> 当前唯一对接规范见 [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)。
+> 当前唯一对接规范见 [routing/integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing/integration-guide.md)。
 > 当前 placement 只接受 `task_node_id`、`topology_node_id`、`gpu_device`。
 
 本文记录“业务目标成功率”的统一定义、过程性指标方案、历史基准能力判定，以及外部路由系统回写 placements 和 GPU 分配结果后的部署衔接方式。当前矩阵乘法主链路已接入 `/benchmark` 验收页面；视频 AI 推理作为扩展业务已具备轻量 worker、baseline fallback、镜像构建入口和页面工单创建能力；模型训练/文本生成保持指标契约预留。
@@ -202,7 +202,7 @@ AND 实测过程性指标达到该节点、该业务 profile 的历史基准阈�
 ## 外部路由结果接收接口
 
 > 注：本节是早期设计说明。当前实际对接以
-> [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)
+> [routing/integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing/integration-guide.md)
 > 为准；演示验收阶段的路由接口不加 token，路由系统通过工单 ID 回写结果。
 
 当前推荐接口：

@@ -195,7 +195,7 @@ actual_latency <= baseline_latency_p90_ms * 1.5
 
 当前 `/benchmark` 页面优先接收外部路由系统回写结果；系统设置页可切换开发调试路由流程，用于路由系统联调前验证部署与评价闭环。正式验收留档应明确记录所用路由模式，业务目标成功率本身不等同于证明路由算法全局最优。
 
-外部路由系统联调的具体接口、字段格式和最短接入路径见 [routing-system-integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing-system-integration-guide.md)。
+当前外部路由系统联调的具体接口、字段格式和最短接入路径见 [routing/integration-guide.md](/Users/yanjia/codes/manage_deploy/docs/routing/integration-guide.md)。
 
 ## 真实拓扑执行要求
 

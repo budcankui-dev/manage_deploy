@@ -7,9 +7,9 @@
 ## 输入
 
 - 用户的新需求或问题
-- `docs/architecture.md`
-- `docs/roadmap.md`
-- `docs/business-objective-success-rate-design.md`
+- `docs/architecture/overview.md`
+- `docs/project/roadmap.md`
+- `docs/testing/acceptance/evaluation-plan-formal.md`
 
 ## 输出
 

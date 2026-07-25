@@ -2,8 +2,10 @@
 
 正式交接材料只保留两份：
 
-- 讲解版 PPT：[外部路由系统对接讲解.pptx](presentations/routing-integration/外部路由系统对接讲解.pptx)
-- 接口说明本文档：[routing-system-integration-guide.md](routing-system-integration-guide.md)
+- 讲解版 PPT：[外部路由系统对接讲解.pptx](../presentations/routing-integration/外部路由系统对接讲解.pptx)
+- 接口说明本文档：[integration-guide.md](integration-guide.md)
+
+路由服务开发可先阅读 [课题五路由接口速查](课题五-路由接口速查.md)，其中包含 HTTP 基线查询接口和低时延转发的节点/GPU 选择规则；本文保留完整数据模型、SQL 参考和异常处理。
 
 本文档分两部分：
 

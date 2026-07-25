@@ -17,7 +17,7 @@
 - **TaskTemplate**：DAG 蓝图，包含模板节点、边、镜像、命令、端口、健康检查和资源限制。
 - **TaskInstance**：模板的一次具体运行，实例节点会绑定到实际 Node。
 - **TaskOrder**：业务层工单，关联业务输入、路由结果和物化后的实例。
-- **BusinessObjectiveEvaluation**：业务目标评估结果。当前统一口径见 `docs/business-objective-success-rate-design.md`，按业务类型采集过程性指标并与节点历史基准比较。
+- **BusinessObjectiveEvaluation**：业务目标评估结果。当前验收口径见 `docs/testing/acceptance/evaluation-plan-formal.md`，按业务类型采集过程性指标并与节点历史基准比较。
 - **Conversation / IntentDraft / RoutingRequest**：普通用户从自然语言到部署请求的前置工作流。
 - **Endpoint Deployment Policy**：source / sink 是否由平台部署容器由工单 `runtime_config.platform_deployment.deployable_roles` 决定。测评模式可部署 source / compute / sink 三类容器；真实用户接入模式默认只部署 compute，source / sink 是外部端点。详见 `docs/端点部署与用户接入模型.md`。
 
@@ -81,7 +81,7 @@ DAG 边在平台层主要表达容器生命周期依赖：谁先启动、谁等�
 
 | 业务 | `task_type` | 模态 | 指标 | 说明 |
 |------|-------------|------|------|------|
-| 矩阵乘法计算任务 | `high_throughput_matmul` | 高通量计算模态 | `effective_gflops` | source / compute / sink 使用同一镜像，通过 HTTP 传递 job/result，sink 上报有效计算吞吐量。详见 `docs/scientific-matmul-demo.md`。 |
+| 矩阵乘法计算任务 | `high_throughput_matmul` | 高通量计算模态 | `effective_gflops` | source / compute / sink 使用同一镜像，通过 HTTP 传递 job/result，sink 上报有效计算吞吐量。验收步骤见 `docs/testing/acceptance/evaluation-plan-formal.md`。 |
 | 视频AI推理任务 | `low_latency_video_pipeline` | 低时延转发模态 | `frame_latency_p90_ms` | source 读取固定测试视频抽帧，compute 运行 YOLO 推理并生成检测框，sink 上报 P90 帧时延和带框预览图。 |
 | 端到端传输路由任务 | `terminal_route_transfer` | 低时延转发模态 | `service_success_rate` | 只生成 source -> sink 路由 DAG，外部路由系统建立链路；平台不创建 Docker 实例。 |
 

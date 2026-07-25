@@ -37,19 +37,19 @@
 
 步骤 1-3 截图：矩阵乘法任务基线和固定测评参数。
 
-![矩阵乘法任务基线和固定测评参数](assets/evaluation-plan/matmul-benchmark-setup.png)
+![矩阵乘法任务基线和固定测评参数](../../assets/evaluation-plan/matmul-benchmark-setup.png)
 
 步骤 8 截图：矩阵乘法任务单工单指标结果表。
 
-![矩阵乘法任务单工单指标结果表](assets/evaluation-plan/matmul-benchmark-result.png)
+![矩阵乘法任务单工单指标结果表](../../assets/evaluation-plan/matmul-benchmark-result.png)
 
 步骤 9 截图：矩阵乘法任务业务目标成功率汇总，30/30 达标。
 
-![矩阵乘法任务业务目标成功率汇总](assets/evaluation-plan/matmul-benchmark-evidence-table.png)
+![矩阵乘法任务业务目标成功率汇总](../../assets/evaluation-plan/matmul-benchmark-evidence-table.png)
 
 步骤 10 截图：矩阵乘法工单详情展示业务输入、路由放置、GPU 分配和计算结果。
 
-![矩阵乘法工单详情](assets/evaluation-plan/matmul-order-detail-overview.png)
+![矩阵乘法工单详情](../../assets/evaluation-plan/matmul-order-detail-overview.png)
 
 ### 1.2 视频AI推理业务目标成功率测试
 
@@ -71,19 +71,19 @@
 
 步骤 1-3 截图：视频AI推理任务基线和固定测评参数。
 
-![视频AI推理任务基线和固定测评参数](assets/evaluation-plan/video-benchmark-setup.png)
+![视频AI推理任务基线和固定测评参数](../../assets/evaluation-plan/video-benchmark-setup.png)
 
 步骤 9 截图：视频AI推理任务单工单帧时延结果表。
 
-![视频AI推理任务单工单帧时延结果表](assets/evaluation-plan/video-benchmark-result.png)
+![视频AI推理任务单工单帧时延结果表](../../assets/evaluation-plan/video-benchmark-result.png)
 
 步骤 10 截图：视频AI推理任务业务目标成功率汇总，正式留档需使用不少于 30 个可评价工单的验收轮次。
 
-![视频AI推理任务业务目标成功率汇总](assets/evaluation-plan/video-benchmark-evidence-table.png)
+![视频AI推理任务业务目标成功率汇总](../../assets/evaluation-plan/video-benchmark-evidence-table.png)
 
 步骤 11 截图：视频AI推理工单详情展示 YOLO 分类画框、中文标签、GPU 分配和时延结果。
 
-![视频AI推理工单详情带框预览](assets/evaluation-plan/video-order-detail-result-preview.png)
+![视频AI推理工单详情带框预览](../../assets/evaluation-plan/video-order-detail-result-preview.png)
 
 ### 1.3 智算意图驱动路由意图解析功能测试
 
@@ -101,7 +101,7 @@
 
 步骤 1-5 截图：用户对话提交业务需求后，页面展示结构化意图参数并生成工单。
 
-![用户意图对话与参数解析结果](assets/evaluation-plan/intent-chat-page.png)
+![用户意图对话与参数解析结果](../../assets/evaluation-plan/intent-chat-page.png)
 
 ### 1.4 用户意图解析参数提取准确率测试
 
@@ -121,11 +121,11 @@
 
 步骤 3-7 截图：意图评测页面展示固定数据集规模、模型评测入口、评测编号和准确率结果。
 
-![意图解析参数提取准确率评测看板](assets/evaluation-plan/intent-evaluation-dashboard.png)
+![意图解析参数提取准确率评测看板](../../assets/evaluation-plan/intent-evaluation-dashboard.png)
 
 步骤 8-9 截图：评测样本列表支持查看输入、解析结果、期望结果和字段判定。
 
-![意图解析评测样本明细](assets/evaluation-plan/intent-evaluation-samples.png)
+![意图解析评测样本明细](../../assets/evaluation-plan/intent-evaluation-samples.png)
 
 ### 2.5 意图解析评测自动化实现
 

@@ -1,6 +1,6 @@
 # Work Item: 意图解析 → 路由 → 部署闭环
 
-> 历史记录：本文记录 2026-05 至 2026-06 早期闭环开发过程，不作为当前路由系统对接规范。当前唯一对接规范见 `docs/routing-system-integration-guide.md`；当前 DAG 生成入口为 `backend/services/routing_payload_builder.py`。
+> 历史记录：本文记录 2026-05 至 2026-06 早期闭环开发过程，不作为当前路由系统对接规范。当前唯一对接规范见 `docs/routing/integration-guide.md`；当前 DAG 生成入口为 `backend/services/routing_payload_builder.py`。
 
 Status: in_progress
 Owner Agent: Coder
@@ -36,7 +36,7 @@ Last Updated: 2026-05-28
 - `backend/services/order_materialize.py` — 物化逻辑
 - `backend/services/routing_payload_builder.py` — 当前 DAG 生成
 - `backend/services/dag_executor.py` — 容器部署
-- `docs/business-objective-success-rate-design.md` — 成功率设计
+- `docs/archive/design/business-objective-success-rate-design.md` — 历史成功率设计
 
 ## Acceptance Criteria
 
@@ -141,7 +141,7 @@ scheduler.add_job(_run_start, trigger=DateTrigger(run_date=run_time), id=job_id,
 
 `GET /api/orders/{id}` 的 `evaluation` 字段为 null，`GET /api/business-tasks/results/{instance_id}` 返回 404。
 
-实现参考 `docs/business-objective-success-rate-design.md`：
+历史实现参考 `docs/archive/design/business-objective-success-rate-design.md`：
 - 任务停止后采集 `compute_latency_ms` 指标
 - 写入 `business_objective_evaluations` 表
 - `GET /api/orders/{id}` 的 `evaluation` 字段应有值

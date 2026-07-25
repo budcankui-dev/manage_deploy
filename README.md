@@ -10,18 +10,18 @@
 
 ## 文档入口
 
-- [系统架构](docs/architecture.md)
-- [测试与验收](docs/testing.md)
-- [科学计算矩阵乘法演示](docs/scientific-matmul-demo.md)
-- [业务目标成功率测评方案](docs/benchmark-test-plan.md)
-- [新业务接入交接说明](docs/新业务接入交接说明.md)
+- [文档导航](docs/README.md)
+- [系统架构](docs/architecture/overview.md)
+- [测试与验收](docs/testing/README.md)
+- [正式验收测试方案](docs/testing/acceptance/evaluation-plan-formal.md)
+- [新业务接入交接说明](docs/business/新业务接入交接说明.md)
 - [测试部署机器清单](docs/deployment/测试部署机器清单.md)
 - [标准化部署与运维流程](docs/deployment/标准化部署与运维流程.md)
 - [管理节点跳板与网络迁移方案](docs/deployment/管理节点跳板与网络迁移方案.md)
 - [终端拓扑节点扩展接入说明](docs/deployment/终端拓扑节点扩展接入说明.md)
-- [Roadmap](docs/roadmap.md)
+- [Roadmap](docs/project/roadmap.md)
 - [Agent 协作手册](docs/agents/README.md)
-- [当前 Work Items](docs/work-items/active/matmul-e2e-stabilization.md)
+- [当前 Work Items](docs/work-items/active/e2e-benchmark-completion.md)
 
 ## 快速启动
 
@@ -90,7 +90,7 @@ cd frontend && npm run test:e2e
 git diff --check
 ```
 
-更多测试命令见 [docs/testing.md](docs/testing.md)。
+更多测试命令见 [docs/testing/README.md](docs/testing/README.md)。
 
 ## 项目结构
 

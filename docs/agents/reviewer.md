@@ -18,7 +18,7 @@
 - DB 字段是否同步了 model + _ensure_column + schema
 - 时区是否统一 Asia/Shanghai（不允许 UTC/utcnow）
 - LLM 提示词是否有自由发挥空间（应严格约束）
-- DAG 生成是否与 `docs/business-objective-success-rate-design.md` 一致
+- DAG 生成是否与 `docs/testing/acceptance/evaluation-plan-formal.md` 的验收口径一致
 - 是否引入安全漏洞（SQL 注入、未校验输入）
 - 前端是否 `npm run build` 通过
 

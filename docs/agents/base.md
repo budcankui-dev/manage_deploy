@@ -6,15 +6,15 @@
 
 开始前阅读：
 
-- `docs/architecture.md`
-- `docs/roadmap.md`
-- `docs/business-objective-success-rate-design.md`
+- `docs/architecture/overview.md`
+- `docs/project/roadmap.md`
+- `docs/testing/acceptance/evaluation-plan-formal.md`
 - 当前 work item：`docs/work-items/active/*.md`
 
 按任务需要阅读：
 
-- `docs/routing-system-integration-guide.md`
-- `docs/worker-data-io-design.md`
+- `docs/routing/integration-guide.md`
+- `docs/architecture/端点部署与用户接入模型.md`
 - `docs/deployment/测试部署机器清单.md`
 
 ## 项目现状

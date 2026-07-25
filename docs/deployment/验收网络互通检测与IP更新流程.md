@@ -82,8 +82,9 @@ h13       ok=16 fail=0
 
 - 管理面从 3 台计算节点看是全通的。
 - 数据面从 16 个数据面节点作为源看，当前清单里的 16 个数据面目标两两可达。
-- compute-2 主数据面地址已从过期的 `3012:9::319a:124f:5a8:51e4` 更新为 `3012:9::fc36:9ea:22bf:a73`；旧地址仅保留为候选追溯。
-- 16 个主数据面地址均避开 `temporary`、`deprecated` 和 `fe80::/64`。当前主地址多为 `dynamic mngtmpaddr` 且 `valid_lft/preferred_lft forever`；compute-1/2 另有 temporary 地址，但不写入平台主地址。
+- compute-1 主数据面地址已更新为稳定地址 `3012:3::9e69:d3ff:fe68:773`；旧地址仅保留为候选追溯。
+- compute-2 主数据面地址已更新为稳定地址 `3012:9::9e69:d3ff:fe68:d3d`；旧地址仅保留为候选追溯。
+- 16 个主数据面地址均避开 `temporary`、`deprecated` 和 `fe80::/64`。如果同一网卡有多条全局 IPv6，优先选择重启后仍存在、后缀稳定、有效期稳定且多源可达的“不变地址”，不把 `temporary dynamic` 写入平台主地址。
 
 ## 全量两两互通检测
 
@@ -193,6 +194,14 @@ ip -6 addr show dev <数据面网卡>
 - `temporary dynamic`
 - `mngtmpaddr`
 - 新出现但尚未完成多源可达性验证的地址。
+
+可以优先作为主地址的特征：
+
+- 重启后仍存在。
+- 没有 `temporary` / `deprecated` 标记。
+- `valid_lft/preferred_lft` 稳定，不是短生命周期隐私地址。
+- 从 `compute-1~3` 和终端节点多源 ping 均可达。
+- 同一接口出现多条地址时，优先选后缀稳定的那条；旧地址保留到候选列表用于追溯。
 
 推荐流程：
 

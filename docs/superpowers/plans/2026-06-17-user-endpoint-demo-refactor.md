@@ -29,8 +29,8 @@
 - `frontend/src/components/OrderDetailPanel.vue` (modify): A->B->C data-plane display, callback status, routing decision card.
 - `frontend/src/views/BusinessTasksHubView.vue` / `frontend/src/views/BenchmarkView.vue` (modify only if shared panel props require updates): preserve detail consistency.
 - Intent dataset generation files (locate during task): add source/destination data-plane IP and port examples, route-only examples.
-- `docs/routing-system-integration-guide.md` (modify): update frozen route integration doc after implementation.
-- `docs/智联计算系统使用说明书.md` and `docs/testing.md` (modify lightly): receiver startup and route-only usage notes.
+- `docs/routing/integration-guide.md` (modify): update frozen route integration doc after implementation.
+- `docs/guides/智联计算系统使用说明书.md` and `docs/testing/README.md` (modify lightly): receiver startup and route-only usage notes.
 
 ---
 
@@ -292,9 +292,9 @@ Run low concurrency with retries/resume. Save report path and result summary.
 ### Task 9: Documentation and Final Verification
 
 **Files:**
-- Modify: `docs/routing-system-integration-guide.md`
+- Modify: `docs/routing/integration-guide.md`
 - Modify: `docs/智联计算系统使用说明书.md`
-- Modify lightly: `docs/testing.md` or `docs/benchmark-test-plan.md` if needed.
+- Modify lightly: `docs/testing/README.md` or `docs/testing/acceptance/evaluation-plan-formal.md` if needed.
 
 - [ ] **Step 1: Update routing integration doc**
 

@@ -94,7 +94,7 @@ OK 用户端手动容器演示 E2E passed
 - 两类任务业务目标成功率均不低于 90%，即至少 27 个任务达标。
 - 运行完成后系统自动停止并删除本轮测评容器实例，保留工单、路由、指标和结果证据。
 
-页面验收步骤详见 [benchmark-test-plan.md](benchmark-test-plan.md)。
+页面验收步骤详见 [正式验收测试方案](../testing/acceptance/evaluation-plan-formal.md)。
 
 ## 6. 常见失败排查
 

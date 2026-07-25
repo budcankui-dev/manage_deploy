@@ -2,7 +2,7 @@
 
 对应演示业务：科学计算矩阵乘法，内部 `task_type` 为 `high_throughput_matmul`。
 
-完整演示说明见 [`docs/scientific-matmul-demo.md`](../../docs/scientific-matmul-demo.md)。
+当前验收操作说明见 [`docs/testing/README.md`](../../docs/testing/README.md)，历史矩阵演示设计保留在 [`docs/archive/demos/scientific-matmul-demo.md`](../../docs/archive/demos/scientific-matmul-demo.md)。
 
 ## 构建
 
