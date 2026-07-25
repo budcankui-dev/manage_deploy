@@ -407,6 +407,18 @@ export function videoPreviewDataUrl(resultMetadata) {
   return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
 }
 
+export function selectVideoEvidenceFrames(frames, limit = 4, random = Math.random) {
+  const candidates = Array.isArray(frames)
+    ? frames.filter(item => typeof item?.uri === 'string' && item.uri.startsWith('s3://'))
+    : []
+  const selected = [...candidates]
+  for (let index = selected.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1))
+    ;[selected[index], selected[swapIndex]] = [selected[swapIndex], selected[index]]
+  }
+  return selected.slice(0, Math.max(0, limit))
+}
+
 export function videoPreviewFrames(resultMetadata) {
   const meta = resultMetadata || {}
   const frames = Array.isArray(meta.preview_frames) ? meta.preview_frames : []

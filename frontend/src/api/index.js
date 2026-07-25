@@ -165,6 +165,10 @@ export const businessApi = {
   summary: (params = {}) => api.get('/business-tasks/summary', { params }),
   evaluation: (instanceId, config = {}) => api.get(`/business-tasks/${instanceId}/evaluation`, config),
   results: (instanceId, config = {}) => api.get(`/business-tasks/${instanceId}/results`, config),
+  resultObjectContent: (instanceId, objectId, config = {}) => api.get(
+    `/business-tasks/${instanceId}/results/${objectId}/content`,
+    { responseType: 'blob', ...config }
+  ),
   catalog: () => api.get('/business-template-catalog'),
   createCatalog: (data) => api.post('/business-template-catalog', data)
 }

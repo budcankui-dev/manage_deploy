@@ -2,7 +2,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,31 @@ UUID_PATTERN = re.compile(
 
 def _is_uuid(value: str) -> bool:
     return bool(UUID_PATTERN.match(value))
+
+
+def _read_result_object_bytes(uri: str) -> bytes:
+    """Read a task-result object using Manager credentials, never browser credentials."""
+    match = re.fullmatch(r"s3://([^/]+)/(.+)", uri)
+    if not match:
+        raise ValueError(f"Unsupported result object URI: {uri}")
+    if not settings.minio_access_key or not settings.minio_secret_key:
+        raise RuntimeError("MinIO credentials are not configured")
+
+    from minio import Minio
+
+    endpoint = settings.minio_endpoint
+    client = Minio(
+        endpoint.removeprefix("http://").removeprefix("https://"),
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        secure=endpoint.startswith("https://"),
+    )
+    response = client.get_object(match.group(1), match.group(2))
+    try:
+        return response.read()
+    finally:
+        response.close()
+        response.release_conn()
 
 
 def _node_kind(node: NodeModel) -> str:
@@ -317,6 +342,47 @@ async def list_business_task_results(instance_id: str, db: AsyncSession = Depend
         .order_by(TaskResultObject.created_at.asc())
     )
     return result.scalars().all()
+
+
+@router.get("/business-tasks/{instance_id}/results/{object_id}/content")
+async def get_business_task_result_object_content(
+    instance_id: str,
+    object_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result_object = (
+        await db.execute(
+            select(TaskResultObject).where(
+                TaskResultObject.id == object_id,
+                TaskResultObject.instance_id == instance_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not result_object:
+        raise HTTPException(status_code=404, detail="Result object not found")
+
+    order = (
+        await db.execute(
+            select(TaskOrder).where(
+                TaskOrder.materialized_instance_id == instance_id,
+                TaskOrder.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Result order not found")
+    role_value = getattr(current_user.role, "value", current_user.role)
+    if order.user_id != current_user.id and str(role_value) != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        content = _read_result_object_bytes(result_object.uri)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to read result object") from exc
+    return Response(content=content, media_type=result_object.content_type or "application/octet-stream")
 
 
 @router.get("/business-tasks/summary")
@@ -689,16 +755,17 @@ def _extract_result_metadata(tags: dict[str, Any] | None) -> dict[str, Any]:
                 "preview_frame_width",
                 "preview_frame_height",
                 "annotated_frame_latency_ms",
-                "annotated_frame_content_type",
-                "annotated_frame_data_url",
                 "annotated_frame_overlay",
                 "detection_count",
                 "top_label",
                 "top_label_zh",
                 "top_confidence",
                 "detections",
-                "preview_frames",
                 "samples",
+                "evidence_manifest_uri",
+                "evidence_frame_count",
+                "evidence_frames",
+                "evidence_upload_status",
             )
             if raw.get(key) is not None
         }

@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
+from api.instances import _trim_metric_tags
 from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
 from models import (
     BusinessObjectiveEvaluation,
@@ -16,6 +17,7 @@ from models import (
     TaskInstanceNode,
     TaskMetric,
     TaskOrder,
+    TaskResultObject,
     User,
 )
 
@@ -4322,7 +4324,7 @@ async def test_cleanup_order_instance_preserves_business_evidence(client, db_ses
 
 
 @pytest.mark.asyncio
-async def test_order_detail_exposes_video_preview_metadata(client, db_session):
+async def test_order_detail_exposes_archived_video_evidence_metadata(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
     headers, _admin = await _auth_headers(client, db_session, username="video-preview-admin", role=UserRole.ADMIN)
 
@@ -4359,10 +4361,15 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
             "tags": {
                 "objects": [
                     {
-                        "name": "annotated-frame-preview",
-                        "uri": "inline://result_metadata/annotated_frame_data_url",
+                        "name": "video-result.json",
+                        "uri": f"s3://task-results/{instance_id}/video/result.json",
+                        "content_type": "application/json",
+                    },
+                    {
+                        "name": "video-frame-000012",
+                        "uri": f"s3://task-results/{instance_id}/video/frames/000012.jpg",
                         "content_type": "image/jpeg",
-                    }
+                    },
                 ],
                 "result": {
                     "frame_latency_p90_ms": 120.5,
@@ -4370,7 +4377,18 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
                     "model_name": "yolov5n",
                     "video_asset": "bottle-detection.mp4",
                     "gpu_assigned": True,
-                    "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+                    "evidence_manifest_uri": f"s3://task-results/{instance_id}/video/result.json",
+                    "evidence_frame_count": 30,
+                    "evidence_frames": [
+                        {
+                            "frame_index": 12,
+                            "latency_ms": 120.5,
+                            "label": "bottle",
+                            "label_zh": "瓶子",
+                            "confidence": 0.93,
+                            "uri": f"s3://task-results/{instance_id}/video/frames/000012.jpg",
+                        }
+                    ],
                     "detection_count": 1,
                     "top_label": "bottle",
                     "detections": [
@@ -4384,7 +4402,10 @@ async def test_order_detail_exposes_video_preview_metadata(client, db_session):
 
     evaluation_response = await client.get(f"/api/business-tasks/{instance_id}/evaluation")
     assert evaluation_response.status_code == 200
-    assert evaluation_response.json()["result_metadata"]["annotated_frame_data_url"].startswith("data:image/")
+    evaluation_metadata = evaluation_response.json()["result_metadata"]
+    assert "annotated_frame_data_url" not in evaluation_metadata
+    assert evaluation_metadata["evidence_frame_count"] == 30
+    assert evaluation_metadata["evidence_frames"][0]["uri"].endswith("000012.jpg")
 
     detail_response = await client.get(f"/api/orders/{order_id}", headers=headers)
     assert detail_response.status_code == 200
@@ -4773,7 +4794,7 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
         {"result": {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3}, "compute_latency_ms": 0.99},
         {"compute_latency_ms": 0.25, "matrix_size": 256, "batch_count": 3},
     ),
-    # Video preview metadata used by management/user detail pages
+    # Video evidence metadata uses MinIO object URIs instead of inline Base64.
     (
         {
             "result": {
@@ -4785,7 +4806,11 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
                 "gpu_assigned": True,
                 "preview_frame_width": 1280,
                 "preview_frame_height": 720,
-                "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+                "evidence_manifest_uri": "s3://task-results/instance-1/video/result.json",
+                "evidence_frame_count": 2,
+                "evidence_frames": [
+                    {"frame_index": 12, "uri": "s3://task-results/instance-1/video/frames/000012.jpg"}
+                ],
                 "annotated_frame_overlay": "zh_yolo_v1",
                 "detection_count": 1,
                 "top_label": "bottle",
@@ -4803,7 +4828,11 @@ async def test_order_detail_exposes_routing_decision_summary(client, db_session)
             "gpu_assigned": True,
             "preview_frame_width": 1280,
             "preview_frame_height": 720,
-            "annotated_frame_data_url": "data:image/jpeg;base64,abc123",
+            "evidence_manifest_uri": "s3://task-results/instance-1/video/result.json",
+            "evidence_frame_count": 2,
+            "evidence_frames": [
+                {"frame_index": 12, "uri": "s3://task-results/instance-1/video/frames/000012.jpg"}
+            ],
             "annotated_frame_overlay": "zh_yolo_v1",
             "detection_count": 1,
             "top_label": "bottle",
@@ -4816,3 +4845,51 @@ def test_extract_result_metadata(tags, expected_keys):
     """_extract_result_metadata white-lists keys and ignores checksum / unknown fields."""
     result = _extract_result_metadata(tags)
     assert result == expected_keys
+
+
+def test_trim_metric_tags_drops_inline_video_base64_but_keeps_object_index():
+    result = _trim_metric_tags(
+        {
+            "result": {
+                "annotated_frame_data_url": "data:image/jpeg;base64,not-for-db",
+                "evidence_manifest_uri": "s3://task-results/instance-1/video/result.json",
+                "evidence_frames": [{"frame_index": 12, "uri": "s3://task-results/instance-1/video/frames/000012.jpg"}],
+            },
+            "objects": [{"name": "frame", "uri": "s3://task-results/instance-1/video/frames/000012.jpg"}],
+        }
+    )
+
+    assert "annotated_frame_data_url" not in result["result"]
+    assert result["result"]["evidence_frames"][0]["frame_index"] == 12
+
+
+@pytest.mark.asyncio
+async def test_result_object_content_requires_order_access_and_returns_minio_bytes(client, db_session, monkeypatch):
+    headers, user = await _auth_headers(client, db_session, "result-reader")
+    order = TaskOrder(
+        user_id=user.id,
+        template_id="template-1",
+        name="视频任务",
+        materialized_instance_id="instance-1",
+    )
+    db_session.add(order)
+    db_session.add(
+        TaskResultObject(
+            id="video-frame-1",
+            instance_id="instance-1",
+            name="video-frame-000012",
+            uri="s3://task-results/instance-1/video/frames/000012.jpg",
+            content_type="image/jpeg",
+        )
+    )
+    await db_session.commit()
+    monkeypatch.setattr("api.business_tasks._read_result_object_bytes", lambda uri: b"jpeg-bytes")
+
+    response = await client.get(
+        "/api/business-tasks/instance-1/results/video-frame-1/content",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == b"jpeg-bytes"

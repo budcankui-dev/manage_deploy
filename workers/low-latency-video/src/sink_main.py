@@ -22,22 +22,7 @@ def _parse_objective() -> dict:
     return json.loads(raw) if raw else {}
 
 
-def main() -> int:
-    port = get_listen_port("sink")
-    print(f"VIDEO_SINK_STARTING port={port}", flush=True)
-    start_server(port, PostDataHandler)
-
-    result = wait_for_data_handler(port, timeout_sec=180.0)
-    print(
-        f"VIDEO_SINK_GOT_RESULT p90_ms={result.get('frame_latency_p90_ms')} "
-        f"measured_frames={result.get('measured_frames')}",
-        flush=True,
-    )
-
-    objective = _parse_objective()
-    metric_key = objective.get("metric_key") or "frame_latency_p90_ms"
-    metric_value = float(result.get(metric_key, result.get("frame_latency_p90_ms", 0.0)))
-
+def _metric_tags(result: dict) -> dict:
     metadata_keys = (
         "frame_latency_p90_ms",
         "frame_latency_avg_ms",
@@ -72,40 +57,45 @@ def main() -> int:
         "preview_frame_width",
         "preview_frame_height",
         "annotated_frame_latency_ms",
-        "annotated_frame_content_type",
-        "annotated_frame_data_url",
         "annotated_frame_overlay",
         "detection_count",
         "top_label",
         "top_label_zh",
         "top_confidence",
         "detections",
-        "preview_frames",
         "samples",
+        "evidence_manifest_uri",
+        "evidence_frame_count",
+        "evidence_frames",
+        "evidence_upload_status",
     )
-    result_meta = {key: result[key] for key in metadata_keys if key in result}
-    instance_id = os.environ["TASK_INSTANCE_ID"]
-    result_uri = f"s3://{os.environ.get('MINIO_BUCKET', 'task-results')}/{instance_id}/video-result.json"
+    return {
+        "objects": list(result.get("result_objects") or []),
+        "result": {key: result[key] for key in metadata_keys if key in result},
+    }
+
+
+def main() -> int:
+    port = get_listen_port("sink")
+    print(f"VIDEO_SINK_STARTING port={port}", flush=True)
+    start_server(port, PostDataHandler)
+
+    result = wait_for_data_handler(port, timeout_sec=180.0)
+    print(
+        f"VIDEO_SINK_GOT_RESULT p90_ms={result.get('frame_latency_p90_ms')} "
+        f"measured_frames={result.get('measured_frames')}",
+        flush=True,
+    )
+
+    objective = _parse_objective()
+    metric_key = objective.get("metric_key") or "frame_latency_p90_ms"
+    metric_value = float(result.get(metric_key, result.get("frame_latency_p90_ms", 0.0)))
 
     report_metric(
         metric_key,
         metric_value,
         unit=objective.get("unit") or "ms",
-        tags={
-            "objects": [
-                {
-                    "name": "video-result.json",
-                    "uri": result_uri,
-                    "content_type": "application/json",
-                },
-                {
-                    "name": "annotated-frame-preview",
-                    "uri": "inline://result_metadata/annotated_frame_data_url",
-                    "content_type": result_meta.get("annotated_frame_content_type", "image/jpeg"),
-                }
-            ],
-            "result": result_meta,
-        },
+        tags=_metric_tags(result),
     )
     print(f"VIDEO_SINK_DONE metric={metric_key} value={metric_value:.4f}", flush=True)
 

@@ -1054,9 +1054,13 @@ _ALLOWED_METRIC_TAGS = frozenset([
     "frame_latency_p90_ms", "frame_latency_avg_ms", "frame_latency_min_ms",
     "frame_latency_max_ms", "measured_frames", "actual_backend", "detector_backend",
     "device", "gpu_requested", "gpu_available", "gpu_assigned", "gpu_error",
-    "model_name", "video_asset", "detections", "annotated_frame_data_url",
-    "preview_frames",
+    "model_name", "video_asset", "detections",
+    "evidence_manifest_uri", "evidence_frame_count", "evidence_frames", "evidence_upload_status",
 ])
+
+_DISALLOWED_INLINE_EVIDENCE_FIELDS = frozenset(
+    {"annotated_frame_data_url", "preview_frames", "data_url", "content", "image_bytes", "raw_frame_bytes"}
+)
 
 
 def _trim_metric_tags(tags: dict | None) -> dict | None:
@@ -1072,7 +1076,11 @@ def _trim_metric_tags(tags: dict | None) -> dict | None:
         if key not in allowed:
             continue
         if isinstance(val, dict):
-            filtered = {k: v for k, v in val.items() if k not in ("checksum", "result_json", "raw")}
+            filtered = {
+                k: v
+                for k, v in val.items()
+                if k not in ("checksum", "result_json", "raw", *_DISALLOWED_INLINE_EVIDENCE_FIELDS)
+            }
             if filtered:
                 result[key] = filtered
         else:

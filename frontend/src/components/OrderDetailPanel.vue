@@ -506,6 +506,14 @@
                   <div class="video-proof-summary">
                     <strong>{{ activeVideoFrameSummary }}</strong>
                     <span>{{ videoFrameGallerySummary }}</span>
+                    <el-button
+                      v-if="archivedVideoEvidenceFrames.length"
+                      link
+                      type="primary"
+                      size="small"
+                      :loading="videoEvidenceLoading"
+                      @click="loadArchivedVideoEvidence"
+                    >换一组抽检结果</el-button>
                   </div>
                   <div class="video-proof-frame">
                     <img :src="videoPreview" alt="视频推理分类画框结果" :title="activeVideoFrame?.title || ''" />
@@ -630,7 +638,8 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { businessApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
   VIDEO_PIPELINE_STEPS,
@@ -657,6 +666,7 @@ import {
   videoPreviewEvidenceRows,
   videoPreviewFrames as buildVideoPreviewFrames,
   videoPreviewNeedsOverlay,
+  selectVideoEvidenceFrames,
 } from '@/constants/businessTaskDisplay'
 import {
   deploymentModeText as formatDeploymentModeText,
@@ -954,8 +964,84 @@ const resultProofFacts = computed(() => {
   return rows
 })
 
-const videoPreviewFrames = computed(() => buildVideoPreviewFrames(resultMetadata.value))
 const selectedVideoFrameKey = ref('')
+const archivedVideoPreviewFrames = ref([])
+const videoEvidenceLoading = ref(false)
+let videoEvidenceRequest = 0
+
+const resultObjectByUri = computed(() => new Map(
+  resultObjects.value
+    .filter(item => item?.id && typeof item?.uri === 'string')
+    .map(item => [item.uri, item])
+))
+const archivedVideoEvidenceFrames = computed(() => {
+  const indexed = Array.isArray(resultMetadata.value?.evidence_frames)
+    ? resultMetadata.value.evidence_frames
+    : []
+  if (indexed.length) {
+    return indexed
+      .map(frame => ({ ...frame, object: resultObjectByUri.value.get(frame?.uri) }))
+      .filter(frame => frame.object?.id)
+  }
+  return resultObjects.value
+    .filter(item => item?.name?.startsWith('video-frame-') && String(item?.content_type || '').startsWith('image/'))
+    .map(item => ({
+      frame_index: Number(String(item.name).replace('video-frame-', '')),
+      uri: item.uri,
+      content_type: item.content_type,
+      object: item,
+    }))
+})
+
+function releaseArchivedVideoUrls() {
+  for (const frame of archivedVideoPreviewFrames.value) {
+    if (typeof frame?.data_url === 'string' && frame.data_url.startsWith('blob:')) URL.revokeObjectURL(frame.data_url)
+  }
+}
+
+async function loadArchivedVideoEvidence() {
+  const instanceId = detail.value?.instance?.id || detail.value?.materialized_instance_id
+  const selected = selectVideoEvidenceFrames(archivedVideoEvidenceFrames.value, 4)
+  const requestId = ++videoEvidenceRequest
+  releaseArchivedVideoUrls()
+  archivedVideoPreviewFrames.value = []
+  selectedVideoFrameKey.value = ''
+  if (!instanceId || !selected.length) return
+  videoEvidenceLoading.value = true
+  try {
+    const frames = await Promise.all(selected.map(async (frame) => {
+      const { data } = await businessApi.resultObjectContent(instanceId, frame.object.id, { silentError: true })
+      const latency = frame.latency_ms != null ? Number(frame.latency_ms) : null
+      const label = frame.label_zh || frame.label || '检测帧'
+      const parts = [`第 ${frame.frame_index} 帧`]
+      if (Number.isFinite(latency)) parts.push(`单帧推理 ${latency.toFixed(2)} ms`)
+      if (frame.confidence != null && Number.isFinite(Number(frame.confidence))) parts.push(`置信度 ${Number(frame.confidence).toFixed(2)}`)
+      return { ...frame, data_url: URL.createObjectURL(data), label, latency_ms: latency, title: parts.join('；') }
+    }))
+    if (requestId !== videoEvidenceRequest) {
+      frames.forEach(frame => URL.revokeObjectURL(frame.data_url))
+      return
+    }
+    archivedVideoPreviewFrames.value = frames
+    selectedVideoFrameKey.value = frames[0] ? frameKey(frames[0]) : ''
+  } finally {
+    if (requestId === videoEvidenceRequest) videoEvidenceLoading.value = false
+  }
+}
+
+watch(
+  [archivedVideoEvidenceFrames, () => detail.value?.instance?.id || detail.value?.materialized_instance_id],
+  () => { loadArchivedVideoEvidence() },
+  { immediate: true },
+)
+onBeforeUnmount(() => {
+  videoEvidenceRequest += 1
+  releaseArchivedVideoUrls()
+})
+
+const videoPreviewFrames = computed(() => (
+  archivedVideoPreviewFrames.value.length ? archivedVideoPreviewFrames.value : buildVideoPreviewFrames(resultMetadata.value)
+))
 const activeVideoFrame = computed(() => {
   const frames = videoPreviewFrames.value
   if (!frames.length) return null

@@ -72,6 +72,26 @@ def test_video_profile_emits_progress_without_changing_final_result(monkeypatch)
     assert "frame_latency_p90_ms" in result
 
 
+def test_video_profile_keeps_one_archivable_evidence_frame_per_measured_frame():
+    result = run_video_profile(
+        {
+            "inference_mode": "surrogate",
+            "frame_count": 90,
+            "frame_stride": 30,
+            "warmup_frames": 1,
+            "measured_frames": 3,
+            "work_units": 100,
+            "seed": 7,
+        }
+    )
+
+    assert result["measured_frames"] == 3
+    assert len(result["evidence_frames"]) == 3
+    assert [frame["frame_index"] for frame in result["evidence_frames"]] == [30, 60, 90]
+    assert all(frame["content_type"] == "image/svg+xml" for frame in result["evidence_frames"])
+    assert all(isinstance(frame["content"], bytes) and frame["content"] for frame in result["evidence_frames"])
+
+
 def test_asset_path_rejects_traversal(tmp_path):
     asset_root = tmp_path / "assets"
     asset_root.mkdir()

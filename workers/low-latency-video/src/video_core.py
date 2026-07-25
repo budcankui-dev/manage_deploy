@@ -151,9 +151,22 @@ def run_surrogate_video_profile(job: dict, progress_callback: ProgressCallback |
 
     start = time.perf_counter()
     samples = []
+    evidence_frames = []
     for sample_index, frame_index in enumerate(measured):
         sample = simulate_inference(frame_index, work_units, seed + sample_index)
         samples.append(sample)
+        evidence_data_url = _synthetic_preview_data_url(profile_id, float(sample["latency_ms"]), 0.0)
+        evidence_frames.append(
+            {
+                "frame_index": frame_index,
+                "latency_ms": round(float(sample["latency_ms"]), 4),
+                "label": sample["label"],
+                "label_zh": _label_zh(sample["label"]),
+                "confidence": sample["confidence"],
+                "content_type": "image/svg+xml",
+                "content": _data_url_content(evidence_data_url),
+            }
+        )
         if progress_callback is not None:
             _safe_progress_callback(
                 progress_callback,
@@ -235,6 +248,7 @@ def run_surrogate_video_profile(job: dict, progress_callback: ProgressCallback |
             }
             for item in samples
         ],
+        "evidence_frames": evidence_frames,
     }
     return result
 
@@ -293,6 +307,7 @@ def run_yolo_video_profile(job: dict, progress_callback: ProgressCallback | None
         )
 
     samples: list[dict] = []
+    evidence_frames: list[dict] = []
     preview_frame = None
     preview_data_url = ""
     preview_content_type = "image/jpeg"
@@ -334,6 +349,18 @@ def run_yolo_video_profile(job: dict, progress_callback: ProgressCallback | None
                 }
             )
         top = detections[0] if detections else None
+        evidence_frames.append(
+            {
+                "frame_index": frame_index,
+                "latency_ms": round(float(latency_ms), 4),
+                "label": top["label"] if top else "none",
+                "label_zh": top.get("label_zh") if top else _label_zh("none"),
+                "confidence": round(float(top["confidence"]), 4) if top else 0.0,
+                "detections": detections,
+                "content_type": "image/jpeg",
+                "content": _encode_jpeg(annotated),
+            }
+        )
         samples.append(
             {
                 "frame_index": frame_index,
@@ -469,6 +496,7 @@ def run_yolo_video_profile(job: dict, progress_callback: ProgressCallback | None
             }
             for item in samples
         ],
+        "evidence_frames": evidence_frames,
     }
 
 
@@ -939,12 +967,25 @@ def _detect_frame(
     return detections, annotated
 
 
-def _encode_jpeg_data_url(frame) -> str:
+def _encode_jpeg(frame) -> bytes:
     ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
     if not ok:
-        return _synthetic_preview_data_url("video")
-    data = base64.b64encode(encoded.tobytes()).decode("ascii")
+        return _data_url_content(_synthetic_preview_data_url("video"))
+    return encoded.tobytes()
+
+
+def _encode_jpeg_data_url(frame) -> str:
+    data = base64.b64encode(_encode_jpeg(frame)).decode("ascii")
     return f"data:image/jpeg;base64,{data}"
+
+
+def _data_url_content(data_url: str) -> bytes:
+    """Return binary content from an internally generated base64 data URL."""
+    try:
+        _, encoded = data_url.split(",", 1)
+        return base64.b64decode(encoded)
+    except (AttributeError, ValueError):
+        raise RuntimeError("Invalid internally generated preview data URL") from None
 
 
 def _synthetic_preview_data_url(title: str, frame_latency_ms: float = 0.0, p90_latency_ms: float = 0.0) -> str:

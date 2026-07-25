@@ -6,6 +6,7 @@ import {
   buildMatmulVerdict,
   describeObjectiveMeaning,
   formatObjectiveSentence,
+  selectVideoEvidenceFrames,
   taskTypeLabel,
   videoDetectionBoxStyle,
   videoPreviewNeedsOverlay,
@@ -71,5 +72,16 @@ assert.deepEqual(
     height: '25%',
   }
 )
+
+const selectedVideoEvidence = selectVideoEvidenceFrames(
+  Array.from({ length: 30 }, (_, frameIndex) => ({
+    frame_index: frameIndex,
+    uri: `s3://task-results/instance-1/video/frames/${frameIndex}.jpg`,
+  })),
+  4,
+  () => 0.5,
+)
+assert.equal(selectedVideoEvidence.length, 4)
+assert.ok(selectedVideoEvidence.every(frame => frame.uri.startsWith('s3://task-results/')))
 
 console.log('businessTaskDisplay: ok')

@@ -8,9 +8,9 @@ source -> compute -> sink
 
 ## 演示口径
 
-- `source` 从镜像内置固定视频 `bottle-detection.mp4` 读取业务画像参数，并按 `frame_stride` 抽样帧。
+- `source` 向 compute 发送业务画像；`compute` 从镜像内置固定视频 `bottle-detection.mp4` 按 `frame_stride` 抽样帧。
 - `compute` 默认要求分配 GPU，加载镜像内置 `yolov5n-fp32.onnx`，对抽样帧执行目标检测，统计每帧推理时延。运行时会优先尝试 CUDA 后端，并在结果中明确记录实际后端。
-- `sink` 汇总并上报 `frame_latency_p90_ms`、检测框、类别置信度、模型信息和带框预览图。
+- `compute` 将每一张参与统计的带框抽检帧和 `result.json` 上传 MinIO；`sink` 汇总并上报 `frame_latency_p90_ms`、检测摘要及真实对象 URI。
 - CPU 可作为开发兜底，但验收压测默认要求路由结果为 compute 子任务分配 GPU，且结果必须展示 `actual_backend`、`gpu_requested`、`gpu_available`、`gpu_error` 等证据字段。
 
 ## 固定资产
@@ -89,6 +89,7 @@ docker run --rm --entrypoint python3 \
 - `model_name`
 - `gpu_assigned`
 - `detections`
-- `annotated_frame_data_url`
 
-这些字段会进入 `business_objective_evaluations.result_metadata`，用于管理端、用户端详情页展示带框图片和分类检测结果。
+业务运行模式还会输出 `evidence_manifest_uri`、`evidence_frame_count` 和每张抽检帧的 MinIO URI。图片只在 Worker 内存中短暂编码后上传，不以 Base64 进入节点间消息、回调或数据库；前端从归档中随机展示最多 4 张。
+
+轻量指标和对象索引会进入 `business_objective_evaluations.result_metadata`，完整 `result.json` 与抽检帧保存在 MinIO，供管理端、用户端详情页复核。
