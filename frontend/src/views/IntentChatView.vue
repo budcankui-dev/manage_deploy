@@ -590,6 +590,12 @@ const endpointForm = ref({
 const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
   high_throughput_matmul: 9000,
   low_latency_video_pipeline: 9100,
+  metaverse_video_fusion: 9200,
+}
+
+const ENDPOINT_IMAGE_BY_TASK_TYPE = {
+  high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
+  low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
 }
 
 let routingTimer = null
@@ -611,6 +617,7 @@ const exampleChips = [
   '矩阵乘法任务，从 h1 到 h2，1024阶矩阵，50批，现在开始跑2小时，资源保障策略',
   '视频AI推理任务，从 h3 到 h4，720p视频片段100帧，统计30帧P90，30fps，现在开始跑2小时，低时延策略',
   '端到端传输路由任务，从 h1 到 h2 建立链路，现在开始跑2小时，低时延策略',
+  '元宇宙双路视频融合，从 h3 到 h4，720p，180帧，30fps，现在开始跑2小时，低时延策略',
   '从 h5 到 h6 跑 matmul，2048x2048，batch 20，立即运行60分钟，尽快完成',
   '从 h6 到 h7 做工业检测视频推理，720p，视频片段100帧，统计30帧，要求低时延，马上运行60分钟',
   '矩阵计算，源节点 h8 目的节点 h9，规模 512，80批次，马上开始跑3小时，负载均衡',
@@ -630,6 +637,11 @@ const supportedTaskHints = [
     type: 'terminal_route_transfer',
     label: taskTypeLabel('terminal_route_transfer'),
     hint: '适合表达为“端到端传输、只建立路由、打通链路”，只需给出源节点、目的节点、开始/结束时间和路由策略。',
+  },
+  {
+    type: 'metaverse_video_fusion',
+    label: taskTypeLabel('metaverse_video_fusion'),
+    hint: '适合表达为“元宇宙、沉浸式交互、双路视频融合”，使用内置双路视频和 GPU MODNet 融合。',
   },
 ]
 
@@ -688,6 +700,53 @@ const effectiveCallbackUrl = computed(() => {
 const isRouteOnlyDraft = computed(() =>
   Boolean(isTerminalRouteDraft.value || endpointForm.value.route_only || draft.value?.runtime_plan?.route_only)
 )
+const endpointImage = computed(() => (
+  draft.value?.runtime_plan?.endpoint_image
+  || ENDPOINT_IMAGE_BY_TASK_TYPE[draft.value?.task_type]
+  || ''
+))
+const showClientCommands = computed(() =>
+  isDraftSubmittable.value && !isRouteOnlyDraft.value
+)
+const receiverCommand = computed(() => {
+  if (!showClientCommands.value || !endpointImage.value || !destinationPort.value) return ''
+  const destinationEndpoint = draft.value?.destination_endpoint || {}
+  const envLines = [
+    `  -e ENDPOINT_NODE_ALIAS=${draft.value?.destination_name || 'destination'} \\`,
+    `  -e ENDPOINT_TOPOLOGY_NODE_ID=${destinationEndpoint.topology_node_id || draft.value?.destination_name || 'destination'} \\`,
+  ]
+  if (destinationEndpoint.business_ip) envLines.push(`  -e ENDPOINT_BUSINESS_IP=${destinationEndpoint.business_ip} \\`)
+  if (destinationEndpoint.business_ipv6) envLines.push(`  -e ENDPOINT_BUSINESS_IPV6=${destinationEndpoint.business_ipv6} \\`)
+  return [
+    'docker run --rm --network host \\',
+    ...envLines,
+    `  ${endpointImage.value} \\`,
+    `  python /app/src/receiver_main.py --port ${destinationPort.value}`,
+  ].join('\n')
+})
+const sourceCommand = computed(() => {
+  if (!showClientCommands.value || !endpointImage.value) return ''
+  const profile = JSON.stringify(draft.value.data_profile || {})
+  const lines = [
+    '# 节点分配完成后，在工单详情中复制真实“计算服务接入地址”再启动源端',
+    'docker run --rm --network host \\',
+    '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
+  ]
+  if (draft.value?.task_type === 'low_latency_video_pipeline') {
+    lines.push('  -e SOURCE_LISTEN=false \\')
+    lines.push('  -e WAIT_FOR_COMPUTE_READY=false \\')
+  } else if (draft.value?.task_type === 'metaverse_video_fusion') {
+    lines.push('  -e PORT_SOURCE=18821 \\')
+  } else {
+    lines.push('  -e SOURCE_LISTEN=false \\')
+  }
+  lines.push(
+    `  -e DATA_PROFILE='${profile}' \\`,
+    `  ${endpointImage.value} \\`,
+    '  python /app/src/source_main.py',
+  )
+  return lines.join('\n')
+})
 const isDraftSubmittable = computed(() =>
   draft.value?.parse_status === 'valid' && draftValidationErrors.value.length === 0
 )
@@ -860,6 +919,8 @@ function getDraftValidationErrors(currentDraft) {
   } else if (currentDraft.task_type === 'low_latency_video_pipeline') {
     pushRangeError(errors, dp.frame_count, '视频片段帧范围不能为空（例如：100帧视频片段）', '视频片段帧范围需要是 1-100000 之间的整数', 1, 100000)
     pushRangeError(errors, dp.measured_frames, '参与统计帧数不能为空（例如：统计30帧）', '参与统计帧数需要是 1-100000 之间的整数', 1, 100000)
+  } else if (currentDraft.task_type === 'metaverse_video_fusion') {
+    pushRangeError(errors, dp.frame_count, '视频帧数不能为空（例如：100帧）', '视频帧数需要是 1-100000 之间的整数', 1, 100000)
     if (isBlankValue(dp.resolution)) {
       add('视频分辨率不能为空（例如：720p 或 1080p）')
     } else if (!['480p', '720p', '1080p', '2k', '4k', '8k'].includes(String(dp.resolution).toLowerCase())) {

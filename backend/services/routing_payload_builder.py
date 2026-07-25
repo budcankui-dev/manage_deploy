@@ -70,7 +70,9 @@ def build_routing_payload(
     )
     edges = _build_dag_edges(task_type, nodes, data_profile, priority)
 
-    normalized_strategy = _normalize_routing_strategy(routing_strategy)
+    normalized_strategy = _normalize_routing_strategy(
+        routing_strategy or ("low_latency_forwarding" if task_type == "metaverse_video_fusion" else None)
+    )
 
     return {
         "job_id": job_id,
@@ -98,6 +100,7 @@ def _task_type_to_job_name(task_type: str) -> str:
         "high_throughput_matmul": "科学计算矩阵乘法",
         "low_latency_video_pipeline": "视频AI推理",
         "terminal_route_transfer": "端到端传输路由",
+        "metaverse_video_fusion": "元宇宙沉浸式交互",
         "llm_text_generation": "大模型文本生成",
     }
     return mapping.get(task_type, task_type)

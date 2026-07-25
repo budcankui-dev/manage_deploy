@@ -1,0 +1,25 @@
+# Source needs OpenCV to encode the two video streams; sink only uses the
+# shared HTTP/reporting helpers, so this image intentionally excludes CUDA and
+# the MODNet checkpoint used by compute.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    opencv-python-headless==4.10.0.84 \
+    httpx==0.28.1 \
+    pillow==11.3.0 \
+    minio==7.2.15
+
+COPY _common /app/_common
+COPY metaverse-video-fusion/src/source_main.py /app/src/source_main.py
+COPY metaverse-video-fusion/src/sink_main.py /app/src/sink_main.py
+COPY metaverse-video-fusion/src/receiver_main.py /app/src/receiver_main.py
+COPY metaverse-video-fusion/src/fusion_core.py /app/src/fusion_core.py
+COPY metaverse-video-fusion/assets/videos /app/assets/videos
+
+ENV PYTHONPATH=/app/src:/app
+ENV METAVERSE_ASSET_DIR=/app/assets
+
+CMD ["python3", "/app/src/source_main.py"]

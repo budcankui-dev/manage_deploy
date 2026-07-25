@@ -139,6 +139,32 @@ BENCHMARK_TASK_CONFIGS = {
         },
         "default_compute_gpu": "0",
     },
+    "metaverse_video_fusion": {
+        "label": "元宇宙沉浸式交互",
+        "modality": "低时延转发模态",
+        "default_profile": {
+            "profile_id": "metaverse_offline_fusion_720p",
+            "frame_count": 180,
+            "resolution": "720p",
+            "fps": 30,
+            "frame_stride": 1,
+            "warmup_frames": 10,
+            "measured_frames": 170,
+            "seed": 42,
+            "video0_asset": "cam0.mp4",
+            "video1_asset": "cam1.mp4",
+            "fusion_mode": "modnet_offline",
+            "modnet_checkpoint": "MODNet/pretrained/modnet_webcam_portrait_matting.ckpt",
+            "strict_gpu": True,
+            "use_gpu": True,
+        },
+        "business_objective": {
+            "metric_key": "frame_latency_p90_ms",
+            "operator": "<=",
+            "unit": "ms",
+        },
+        "default_compute_gpu": "0",
+    },
 }
 
 
@@ -500,6 +526,7 @@ def _is_gpu_benchmark_order(order: TaskOrder) -> bool:
     return task_type in {
         "high_throughput_matmul",
         "low_latency_video_pipeline",
+        "metaverse_video_fusion",
         "llm_text_generation",
     }
 
@@ -2218,12 +2245,18 @@ class BatchBenchmarkRequest(BaseModel):
     count: int = Field(default=10, ge=1, le=30)
     benchmark_run_id: Optional[str] = None
     data_profile: dict = Field(default_factory=dict)
-    routing_strategy: str = "resource_guarantee"
+    routing_strategy: Optional[str] = None
     source_name: Optional[str] = None
     destination_name: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_routing_strategy(self):
+        if not self.routing_strategy:
+            self.routing_strategy = (
+                "low_latency_forwarding"
+                if self.task_type == "metaverse_video_fusion"
+                else "resource_guarantee"
+            )
         self.routing_strategy = require_routing_policy(
             self.routing_strategy,
             field_name="routing_strategy",

@@ -44,6 +44,7 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
     "high_throughput_matmul": 9000,
     "low_latency_video_pipeline": 9100,
+    "metaverse_video_fusion": 9200,
 }
 
 ROUTE_ONLY_TASK_TYPES = {"terminal_route_transfer"}
@@ -690,8 +691,13 @@ async def confirm_intent(
     }
     external_endpoints = {}
     if source_endpoint:
-        business_task_config["source_endpoint"] = _endpoint_dict(source_endpoint)
-        external_endpoints["source"] = _endpoint_dict(source_endpoint)
+        source_payload = _endpoint_dict(source_endpoint) or {}
+        if draft.task_type == "metaverse_video_fusion":
+            # The external Source runs its HTTP asset service on this stable
+            # business-plane port; Compute receives it as PEER_SOURCE_URL.
+            source_payload["business_port"] = 18821
+        business_task_config["source_endpoint"] = source_payload
+        external_endpoints["source"] = source_payload
     if destination_endpoint:
         sink_endpoint = _endpoint_dict(destination_endpoint) or {}
         if destination_port:

@@ -499,7 +499,47 @@
             description="该工单还未完成指标上报，或属于清理/迁移前的历史数据。输入参数和路由节点仍可作为工单记录查看；任务重新运行并上报指标后会自动展示结果预览。"
           />
 
-          <template v-if="isVideoTask">
+          <template v-if="isMetaverseTask">
+            <div class="video-result-card">
+              <div class="video-preview">
+                <template v-if="metaversePlaybackUrl">
+                  <div class="video-proof-summary">
+                    <strong>融合结果视频</strong>
+                    <span>融合结果已归档至 MinIO，使用 H.264 MP4 通过平台结果 URI 播放。</span>
+                  </div>
+                  <div class="video-proof-frame">
+                    <video :src="metaversePlaybackUrl" controls preload="metadata" class="fusion-result-video" />
+                    <div class="video-proof-overlay">
+                      <div class="video-proof-badge">
+                        <span v-for="row in metaversePlaybackRows" :key="row">{{ row }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <el-empty
+                  v-else
+                  :description="evaluation ? '等待融合视频归档' : '暂无融合视频结果'"
+                  :image-size="80"
+                />
+              </div>
+              <div class="video-result-side">
+                <h3 class="section-title">输入参数</h3>
+                <el-descriptions v-if="inputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in inputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+                <h3 class="section-title">融合输出</h3>
+                <el-descriptions v-if="outputRows.length" :column="1" border class="detail-desc">
+                  <el-descriptions-item v-for="row in outputRows" :key="row.label" :label="row.label">
+                    {{ row.value }}
+                  </el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="isVideoTask">
             <div class="video-result-card">
               <div class="video-preview">
                 <template v-if="videoPreview">
@@ -571,8 +611,8 @@
                 </el-descriptions>
               </div>
             </div>
-            <h3 v-if="videoDetectionRows.length" class="section-title">分类检测结果</h3>
-            <el-table v-if="videoDetectionRows.length" :data="videoDetectionRows" size="small" border>
+            <h3 v-if="videoDetectionRows.length && !isMetaverseTask" class="section-title">分类检测结果</h3>
+            <el-table v-if="videoDetectionRows.length && !isMetaverseTask" :data="videoDetectionRows" size="small" border>
               <el-table-column label="类别" min-width="140">
                 <template #default="{ row }">{{ row.display_label || row.label_zh || row.label || '-' }}</template>
               </el-table-column>
@@ -642,6 +682,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { businessApi } from '@/api'
 import {
   MATMUL_PIPELINE_STEPS,
+  METAVERSE_PIPELINE_STEPS,
   VIDEO_PIPELINE_STEPS,
   buildMatmulInputRows,
   buildMatmulOutputRows,
@@ -667,6 +708,7 @@ import {
   videoPreviewFrames as buildVideoPreviewFrames,
   videoPreviewNeedsOverlay,
   selectVideoEvidenceFrames,
+  isVideoLikeTask,
 } from '@/constants/businessTaskDisplay'
 import {
   deploymentModeText as formatDeploymentModeText,
@@ -753,12 +795,16 @@ const resultMetadata = computed(() => evaluation.value?.result_metadata || null)
 const taskType = computed(() => businessTask.value?.task_type || detail.value?.task_type || '')
 const displayTitle = computed(() => taskTypeLabel(taskType.value))
 const isMatmulTask = computed(() => taskType.value === 'high_throughput_matmul')
-const isVideoTask = computed(() => taskType.value === 'low_latency_video_pipeline')
+const isMetaverseTask = computed(() => taskType.value === 'metaverse_video_fusion')
+const isVideoTask = computed(() => isVideoLikeTask(taskType.value))
 const taskSummary = computed(() => taskTypeSummary(taskType.value))
 const dataProfileRows = computed(() => describeDataProfile(taskType.value, businessTask.value?.data_profile))
 const runtimePlanRows = computed(() => describeRuntimePlan(taskType.value, businessTask.value?.runtime_plan))
 const matmulPreview = computed(() => buildMatmulPreview(businessTask.value?.data_profile))
-const videoInputUrl = computed(() => videoInputVideoUrl(businessTask.value?.data_profile))
+const videoInputUrl = computed(() => {
+  const profile = businessTask.value?.data_profile
+  return videoInputVideoUrl({ ...profile, video_asset: profile?.video_asset || profile?.video0_asset })
+})
 const objectiveForDisplay = computed(() => {
   const objective = { ...(businessTask.value?.business_objective || {}) }
   if (objective.target_value == null && evaluation.value?.target_value != null) objective.target_value = evaluation.value.target_value
@@ -807,8 +853,8 @@ const pipelineSteps = computed(() => {
     }
     if (isVideoTask.value) {
       return [
-        { role: 'source', title: '外部提交输入', detail: '用户终端向计算服务接入地址提交视频抽帧任务' },
-        { role: 'compute', title: '推理并上报', detail: '计算节点执行目标检测后直接上报帧推理时延等指标' },
+        { role: 'source', title: '外部提交输入', detail: '用户终端向计算服务接入地址提交视频类任务' },
+        { role: 'compute', title: '处理并上报', detail: '计算节点执行视频推理或融合后直接上报帧处理时延等指标' },
       ]
     }
     return [
@@ -817,6 +863,7 @@ const pipelineSteps = computed(() => {
     ]
   }
   if (isMatmulTask.value) return MATMUL_PIPELINE_STEPS
+  if (taskType.value === 'metaverse_video_fusion') return METAVERSE_PIPELINE_STEPS
   if (isVideoTask.value) return VIDEO_PIPELINE_STEPS
   return [
     { role: 'source', title: '提交输入', detail: '准备业务输入并发送给计算节点' },
@@ -917,7 +964,7 @@ const paramConsistency = computed(() => {
 
 const verdict = computed(() => {
   if (isMatmulTask.value) return buildMatmulVerdict(evaluation.value)
-  if (isVideoTask.value) return buildVideoVerdict(evaluation.value)
+  if (isVideoTask.value) return buildVideoVerdict(evaluation.value, taskType.value)
   if (!evaluation.value) {
     return {
       title: '等待业务结果',
@@ -942,6 +989,9 @@ const resultProofDescription = computed(() => {
     return '任务运行并上报指标后，这里会展示可复核的输入、输出和判定依据。'
   }
   if (isVideoTask.value) {
+    if (isMetaverseTask.value) {
+      return '融合任务以参与统计帧的 P90 融合时延作为核心指标，并保留融合 MP4、预览帧、MODNet 执行后端与 GPU 信息作为业务真实运行证据。'
+    }
     return '视频任务以参与统计帧的 P90 推理时延作为核心指标，并保留检测框、类别、置信度和预览图作为业务真实运行证据。'
   }
   if (isMatmulTask.value) {
@@ -1091,6 +1141,23 @@ const videoFrameGallerySummary = computed(() => {
 const videoDetectionRows = computed(() => videoDetections(resultMetadata.value))
 const videoEvidenceRows = computed(() => videoPreviewEvidenceRows(resultMetadata.value))
 const videoNeedsOverlay = computed(() => videoPreviewNeedsOverlay(resultMetadata.value))
+
+// Metaverse results are durable MinIO objects; metadata carries only the proxy URI.
+const metaversePlaybackUrl = computed(() => {
+  const value = resultMetadata.value?.fusion_video_url
+  // The worker stores a same-origin Manager proxy path so the browser never
+  // needs MinIO credentials. Absolute URLs remain supported for deployments
+  // that intentionally configure one.
+  return typeof value === 'string' && (value.startsWith('/') || value.startsWith('http')) ? value : ''
+})
+const metaversePlaybackRows = computed(() => {
+  const meta = resultMetadata.value || {}
+  const rows = []
+  rows.push(`${meta.fps || 30} FPS`)
+  if (meta.measured_frames != null) rows.push(`有效帧 ${meta.measured_frames}`)
+  if (meta.frame_latency_p90_ms != null) rows.push(`P90 ${Number(meta.frame_latency_p90_ms).toFixed(2)} ms`)
+  return rows
+})
 const networkReadyText = computed(() => {
   if (!routingResult.value) return '-'
   if (routingResult.value.network_ready_required && !routingResult.value.network_ready) return '等待网络确认'
@@ -1209,7 +1276,7 @@ function normalizePlacementRow(role, placement) {
     image: item.image || '',
     error_message: item.error_message || '',
     gpu,
-    requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline'].includes(taskType.value),
+    requiresGpu: ['compute', 'worker', 'inference'].includes(roleKey) && ['high_throughput_matmul', 'low_latency_video_pipeline', 'metaverse_video_fusion'].includes(taskType.value),
     portValues,
     portAccessUrls,
     portText: namedPortsText(portValues),
@@ -1933,7 +2000,8 @@ function nodeStatusLabel(value) {
   position: relative;
 }
 
-.video-proof-frame img {
+.video-proof-frame img,
+.video-proof-frame video {
   display: block;
   width: 100%;
   height: auto;
