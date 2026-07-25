@@ -14,6 +14,7 @@ from models import Conversation, RoutingResourceEvent, TaskInstance, TaskOrder
 from services.dag_executor import DAGExecutor
 from services.routing_network import mark_network_ready, network_ready_required
 from services.scheduler import TaskScheduler
+from services.system_settings import get_runtime_settings
 from services.time_utils import business_now
 
 router = APIRouter(prefix="/api", tags=["routing"])
@@ -125,14 +126,16 @@ async def list_routing_orders(
     db: AsyncSession = Depends(get_db),
 ):
     """HTTP interface for external routers to list pending task orders."""
-    result = await db.execute(
-        select(TaskOrder)
-        .where(
-            TaskOrder.deleted_at.is_(None),
-            TaskOrder.routing_status == status.value,
-        )
-        .order_by(TaskOrder.created_at.asc())
+    query = select(TaskOrder).where(
+        TaskOrder.deleted_at.is_(None),
+        TaskOrder.routing_status == status.value,
     )
+    runtime_settings = await get_runtime_settings(db)
+    if runtime_settings.get("benchmark_routing_mode") == "internal_auto":
+        # Benchmark routing is owned by the platform in this mode. Keep normal
+        # business orders visible so external routing integration remains usable.
+        query = query.where(TaskOrder.is_benchmark.is_(False))
+    result = await db.execute(query.order_by(TaskOrder.created_at.asc()))
     orders = result.scalars().all()
     if benchmark_run_id:
         orders = [order for order in orders if _benchmark_run_id(order) == benchmark_run_id]
@@ -155,6 +158,12 @@ async def claim_routing_order(
         raise HTTPException(status_code=404, detail="Order not found")
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=409, detail=f"Cannot claim: current status is {order.routing_status}")
+    runtime_settings = await get_runtime_settings(db)
+    if order.is_benchmark and runtime_settings.get("benchmark_routing_mode") == "internal_auto":
+        raise HTTPException(
+            status_code=409,
+            detail="Benchmark routing is managed by the platform while system auto-routing is enabled",
+        )
 
     order.routing_status = RoutingStatus.COMPUTING.value
     await db.commit()

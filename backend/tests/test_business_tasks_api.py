@@ -1147,6 +1147,7 @@ async def test_batch_benchmark_respects_fixed_endpoint_names(client, db_session)
 @pytest.mark.asyncio
 async def test_order_routing_result_persists_router_metadata_and_is_idempotent(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="route-metadata-user")
 
     create_response = await client.post(
@@ -1233,6 +1234,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
 @pytest.mark.asyncio
 async def test_order_routing_result_rejects_route_source_as_task_strategy(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="reject-route-source-strategy")
 
     create_response = await client.post(
@@ -2187,6 +2189,7 @@ async def test_compute_only_bindings_ignore_router_source_sink_placements(client
 @pytest.mark.asyncio
 async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="route-compute-only-user")
 
     create_response = await client.post(
@@ -2246,6 +2249,7 @@ async def test_routing_result_can_omit_fixed_source_and_sink_placements(client, 
 @pytest.mark.asyncio
 async def test_routing_result_rejects_legacy_placement_fields(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-asset-id-user")
 
     create_response = await client.post(
@@ -2277,6 +2281,7 @@ async def test_routing_result_rejects_legacy_placement_fields(client, db_session
 @pytest.mark.asyncio
 async def test_routing_order_http_flow_without_service_token(client, db_session):
     _node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-order-http-user")
 
     create_response = await client.post(
@@ -2362,6 +2367,56 @@ async def test_routing_order_http_flow_without_service_token(client, db_session)
 
 
 @pytest.mark.asyncio
+async def test_internal_benchmark_routing_is_hidden_from_external_router(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+    headers, user = await _auth_headers(client, db_session, username="internal-routing-isolation-user")
+
+    create_response = await client.post(
+        "/api/orders/batch-benchmark",
+        headers=headers,
+        json={
+            "task_type": "low_latency_video_pipeline",
+            "count": 1,
+            "benchmark_run_id": "internal-routing-isolation-run",
+        },
+    )
+    assert create_response.status_code == 200
+    benchmark_order_id = create_response.json()["order_ids"][0]
+
+    normal_order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="normal-order-remains-visible",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        is_benchmark=False,
+    )
+    db_session.add(normal_order)
+    await db_session.commit()
+
+    list_response = await client.get("/api/routing-orders", params={"status": "pending"})
+    assert list_response.status_code == 200
+    visible_order_ids = [item["order_id"] for item in list_response.json()]
+    assert normal_order.id in visible_order_ids
+    assert benchmark_order_id not in visible_order_ids
+
+    normal_claim_response = await client.patch(f"/api/routing-orders/{normal_order.id}/claim")
+    assert normal_claim_response.status_code == 200
+
+    hidden_response = await client.get(
+        "/api/routing-orders",
+        params={"status": "pending", "benchmark_run_id": "internal-routing-isolation-run"},
+    )
+    assert hidden_response.status_code == 200
+    assert hidden_response.json() == []
+
+    claim_response = await client.patch(f"/api/routing-orders/{benchmark_order_id}/claim")
+    assert claim_response.status_code == 409
+    assert "managed by the platform" in claim_response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_routing_order_result_requires_claim(client, db_session):
     await _seed_business_fixture(client)
     headers, _user = await _auth_headers(client, db_session, username="routing-claim-required-user")
@@ -2425,6 +2480,7 @@ async def test_legacy_order_routing_result_endpoint_is_not_public(client, db_ses
 @pytest.mark.asyncio
 async def test_router_can_requeue_and_fail_routing_order_without_service_token(client, db_session):
     await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-status-user")
 
     create_response = await client.post(
@@ -2468,6 +2524,7 @@ async def test_router_can_requeue_and_fail_routing_order_without_service_token(c
 @pytest.mark.asyncio
 async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_session):
     await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-conflict-user")
 
     create_response = await client.post(
@@ -2506,6 +2563,7 @@ async def test_routing_result_rejects_active_gpu_slot_conflict(client, db_sessio
 @pytest.mark.asyncio
 async def test_routing_result_default_benchmark_gpu_participates_in_conflict_check(client, db_session):
     await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-default-gpu-conflict-user")
 
     create_response = await client.post(
@@ -2587,6 +2645,7 @@ async def test_routing_result_rejects_soft_deleted_order(client, db_session):
 @pytest.mark.asyncio
 async def test_delete_order_emits_and_acks_routing_resource_release_event(client, db_session):
     await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-release-user")
 
     create_response = await client.post(
@@ -2690,6 +2749,7 @@ async def test_release_event_emission_is_idempotent(db_session):
 @pytest.mark.asyncio
 async def test_delete_order_releases_default_benchmark_gpu_when_router_omits_gpu(client, db_session):
     await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-default-gpu-release-user")
 
     create_response = await client.post(
@@ -4711,6 +4771,7 @@ async def test_business_task_list_shows_runtime_metric_without_formal_evaluation
 @pytest.mark.asyncio
 async def test_order_detail_exposes_routing_decision_summary(client, db_session):
     node_ids, _template_id = await _seed_business_fixture(client)
+    await _set_runtime_settings(db_session, benchmark_routing_mode="external")
     headers, _user = await _auth_headers(client, db_session, username="routing-decision-user")
     await _seed_stable_baselines(db_session, node_ids, "low_latency_video_pipeline")
 
