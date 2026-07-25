@@ -168,6 +168,79 @@ def _jpeg_bytes(frame_rgb, quality: int = 90) -> bytes:
     return buf.tobytes()
 
 
+def _ffmpeg_environment() -> dict[str, str]:
+    """Use the isolated FFmpeg runtime libraries without affecting Python/Torch."""
+    environment = dict(os.environ)
+    library_path = environment.get("LD_LIBRARY_PATH", "")
+    environment["LD_LIBRARY_PATH"] = "/usr/local/lib" + (f":{library_path}" if library_path else "")
+    return environment
+
+
+def _start_h264_encoder(archive_path: Path, width: int, height: int, fps: int) -> subprocess.Popen:
+    """Start an ffmpeg process that writes a browser-compatible H.264 MP4."""
+    command = [
+        "ffmpeg",
+        "-y",
+        "-loglevel", "error",
+        "-f", "rawvideo",
+        "-pixel_format", "rgb24",
+        "-video_size", f"{width}x{height}",
+        "-framerate", str(fps),
+        "-i", "pipe:0",
+        "-an",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(archive_path),
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=_ffmpeg_environment(),
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg with libx264 is required to archive fusion results") from exc
+    if process.stdin is None:
+        process.kill()
+        process.wait()
+        raise RuntimeError("failed to open ffmpeg video input")
+    return process
+
+
+def _finish_h264_encoder(process: subprocess.Popen) -> None:
+    if process.stdin is not None and not process.stdin.closed:
+        process.stdin.close()
+    return_code = process.wait()
+    stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr is not None else ""
+    if return_code != 0:
+        raise RuntimeError(f"failed to create H.264 fusion MP4 archive: {stderr.strip()}")
+
+
+def _assert_h264_archive(archive_path: Path) -> None:
+    """Fail the task if the archived MP4 is not browser-playable H.264."""
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(archive_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_ffmpeg_environment(),
+    )
+    codec_name = probe.stdout.strip().lower()
+    if probe.returncode != 0 or codec_name != "h264":
+        detail = probe.stderr.strip() or codec_name or "no video codec reported"
+        raise RuntimeError(f"fusion MP4 archive must use H.264, got: {detail}")
+
+
 def _read_video_pairs(job: dict[str, Any]) -> list[tuple[int, Any, Any]]:
     if cv2 is None:
         raise RuntimeError("opencv-python-headless is required for video fusion")
@@ -244,33 +317,42 @@ def run_fusion_profile(job: dict[str, Any]) -> dict[str, Any]:
 
     samples = []
     preview_jpeg: bytes | None = None
-    archive_path = Path(tempfile.mkstemp(prefix="metaverse-fusion-", suffix=".mp4")[1])
-    video_writer = None
+    archive_fd, archive_name = tempfile.mkstemp(prefix="metaverse-fusion-", suffix=".mp4")
+    os.close(archive_fd)
+    archive_path = Path(archive_name)
+    video_encoder = None
     start = time.perf_counter()
-    for sample_index, (frame_index, frame0, frame1) in enumerate(measured):
-        if torch is not None and device.startswith("cuda"):
-            torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        fused = _fuse_pair(model, transform, device, frame0, frame1)
-        if torch is not None and device.startswith("cuda"):
-            torch.cuda.synchronize()
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        samples.append({"frame_index": frame_index, "latency_ms": round(elapsed_ms, 4)})
-        if video_writer is None:
-            height, width = fused.shape[:2]
-            video_writer = cv2.VideoWriter(
-                str(archive_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                float(int(job.get("fps", 30) or 30)),
-                (width, height),
-            )
-            if not video_writer.isOpened():
-                raise RuntimeError("failed to create fusion MP4 archive")
-        video_writer.write(cv2.cvtColor(fused, cv2.COLOR_RGB2BGR))
-        if preview_jpeg is None:
-            preview_jpeg = _jpeg_bytes(fused)
-    if video_writer is not None:
-        video_writer.release()
+    try:
+        for frame_index, frame0, frame1 in measured:
+            if torch is not None and device.startswith("cuda"):
+                torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            fused = _fuse_pair(model, transform, device, frame0, frame1)
+            if torch is not None and device.startswith("cuda"):
+                torch.cuda.synchronize()
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            samples.append({"frame_index": frame_index, "latency_ms": round(elapsed_ms, 4)})
+            if video_encoder is None:
+                height, width = fused.shape[:2]
+                video_encoder = _start_h264_encoder(
+                    archive_path,
+                    width,
+                    height,
+                    int(job.get("fps", 30) or 30),
+                )
+            video_encoder.stdin.write(fused.tobytes())
+            if preview_jpeg is None:
+                preview_jpeg = _jpeg_bytes(fused)
+        if video_encoder is None:
+            raise RuntimeError("no fused frames were available for MP4 archival")
+        _finish_h264_encoder(video_encoder)
+        _assert_h264_archive(archive_path)
+    except Exception:
+        if video_encoder is not None and video_encoder.poll() is None:
+            video_encoder.kill()
+            video_encoder.wait()
+        archive_path.unlink(missing_ok=True)
+        raise
     observed_duration_sec = time.perf_counter() - start
     latencies = [float(item["latency_ms"]) for item in samples]
     p90 = percentile(latencies, 0.90)

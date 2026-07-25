@@ -158,7 +158,6 @@ export function describeDataProfile(taskType, profile) {
   }
   if (taskType === 'metaverse_video_fusion') {
     return compactRows([
-      { label: '分辨率', value: profile.resolution || '-' },
       { label: '总帧数', value: profile.frame_count != null ? `${profile.frame_count} 帧` : '-' },
       { label: '帧率', value: profile.fps != null ? `${profile.fps} FPS` : '-' },
       { label: '传输方式', value: Number(profile.frame_stride || 1) === 1 ? '逐帧传输' : `每 ${profile.frame_stride} 帧取 1 帧` },
@@ -356,9 +355,9 @@ export function buildVideoInputRows(dataProfile) {
   const isMetaverse = Boolean(dataProfile?.fusion_mode || dataProfile?.video0_asset || dataProfile?.video1_asset)
   const rows = describeDataProfile(isMetaverse ? 'metaverse_video_fusion' : 'low_latency_video_pipeline', dataProfile || {})
   const profile = dataProfile || {}
-  if (profile.video0_asset) rows.push({ label: '前景视频', value: profile.video0_asset })
-  if (profile.video1_asset) rows.push({ label: '背景视频', value: profile.video1_asset })
-  if (profile.fusion_mode) rows.push({ label: '融合模式', value: profile.fusion_mode })
+  if (!isMetaverse && profile.video0_asset) rows.push({ label: '前景视频', value: profile.video0_asset })
+  if (!isMetaverse && profile.video1_asset) rows.push({ label: '背景视频', value: profile.video1_asset })
+  if (!isMetaverse && profile.fusion_mode) rows.push({ label: '融合模式', value: profile.fusion_mode })
   if (profile.inference_mode) rows.push({ label: '推理模式', value: profile.inference_mode })
   return rows
 }
@@ -373,12 +372,12 @@ export function buildVideoOutputRows(resultMetadata, evaluation) {
   const rows = []
   const meta = resultMetadata || {}
   const isMetaverse = Boolean(meta.fusion_mode || meta.video0_asset || meta.video1_asset)
-  if (meta.model_name) rows.push({ label: '检测模型', value: String(meta.model_name) })
-  if (meta.fusion_mode) rows.push({ label: '融合模式', value: String(meta.fusion_mode) })
+  if (meta.model_name) rows.push({ label: isMetaverse ? '融合模型' : '检测模型', value: String(meta.model_name) })
+  if (!isMetaverse && meta.fusion_mode) rows.push({ label: '融合模式', value: String(meta.fusion_mode) })
   if (meta.video_asset) rows.push({ label: '测试视频', value: String(meta.video_asset) })
-  if (meta.video0_asset) rows.push({ label: '前景视频', value: String(meta.video0_asset) })
-  if (meta.video1_asset) rows.push({ label: '背景视频', value: String(meta.video1_asset) })
-  if (meta.detector_backend) rows.push({ label: '推理后端', value: String(meta.detector_backend) })
+  if (!isMetaverse && meta.video0_asset) rows.push({ label: '前景视频', value: String(meta.video0_asset) })
+  if (!isMetaverse && meta.video1_asset) rows.push({ label: '背景视频', value: String(meta.video1_asset) })
+  if (meta.detector_backend) rows.push({ label: isMetaverse ? '融合后端' : '推理后端', value: String(meta.detector_backend) })
   if (meta.actual_backend) rows.push({ label: '实际执行后端', value: String(meta.actual_backend) })
   if (meta.device) rows.push({ label: '运行设备', value: String(meta.device) })
   if (meta.gpu_device !== undefined && meta.gpu_device !== null && String(meta.gpu_device) !== '') {

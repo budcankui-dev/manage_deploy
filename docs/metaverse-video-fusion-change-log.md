@@ -20,8 +20,10 @@
 | Manager 的运行手册增加输入视频只读挂载 | Manager 可访问 `cam0.mp4` 与 `cam1.mp4` 输入预览；融合结果不再依赖 Manager 本地持久卷。 |
 | `.runtime/` 与各层 `venv*/` 加入忽略规则 | 运行帧缓存和误建虚拟环境属于本机生成物，不能进入 Git。 |
 | 融合结果改为 MinIO 耐久归档 | Compute 必须将 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 `task-results/<instance>/metaverse/`；归档失败会使任务失败，避免出现“成功但没有可播放结果”。 |
+| 融合 MP4 改为 H.264 | OpenCV `mp4v` 生成的 MPEG-4 Part 2 文件在 Chrome 无法加载 metadata。Compute 现在使用 `ffmpeg/libx264` 输出 `yuv420p` H.264 MP4，并用 `ffprobe` 断言编码为 `h264`；任务不会归档不可播放的视频。 |
 | Source → Compute 输入改为视频字节流 | Source 仅公开白名单 `cam0.mp4`、`cam1.mp4` 的 `/assets/<name>` 流式接口；Compute 必须通过 `PEER_SOURCE_URL` 下载两路 MP4 后融合，不再在 Compute 本地读取同一份输入或传递 Base64 帧序列。 |
 | 前端改为 URI 播放 | 工单详情使用 Manager 的只读代理 URI 播放 MP4，浏览器不接触 MinIO 密钥，也不再加载 Base64 帧序列。 |
+| 元宇宙详情展示修正 | 结果页改为融合 MP4、MODNet/GPU/时延证据文案；输入参数移除重复的前景视频、背景视频、融合模式，并按要求不展示分辨率。 |
 | 补齐 receiver 入口并去除旧仓库地址 | 新增 `receiver_main.py`，并由运行时部署画像提供 endpoint 镜像；前端不再为元宇宙写死旧的 `10.112.244.94:5000` 仓库。 |
 | 三角色节点放置修正 | 模板将 Source 放在 `h1`、Compute 放在 GPU 节点 `compute-2`、Sink 放在 `h2`。 |
 

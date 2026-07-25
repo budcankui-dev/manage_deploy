@@ -9,7 +9,7 @@ summary and result object URIs.
 For every completed instance, Compute archives the following objects in
 `task-results/<instance-id>/metaverse/`:
 
-- `fusion-result.mp4`
+- `fusion-result.mp4` (H.264 / yuv420p, browser-playable)
 - `fusion-preview.jpg`
 - `result.json`
 

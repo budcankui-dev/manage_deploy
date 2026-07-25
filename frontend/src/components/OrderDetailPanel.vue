@@ -505,7 +505,7 @@
                 <template v-if="metaversePlaybackUrl">
                   <div class="video-proof-summary">
                     <strong>融合结果视频</strong>
-                    <span>融合结果已归档至 MinIO，通过平台结果 URI 播放。</span>
+                    <span>融合结果已归档至 MinIO，使用 H.264 MP4 通过平台结果 URI 播放。</span>
                   </div>
                   <div class="video-proof-frame">
                     <video :src="metaversePlaybackUrl" controls preload="metadata" class="fusion-result-video" />
@@ -989,6 +989,9 @@ const resultProofDescription = computed(() => {
     return '任务运行并上报指标后，这里会展示可复核的输入、输出和判定依据。'
   }
   if (isVideoTask.value) {
+    if (isMetaverseTask.value) {
+      return '融合任务以参与统计帧的 P90 融合时延作为核心指标，并保留融合 MP4、预览帧、MODNet 执行后端与 GPU 信息作为业务真实运行证据。'
+    }
     return '视频任务以参与统计帧的 P90 推理时延作为核心指标，并保留检测框、类别、置信度和预览图作为业务真实运行证据。'
   }
   if (isMatmulTask.value) {

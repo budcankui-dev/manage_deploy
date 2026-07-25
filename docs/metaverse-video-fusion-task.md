@@ -12,7 +12,7 @@
 - DAG：`source -> compute -> sink`
 - 输入：两路固定视频 `cam0.mp4`、`cam1.mp4`；Source 在业务面提供 `/assets/cam0.mp4`、`/assets/cam1.mp4` 流，Compute 必须经 `PEER_SOURCE_URL` 下载双路输入后融合
 - 计算：`compute` 节点使用 MODNet 在 GPU 上做视频融合
-- 输出：Compute 将 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 MinIO；Sink 仅上报 `frame_latency_p90_ms`、GPU/backend 摘要和对象 URI
+- 输出：Compute 将 H.264 编码的 `fusion-result.mp4`、`fusion-preview.jpg`、`result.json` 写入 MinIO；Sink 仅上报 `frame_latency_p90_ms`、GPU/backend 摘要和对象 URI
 - 统计口径：前 10 对帧预热，后 170 对帧全部计入 P90 单帧融合时延
 - 业务目标：P90 单帧融合时延 `<= target_value ms`
 
@@ -140,7 +140,7 @@ export MINIO_SECRET_KEY=<secret-key>
 <task-instance-id>/metaverse/result.json
 ```
 
-工单详情中的播放器请求 `/api/demo-assets/metaverse-results/<task-instance-id>/fusion-result.mp4`。这是 Manager 的同源只读代理，支持 HTTP Range 请求以便浏览器流式播放和拖动进度，也不会把 MinIO 密钥暴露给浏览器。
+工单详情中的播放器请求 `/api/demo-assets/metaverse-results/<task-instance-id>/fusion-result.mp4`。结果使用 H.264/yuv420p 编码；这是 Manager 的同源只读代理，支持 HTTP Range 请求以便浏览器流式播放和拖动进度，也不会把 MinIO 密钥暴露给浏览器。
 
 ### Source 到 Compute 的完整视频传输
 
