@@ -209,6 +209,10 @@ export const conversationApi = {
 export const adminApi = {
   getSystemSettings: () => api.get('/admin/system-settings'),
   updateSystemSettings: (data) => api.put('/admin/system-settings', data),
+  activateSystemSettingsProfile: (environmentMode) => api.post(
+    '/admin/system-settings/activate-profile',
+    { environment_mode: environmentMode }
+  ),
   listUsers: () => api.get('/admin/users'),
   getUser: (id) => api.get(`/admin/users/${id}`),
   createUser: (data) => api.post('/admin/users', data),

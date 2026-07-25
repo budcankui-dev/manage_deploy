@@ -45,6 +45,10 @@ const mockNodes = [
     is_schedulable: true,
     gpu_count: 1,
     gpu_model: 'NVIDIA TITAN Xp',
+    gpu_memory_mb: 12288,
+    cpu_cores: 24,
+    cpu_model: 'Intel Xeon E5',
+    memory_mb: 65536,
   },
   {
     id: 'h1-id',
@@ -111,6 +115,7 @@ async function mockBenchmarkReadApis(page) {
         unit: 'GFLOPS',
         stable: true,
         raw_values: [5480, 5500, 5520],
+        diagnostics: { actual_backends: ['cupy_gpu'] },
       },
     ]),
   }))
@@ -176,6 +181,16 @@ async function mockBusinessTaskHubApis(page) {
 
 test('admin can inspect the business task hub', async ({ page }, testInfo) => {
   await installAdminSession(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.__lastCopiedOrderId = text
+        },
+      },
+    })
+  })
   await mockAdminApi(page)
   await mockBusinessTaskHubApis(page)
 
@@ -185,11 +200,76 @@ test('admin can inspect the business task hub', async ({ page }, testInfo) => {
   await expect(page.getByRole('heading', { name: '工单列表' })).toBeVisible()
   await expect(page.getByRole('button', { name: '应用筛选' })).toBeVisible()
   await expect(page.getByText('清理实例会释放远端容器和实例记录')).toBeVisible()
+  await page.getByRole('button', { name: '复制' }).first().click()
+  await expect.poll(() => page.evaluate(() => window.__lastCopiedOrderId)).toBe('order-normal-1')
 
   await page.screenshot({
     path: testInfo.outputPath('business-tasks-hub.png'),
     fullPage: true,
   })
+})
+
+test('user can copy order id from my orders list and detail toolbar', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('access_token', 'fake-user-token')
+    window.localStorage.setItem('role', 'user')
+    window.localStorage.setItem('username', 'demo-user')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.__lastCopiedOrderId = text
+        },
+      },
+    })
+  })
+  await page.route('**/api/auth/me', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 'user-1', username: 'demo-user', role: 'user' }),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      items: [
+        {
+          id: 'user-order-copy-1',
+          task_type: 'high_throughput_matmul',
+          status: 'completed',
+          routing_status: 'completed',
+          deployment_status: 'stopped',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    }),
+  }))
+  await page.route('**/api/orders/user-order-copy-1', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      id: 'user-order-copy-1',
+      task_type: 'high_throughput_matmul',
+      status: 'completed',
+      routing_status: 'completed',
+      business_task: {
+        task_type: 'high_throughput_matmul',
+        data_profile: { matrix_size: 1024, batch_count: 50 },
+        business_objective: { metric_key: 'effective_gflops', operator: '>=', target_value: 5000, unit: 'GFLOPS' },
+      },
+      node_placements: [],
+      created_at: new Date().toISOString(),
+    }),
+  }))
+
+  await page.goto('/my-orders')
+  await expect(page.getByText('工单ID：user-order-c')).toBeVisible()
+  await page.getByRole('button', { name: '复制' }).first().click()
+  await expect.poll(() => page.evaluate(() => window.__lastCopiedOrderId)).toBe('user-order-copy-1')
+  await page.getByText('矩阵乘法计算任务').click()
+  await expect(page.getByText('任务工单详情')).toBeVisible()
+  await page.getByRole('button', { name: '复制工单ID' }).click()
+  await expect.poll(() => page.evaluate(() => window.__lastCopiedOrderId)).toBe('user-order-copy-1')
 })
 
 test('admin sidebar navigation responds from benchmark page', async ({ page }, testInfo) => {
@@ -198,6 +278,9 @@ test('admin sidebar navigation responds from benchmark page', async ({ page }, t
   await mockBenchmarkReadApis(page)
 
   await page.goto('/benchmark', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByText('1 × NVIDIA TITAN Xp')).toBeVisible()
+  await expect(page.getByText('执行引擎：cupy_gpu')).toBeVisible()
+  await expect(page.getByText('未记录设备')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '拓扑节点' })).toBeVisible()
 
   await page.getByRole('button', { name: '拓扑节点' }).click()
@@ -306,6 +389,7 @@ test('benchmark running state survives sidebar navigation', async ({ page }, tes
   await page.goto('/benchmark')
   await expect(page.locator('section').getByRole('button', { name: '测评运行中' })).toBeDisabled()
   await expect(page.locator('.step-card').getByRole('button', { name: '测评运行中' })).toBeDisabled()
+  await expect(page.getByText('1 × NVIDIA TITAN Xp')).toBeVisible()
 
   await page.getByRole('button', { name: '拓扑节点' }).click()
   await page.waitForURL(/\/nodes/, { timeout: 10_000 })
@@ -528,6 +612,60 @@ test('benchmark full-flow click locks while refreshing page data', async ({ page
   expect(session.phase).toBe('creating')
 })
 
+test('benchmark batch baseline lock survives sidebar navigation', async ({ page }) => {
+  let batchBaselineRequests = 0
+  await installAdminSession(page)
+  await mockAdminApi(page)
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {
+        node_id: 'compute-1-id',
+        task_type: 'high_throughput_matmul',
+        metric_key: 'effective_gflops',
+        baseline_value: 5500,
+        unit: 'GFLOPS',
+        stable: true,
+        raw_values: [5480, 5500, 5520],
+      },
+    ]),
+  }))
+  await page.route('**/api/baselines/batch-run', async () => {
+    batchBaselineRequests += 1
+    await new Promise(() => {})
+  })
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: [], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [] }),
+  }))
+
+  await page.goto('/benchmark')
+  await page.getByRole('button', { name: '批量测试计算节点' }).click()
+  await expect(page.getByRole('button', { name: /基线测试中|批量测试计算节点/ })).toBeDisabled()
+
+  await page.getByRole('button', { name: '拓扑节点' }).click()
+  await page.waitForURL(/\/nodes/, { timeout: 10_000 })
+  await page.getByRole('button', { name: '业务测评' }).click()
+  await page.waitForURL(/\/benchmark/, { timeout: 10_000 })
+  await expect(page.getByRole('button', { name: /基线测试中|批量测试计算节点/ })).toBeDisabled()
+  await expect.poll(() => batchBaselineRequests).toBe(1)
+  const lock = await page.evaluate(() => JSON.parse(window.localStorage.getItem('manage-deploy:benchmark-baseline-run-lock')))
+  expect(lock.taskType).toBe('high_throughput_matmul')
+  expect(lock.scope).toBe('batch')
+})
+
 test('benchmark full-flow survives transient status polling failure and unlocks on completion', async ({ page }) => {
   let createdRunId = ''
   let statusRequests = 0
@@ -662,6 +800,133 @@ test('benchmark full-flow survives transient status polling failure and unlocks 
   await expect(page.locator('section').getByRole('button', { name: '开始完整测试流程' })).toBeEnabled()
   await expect(page.locator('.step-card').getByRole('button', { name: '运行测评' })).toBeEnabled()
   await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(3)
+})
+
+test('benchmark run button clears stale in-page runner lock and restarts backend run', async ({ page }) => {
+  const staleRunId = 'high_throughput_matmul-stale-lock'
+  let statusRequests = 0
+  let startRequests = 0
+  let completed = false
+
+  await installAdminSession(page)
+  await mockAdminApi(page)
+  await page.addInitScript((runId) => {
+    window.__manageDeployBenchmarkRunnerKey = `high_throughput_matmul:${runId}`
+    window.localStorage.setItem('manage-deploy:benchmark-run-session', JSON.stringify({
+      taskType: 'high_throughput_matmul',
+      benchmarkRunId: runId,
+      phase: 'running',
+      updatedAt: new Date().toISOString(),
+    }))
+  }, staleRunId)
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {
+        node_id: 'compute-1-id',
+        task_type: 'high_throughput_matmul',
+        metric_key: 'effective_gflops',
+        baseline_value: 5500,
+        unit: 'GFLOPS',
+        stable: true,
+        raw_values: [5480, 5500, 5520],
+      },
+    ]),
+  }))
+  await page.route('**/api/orders/batch-auto-route', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ routed: 1, failed: [] }),
+  }))
+  await page.route('**/api/orders/benchmark/managed-run/status**', async route => {
+    statusRequests += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(completed
+        ? {
+            phase: 'completed',
+            message: '本轮 30 个测评任务已全部完成评估。',
+            running: false,
+            progress: { total: 30, evaluated: 30, success: 30, active: 0, started: 0, cleaned: 30, pending_to_start: 0 },
+          }
+        : {
+            phase: 'idle',
+            message: '当前轮次没有后台测评任务。',
+            running: false,
+            progress: null,
+          }),
+    })
+  })
+  await page.route('**/api/orders/benchmark/managed-run', async route => {
+    startRequests += 1
+    completed = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        phase: 'running',
+        message: '已启动后台测评推进，页面会自动刷新进度。',
+        running: true,
+        progress: { total: 30, evaluated: 0, success: 0, active: 1, started: 1, cleaned: 0, pending_to_start: 29 },
+      }),
+    })
+  })
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: completed ? Array.from({ length: 30 }, (_, i) => `order-${i}`) : [], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {
+        task_type: 'high_throughput_matmul',
+        count: 30,
+        evaluated_count: completed ? 30 : 0,
+        success_count: completed ? 30 : 0,
+        business_success_rate: completed ? 1 : null,
+        acceptance_passed: completed,
+        sample_count_passed: completed,
+        required_evaluated_count: 30,
+        required_success_rate: 0.9,
+      },
+    ]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      items: [
+        {
+          id: 'order-stale-lock-1',
+          task_type: 'high_throughput_matmul',
+          status: completed ? 'completed' : 'materialized',
+          routing_status: 'completed',
+          deployment_status: completed ? 'completed' : 'pending',
+          business_success: completed ? true : null,
+          actual_value: completed ? 5520 : null,
+          target_value: 5000,
+          unit: 'GFLOPS',
+          materialized_instance_id: completed ? null : 'instance-stale-lock-1',
+          runtime_config: {
+            benchmark: { run_id: staleRunId },
+            business_task: { modality: '高通量计算模态' },
+            routing_result: { placements: [{ task_node_id: 'compute', topology_node_id: 'compute-1', gpu_device: '0' }] },
+          },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    }),
+  }))
+
+  await page.goto(`/benchmark?benchmark_run_id=${staleRunId}`)
+  await page.locator('.step-card').getByRole('button', { name: '运行测评' }).click()
+  await expect(page.getByText('100.0%')).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2)
+  expect(startRequests).toBe(1)
 })
 
 test('optional headed matmul demo trigger is visible', async ({ page, request }, testInfo) => {

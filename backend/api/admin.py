@@ -53,6 +53,7 @@ from services.intent_workflow import run_intent_workflow
 from services.endpoint_resolver import is_user_endpoint_node
 from services.routing_payload_builder import build_routing_payload
 from services.system_settings import (
+    activate_runtime_profile,
     get_runtime_settings,
     modality_priority_map_from_settings,
     routing_resource_options_from_settings,
@@ -203,6 +204,23 @@ async def put_system_settings(
     return await update_runtime_settings(db, payload, updated_by=admin.id)
 
 
+@router.post("/system-settings/activate-profile")
+async def activate_system_settings_profile(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    environment_mode = str(payload.get("environment_mode") or "").strip()
+    try:
+        return await activate_runtime_profile(
+            db,
+            environment_mode,
+            updated_by=admin.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 # ─── 用户管理 ───────────────────────────────────────────────
 
 @router.get("/users", response_model=list[UserResponse])
@@ -227,6 +245,7 @@ async def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await db.delete(user)
+    await db.commit()
     return {"ok": True}
 
 

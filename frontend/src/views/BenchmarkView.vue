@@ -41,10 +41,11 @@
             size="small"
             type="warning"
             plain
-            :loading="batchBaselineLoading"
+            :loading="batchBaselineBusy"
+            :disabled="baselineActionDisabled"
             @click="runBatchBaseline"
           >
-            批量测试计算节点
+            {{ batchBaselineBusy ? '基线测试中' : '批量测试计算节点' }}
           </el-button>
         </div>
       </template>
@@ -55,11 +56,10 @@
         :row-class-name="baselineRowClass"
       >
         <el-table-column prop="hostname" label="节点" min-width="150" />
-        <el-table-column label="资源属性" min-width="220">
+        <el-table-column label="GPU 资源" min-width="220">
           <template #default="{ row }">
             <div class="baseline-resource">
               <strong>{{ formatBaselineGpu(row) }}</strong>
-              <small>{{ formatBaselineRuntime(row) }}</small>
             </div>
           </template>
         </el-table-column>
@@ -81,11 +81,13 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="样本/后端" min-width="260">
+        <el-table-column label="样本 / 执行引擎" min-width="260">
           <template #default="{ row }">
             <div v-if="row.raw_values?.length" class="baseline-diagnostics">
               <div>样本：{{ formatRawValues(row.raw_values, row.unit) }}</div>
-              <div>后端：{{ formatDiagnosticBackends(row.diagnostics) }}</div>
+              <div v-if="formatDiagnosticBackend(row.diagnostics)">
+                执行引擎：{{ formatDiagnosticBackend(row.diagnostics) }}
+              </div>
               <div v-if="formatDiagnosticGpuError(row.diagnostics)" class="danger-text">
                 {{ formatDiagnosticGpuError(row.diagnostics) }}
               </div>
@@ -103,6 +105,7 @@
               type="primary"
               plain
               :loading="testingNodes.get(row.node_id)"
+              :disabled="baselineActionDisabled"
               @click="runSingleBaseline(row)"
             >
               {{ row.baseline_value != null ? '重测' : '测试' }}
@@ -137,17 +140,17 @@
             @update:model-value="markBenchmarkCountTouched"
           />
           <template v-if="taskType === 'high_throughput_matmul'">
-            <span>矩阵</span>
+            <span>矩阵阶数</span>
             <el-input-number v-model="benchmarkForm.matrix_size" :min="256" :step="256" controls-position="right" />
-            <span>批次</span>
-            <el-input-number v-model="benchmarkForm.batch_count" :min="1" controls-position="right" />
-            <span>观测秒数</span>
+            <span>每样本批数</span>
+            <el-input-number v-model="benchmarkForm.sample_batch_count" :min="1" controls-position="right" />
+            <span>观测窗口（秒）</span>
             <el-input-number v-model="benchmarkForm.observation_duration_sec" :min="0" :max="120" controls-position="right" />
-            <span>最少样本</span>
+            <span>最少样本数</span>
             <el-input-number v-model="benchmarkForm.min_samples" :min="1" :max="30" controls-position="right" />
           </template>
           <template v-else-if="taskType === 'low_latency_video_pipeline'">
-            <span>视频片段帧范围</span>
+            <span>候选视频帧范围</span>
             <el-input-number v-model="benchmarkForm.frame_count" :min="30" :step="10" controls-position="right" />
             <span>抽帧间隔</span>
             <el-input-number v-model="benchmarkForm.frame_stride" :min="1" controls-position="right" />
@@ -167,10 +170,13 @@
           当前待分配工单：<strong>{{ pendingWorkCount }}</strong> 个
         </div>
       </div>
-      <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
-      <p v-if="taskType === 'low_latency_video_pipeline'" class="status-note">
-        视频参数口径：视频片段帧范围表示从固定测试视频中参与抽样的候选范围；抽帧间隔决定取样步长；参与统计帧数用于计算 P90 帧推理时延。
+      <p v-if="taskType === 'high_throughput_matmul'" class="metric-note">
+        参数口径：固定预热 3 批不计入结果；每个样本执行“每样本批数”次矩阵乘法，达到最少样本数后持续观测至设定窗口结束，以样本中位吞吐量判定。
       </p>
+      <p v-else-if="taskType === 'low_latency_video_pipeline'" class="metric-note">
+        参数口径：固定预热 10 帧不计入结果；候选视频帧范围用于抽样定位，抽帧间隔是相邻采样位置的步长，参与统计帧数用于计算 P90 帧推理时延。
+      </p>
+      <p class="metric-note">{{ currentTaskConfig.objectiveText }}</p>
       <p class="status-note">创建测评工单会生成新的测评轮次 ID，后续运行、统计和测试工单列表默认只针对这一轮，避免历史数据影响当前结果。</p>
     </el-card>
 
@@ -187,10 +193,10 @@
               size="small"
               type="primary"
               :loading="evaluationFlowBusy || settingsLoading"
-              :disabled="evaluationFlowBusy || settingsLoading"
+              :disabled="evaluationFlowBusy || settingsLoading || benchmarkRunStopped"
               @click="runEvaluationFlow"
             >
-              {{ evaluationFlowBusy ? '测评运行中' : '运行测评' }}
+              {{ evaluationFlowBusy ? '测评运行中' : (benchmarkRunStopped ? '本轮已停止' : '运行测评') }}
             </el-button>
             <el-button
               size="small"
@@ -200,7 +206,7 @@
               :disabled="!canStopBenchmarkRun"
               @click="stopCurrentBenchmarkRun"
             >
-              停止本轮测评
+              {{ benchmarkRunStopped ? '本轮已停止' : '停止本轮测评' }}
             </el-button>
             <el-button size="small" plain :disabled="routeLoading || startLoading" @click="refreshBenchmarkPage">刷新</el-button>
           </div>
@@ -275,6 +281,14 @@
           <div class="header-actions">
             <el-button
               size="small"
+              plain
+              :disabled="!currentBenchmarkRunId"
+              @click="openBenchmarkRunInTaskHub"
+            >
+              任务中心查看本轮
+            </el-button>
+            <el-button
+              size="small"
               type="warning"
               plain
               :disabled="!selectedOrderIds.length && !currentBenchmarkRunId"
@@ -313,6 +327,7 @@
           <template #default="{ row }">
             <div class="order-cell">
               <strong>工单ID：{{ shortId(row.id) }}</strong>
+              <el-button link type="primary" size="small" @click.stop="copyOrderId(row.id)">复制</el-button>
             </div>
           </template>
         </el-table-column>
@@ -499,8 +514,11 @@ import {
   writeBenchmarkRunSession,
 } from '@/utils/benchmarkRunSession'
 import { extractErrorMessage } from '@/utils/errorMessage'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
+const BASELINE_RUN_LOCK_KEY = 'manage-deploy:benchmark-baseline-run-lock'
+const BASELINE_RUN_LOCK_TTL_MS = 30 * 60 * 1000
 const route = useRoute()
 const router = useRouter()
 const taskConfigs = {
@@ -526,6 +544,7 @@ const orders = ref([])
 const summary = ref([])
 const testingNodes = ref(new Map())
 const batchBaselineLoading = ref(false)
+const baselineRunLock = ref(readBaselineRunLock())
 const batchCreateLoading = ref(false)
 const routeLoading = ref(false)
 const settingsLoading = ref(false)
@@ -572,12 +591,13 @@ const benchmarkForm = reactive({
 })
 const benchmarkCountTouched = ref(false)
 const executionForm = reactive({
-  max_parallel: 6,
+  max_parallel: 8,
   per_compute_slot_limit: 1,
 })
 const executionFormTouched = ref(false)
 let resumeTimer = null
 let visibilityHandler = null
+let baselineLockTimer = null
 const stoppedBenchmarkRunKeys = new Set()
 const settingsForm = reactive({
   benchmark_routing_mode: 'internal_auto',
@@ -586,7 +606,7 @@ const settingsForm = reactive({
   show_routing_dag_json: false,
   benchmark_execution_defaults: {
     default_task_count: formalEvaluationCount,
-    max_parallel: 6,
+    max_parallel: 8,
     per_compute_slot_limit: 1,
   },
 })
@@ -631,6 +651,12 @@ const baselineRunCount = computed(() => (
   taskType.value === 'low_latency_video_pipeline' ? 5 : 3
 ))
 
+const baselineRunActive = computed(() => Boolean(baselineRunLock.value))
+const batchBaselineBusy = computed(() => batchBaselineLoading.value || baselineRunActive.value)
+const baselineActionDisabled = computed(() =>
+  batchBaselineBusy.value || benchmarkFlowBusy.value || settingsLoading.value
+)
+
 function isComputeNode(node) {
   return isOfficialComputeNodeName(node.hostname)
     && String(node.node_kind || 'worker').toLowerCase() === 'worker'
@@ -651,9 +677,6 @@ const nodeBaselineRows = computed(() =>
       updated_at: bl?.updated_at ?? bl?.created_at ?? null,
       gpu_count: n.gpu_count || 0,
       gpu_model: n.gpu_model || '',
-      gpu_memory_mb: n.gpu_memory_mb || null,
-      driver_version: n.driver_version || '',
-      cuda_version: n.cuda_version || '',
     }
   })
 )
@@ -714,21 +737,27 @@ const summaryAggregate = computed(() => {
 
 const executionStats = computed(() => {
   const stats = { ...orderStats.value }
+  if (benchmarkRunStopped.value) {
+    return { waitingRoute: 0, routed: 0, running: 0, completed: 0, failed: 0 }
+  }
   const aggregate = summaryAggregate.value
   if (!aggregate || !aggregate.count) return stats
 
   const evaluated = aggregate.evaluated_count || 0
   const total = aggregate.count || 0
+  const unevaluated = Math.max(0, total - evaluated - stats.failed)
+  const activeRunning = Math.min(stats.running, unevaluated)
+  const waitingRoute = Math.min(stats.waitingRoute, Math.max(0, unevaluated - activeRunning))
+
   stats.completed = evaluated
-  stats.running = Math.max(0, total - evaluated - stats.failed)
-  if (evaluated > 0) {
-    stats.waitingRoute = 0
-    stats.routed = 0
-  }
+  stats.running = activeRunning
+  stats.waitingRoute = waitingRoute
+  stats.routed = Math.max(0, unevaluated - activeRunning - waitingRoute)
   return stats
 })
 
 const pendingWorkCount = computed(() => {
+  if (benchmarkRunStopped.value) return 0
   const aggregate = summaryAggregate.value
   if (aggregate?.count) {
     return Math.max(0, (aggregate.count || 0) - (aggregate.evaluated_count || 0))
@@ -739,6 +768,14 @@ const pendingWorkCount = computed(() => {
 const hasBenchmarkWork = computed(() =>
   Boolean(currentBenchmarkRunId.value && orders.value.length)
 )
+
+const benchmarkRunStopped = computed(() => {
+  if (!currentBenchmarkRunId.value) return false
+  if (currentRunSessionActive.value && activeBenchmarkRunSession.value?.phase === 'stopped') {
+    return true
+  }
+  return orders.value.length > 0 && orders.value.every(order => order.status === 'cancelled')
+})
 
 const benchmarkRunCompleted = computed(() => {
   if (!hasBenchmarkWork.value) return false
@@ -763,7 +800,7 @@ const benchmarkRunHasActiveWork = computed(() => {
 })
 
 const canStopBenchmarkRun = computed(() =>
-  Boolean(currentBenchmarkRunId.value && orders.value.length && !benchmarkRunCompleted.value)
+  Boolean(currentBenchmarkRunId.value && orders.value.length && !benchmarkRunCompleted.value && !benchmarkRunStopped.value)
     && !benchmarkStopLoading.value
 )
 
@@ -806,6 +843,9 @@ const benchmarkFlowBusy = computed(() =>
 
 const executionStatusText = computed(() => {
   if (controlledStartStatus.value) return controlledStartStatus.value
+  if (benchmarkRunStopped.value) {
+    return '当前测评轮次已停止，未完成工单已取消且运行实例已释放；如需重新测评，请创建新的测评工单。'
+  }
   if (currentRunSessionCreating.value) {
     return '正在创建当前测评轮次，离开页面后再次进入会保持锁定，请勿重复启动。'
   }
@@ -986,6 +1026,24 @@ function shortId(value) {
   return value ? String(value).slice(0, 8) : '—'
 }
 
+async function copyOrderId(id) {
+  if (!id) return
+  await copyTextToClipboard(id)
+  ElMessage.success('工单 ID 已复制')
+}
+
+function openBenchmarkRunInTaskHub() {
+  if (!currentBenchmarkRunId.value) return
+  router.push({
+    path: '/business-tasks',
+    query: {
+      is_benchmark: 'true',
+      benchmark_run_id: currentBenchmarkRunId.value,
+      task_type: taskType.value,
+    },
+  })
+}
+
 function metricMeaningLabel(metricKey) {
   const labels = {
     effective_gflops: '计算速率',
@@ -1104,24 +1162,14 @@ function formatRawValues(values, unit) {
 
 function formatBaselineGpu(row) {
   const count = Number(row.gpu_count || 0)
-  if (!count) return '无 GPU 属性'
+  if (!count) return 'GPU 属性未同步'
   const model = row.gpu_model || 'GPU 型号未填'
-  const memory = row.gpu_memory_mb ? ` / ${(row.gpu_memory_mb / 1024).toFixed(row.gpu_memory_mb % 1024 === 0 ? 0 : 1)}GB` : ''
-  return `${count} × ${model}${memory}`
+  return `${count} × ${model}`
 }
 
-function formatBaselineRuntime(row) {
-  if (row.driver_version && row.cuda_version) return `${row.driver_version} / CUDA ${row.cuda_version}`
-  if (row.driver_version) return row.driver_version
-  if (row.cuda_version) return `CUDA ${row.cuda_version}`
-  return '运行环境未同步'
-}
-
-function formatDiagnosticBackends(diagnostics) {
-  if (!diagnostics) return '暂无'
-  const backends = diagnostics.actual_backends?.length ? diagnostics.actual_backends.join(', ') : '未记录'
-  const devices = diagnostics.devices?.length ? diagnostics.devices.join(', ') : '未记录设备'
-  return `${backends} · ${devices}`
+function formatDiagnosticBackend(diagnostics) {
+  if (!diagnostics?.actual_backends?.length) return ''
+  return diagnostics.actual_backends.join(', ')
 }
 
 function formatDiagnosticGpuError(diagnostics) {
@@ -1162,7 +1210,7 @@ function normalizeBenchmarkExecutionDefaults(value) {
   const incoming = value && typeof value === 'object' ? value : {}
   return {
     default_task_count: clampInteger(incoming.default_task_count, formalEvaluationCount, 1, 30),
-    max_parallel: clampInteger(incoming.max_parallel, 6, 1, 10),
+    max_parallel: clampInteger(incoming.max_parallel, 8, 1, 10),
     per_compute_slot_limit: clampInteger(incoming.per_compute_slot_limit, 1, 1, 4),
   }
 }
@@ -1173,6 +1221,47 @@ function markExecutionFormTouched() {
 
 function markBenchmarkCountTouched() {
   benchmarkCountTouched.value = true
+}
+
+function readBaselineRunLock() {
+  try {
+    const raw = window.localStorage.getItem(BASELINE_RUN_LOCK_KEY)
+    if (!raw) return null
+    const lock = JSON.parse(raw)
+    const startedAt = Number(lock?.startedAt || 0)
+    if (!startedAt || Date.now() - startedAt > BASELINE_RUN_LOCK_TTL_MS) {
+      window.localStorage.removeItem(BASELINE_RUN_LOCK_KEY)
+      return null
+    }
+    return lock
+  } catch {
+    return null
+  }
+}
+
+function syncBaselineRunLock() {
+  baselineRunLock.value = readBaselineRunLock()
+}
+
+function setBaselineRunLock(lock) {
+  const value = { ...lock, startedAt: Date.now() }
+  baselineRunLock.value = value
+  try {
+    window.localStorage.setItem(BASELINE_RUN_LOCK_KEY, JSON.stringify(value))
+  } catch {
+    // Ignore storage failures; the in-memory lock still prevents duplicate clicks in this tab.
+  }
+}
+
+function clearBaselineRunLock(lockKey = '') {
+  const current = readBaselineRunLock()
+  if (lockKey && current?.key && current.key !== lockKey) return
+  baselineRunLock.value = null
+  try {
+    window.localStorage.removeItem(BASELINE_RUN_LOCK_KEY)
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 async function loadNodes() {
@@ -1223,6 +1312,9 @@ async function loadOrders() {
   const params = { is_benchmark: true, task_type: taskType.value, limit: 100 }
   if (currentBenchmarkRunId.value) {
     params.benchmark_run_id = currentBenchmarkRunId.value
+    // Preserve cancelled records for the selected run so a completed stop operation
+    // remains visible after refreshing the page.
+    params.include_cancelled = true
   }
   const { data } = await ordersApi.list(params)
   if (!isCurrentDataLoad(snapshot)) return
@@ -1245,6 +1337,7 @@ async function resolveTaskTypeForBenchmarkRun() {
       is_benchmark: true,
       task_type: candidate,
       benchmark_run_id: currentBenchmarkRunId.value,
+      include_cancelled: true,
       limit: 1,
     })
     const items = Array.isArray(data) ? data : (data.items || [])
@@ -1381,6 +1474,7 @@ async function refreshBenchmarkPage() {
 
 function reconcileBenchmarkRunSessionAfterLoad() {
   if (!currentRunSessionActive.value) return
+  if (benchmarkRunStopped.value) return
   if (benchmarkRunCompleted.value) {
     clearCurrentBenchmarkRunSession()
     return
@@ -1442,6 +1536,10 @@ function pause(ms) {
 }
 
 async function runSingleBaseline(row) {
+  if (baselineActionDisabled.value) {
+    ElMessage.info('基线测试正在进行，请等待完成后再操作。')
+    return
+  }
   testingNodes.value = new Map(testingNodes.value.set(row.node_id, true))
   try {
     const { data } = await baselinesApi.run({ node_id: row.node_id, task_type: taskType.value, runs: baselineRunCount.value })
@@ -1453,6 +1551,12 @@ async function runSingleBaseline(row) {
 }
 
 async function runBatchBaseline() {
+  if (baselineActionDisabled.value) {
+    ElMessage.info('基线测试正在进行，请等待完成后再操作。')
+    return
+  }
+  const lockKey = `${taskType.value}:batch:${Date.now()}`
+  setBaselineRunLock({ key: lockKey, taskType: taskType.value, scope: 'batch' })
   batchBaselineLoading.value = true
   try {
     const { data } = await baselinesApi.batchRun({ task_type: taskType.value, runs: baselineRunCount.value })
@@ -1477,6 +1581,7 @@ async function runBatchBaseline() {
     await loadBaselines()
   } finally {
     batchBaselineLoading.value = false
+    clearBaselineRunLock(lockKey)
   }
 }
 
@@ -1661,6 +1766,10 @@ async function stopCurrentBenchmarkRun() {
     ElMessage.warning('请先选择一个测评轮次。')
     return
   }
+  if (benchmarkRunStopped.value) {
+    ElMessage.info('当前测评轮次已停止，无需重复操作。')
+    return
+  }
   try {
     await ElMessageBox.confirm(
       '将停止当前测评轮次中未完成的工单，释放已启动的容器和实例；已完成的结果证据会保留。继续吗？',
@@ -1675,7 +1784,7 @@ async function stopCurrentBenchmarkRun() {
   markBenchmarkRunStopped(runKey)
   cancelResumeBenchmarkRun()
   controlledStartStatus.value = '正在停止当前测评轮次并释放运行实例...'
-  clearCurrentBenchmarkRunSession()
+  markBenchmarkRunSession('stopped')
   clearActiveBenchmarkRunnerKey(runKey)
   try {
     const { data } = await ordersApi.stopBenchmarkRun({
@@ -1731,6 +1840,10 @@ async function refreshExternalRoutingStatus() {
 async function runEvaluationFlow() {
   if (!currentBenchmarkRunId.value) {
     ElMessage.warning('请先创建或选择一个测评轮次，再运行测评。')
+    return null
+  }
+  if (benchmarkRunStopped.value) {
+    ElMessage.info('当前测评轮次已停止，请创建新的测评工单后再运行。')
     return null
   }
   if (routeMode.value === 'external') {
@@ -1802,7 +1915,7 @@ async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
       return latest
     }
     if (data.phase === 'stopped') {
-      clearCurrentBenchmarkRunSession()
+      markBenchmarkRunSession('stopped')
       return latest
     }
     if (data.phase === 'idle') {
@@ -1838,9 +1951,26 @@ async function doStartAll() {
   const runnerKey = currentBenchmarkRunKey()
   const activeRunner = activeBenchmarkRunnerKey()
   if (activeRunner === runnerKey && !startLoading.value) {
-    markBenchmarkRunSession('running')
-    controlledStartStatus.value = '当前测评轮次已在后台执行，页面会自动刷新进度，请勿重复启动。'
-    return null
+    try {
+      const { data } = await ordersApi.managedBenchmarkRunStatus({
+        benchmark_run_id: currentBenchmarkRunId.value,
+        task_type: taskType.value,
+      }, { silentError: true })
+      if (data?.running || ['running', 'waiting_resource'].includes(data?.phase)) {
+        markBenchmarkRunSession('running')
+        controlledStartStatus.value = formatManagedBenchmarkStatus(data)
+        return pollManagedBenchmarkRun(currentBenchmarkRunId.value, taskType.value, runnerKey)
+      }
+      if (data?.phase === 'completed') {
+        await Promise.all([loadOrders(), loadSummary()])
+        clearCurrentBenchmarkRunSession()
+        return data
+      }
+    } catch {
+      // Stale in-page locks should not permanently block a manual restart.
+    }
+    clearActiveBenchmarkRunnerKey(runnerKey)
+    clearCurrentBenchmarkRunSession()
   }
   if (activeRunner && activeRunner !== runnerKey) {
     ElMessage.warning('已有其他测评轮次正在执行，请等待其完成后再启动新的测评。')
@@ -1959,6 +2089,8 @@ watch(taskType, async () => {
   }
 })
 onMounted(async () => {
+  syncBaselineRunLock()
+  baselineLockTimer = window.setInterval(syncBaselineRunLock, 1000)
   await loadAll()
   scheduleResumeBenchmarkRun(0)
   visibilityHandler = () => {
@@ -1978,6 +2110,10 @@ onUnmounted(() => {
   if (visibilityHandler) {
     document.removeEventListener('visibilitychange', visibilityHandler)
     visibilityHandler = null
+  }
+  if (baselineLockTimer) {
+    clearInterval(baselineLockTimer)
+    baselineLockTimer = null
   }
 })
 </script>

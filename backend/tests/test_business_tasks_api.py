@@ -343,6 +343,63 @@ async def test_admin_system_settings_roundtrip_and_normalization(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_admin_system_settings_profiles_keep_independent_runtime_values(client, db_session):
+    headers, _admin = await _auth_headers(
+        client,
+        db_session,
+        username="system-settings-profiles-admin",
+        role=UserRole.ADMIN,
+    )
+
+    standard_update = await client.put(
+        "/api/admin/system-settings",
+        headers=headers,
+        json={
+            "environment_mode": "production",
+            "benchmark_compute_allocation_mode": "gpu_slot",
+            "benchmark_execution_defaults": {"max_parallel": 9},
+        },
+    )
+    assert standard_update.status_code == 200
+    assert standard_update.json()["active_profile"] == "production"
+    assert standard_update.json()["benchmark_compute_allocation_mode"] == "gpu_slot"
+    assert standard_update.json()["benchmark_execution_defaults"]["max_parallel"] == 9
+
+    activate_debug = await client.post(
+        "/api/admin/system-settings/activate-profile",
+        headers=headers,
+        json={"environment_mode": "development"},
+    )
+    assert activate_debug.status_code == 200
+    assert activate_debug.json()["active_profile"] == "development"
+    assert activate_debug.json()["benchmark_compute_allocation_mode"] == "node"
+
+    debug_update = await client.put(
+        "/api/admin/system-settings",
+        headers=headers,
+        json={
+            "environment_mode": "development",
+            "benchmark_routing_mode": "external",
+        },
+    )
+    assert debug_update.status_code == 200
+    assert debug_update.json()["benchmark_routing_mode"] == "external"
+    assert debug_update.json()["benchmark_compute_allocation_mode"] == "gpu_slot"
+
+    activate_standard = await client.post(
+        "/api/admin/system-settings/activate-profile",
+        headers=headers,
+        json={"environment_mode": "production"},
+    )
+    assert activate_standard.status_code == 200
+    body = activate_standard.json()
+    assert body["active_profile"] == "production"
+    assert body["benchmark_compute_allocation_mode"] == "gpu_slot"
+    assert body["benchmark_execution_defaults"]["max_parallel"] == 9
+    assert body["benchmark_routing_mode"] == "internal_auto"
+
+
+@pytest.mark.asyncio
 async def test_admin_parse_one_uses_runtime_settings(client, db_session):
     headers, _admin = await _auth_headers(
         client,
@@ -3144,6 +3201,14 @@ async def test_batch_auto_route_defaults_to_node_level_compute_allocation(client
     } == {
         ("compute-1", "0"),
         ("compute-3", "0"),
+    }
+    assert {
+        order.runtime_config["routing_result"]["metadata"]["compute_allocation_mode"]
+        for order in routing_rows
+    } == {"node"}
+    assert {orders_api._benchmark_compute_slot(order) for order in routing_rows} == {
+        "compute-1:node",
+        "compute-3:node",
     }
 
 

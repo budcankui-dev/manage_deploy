@@ -468,6 +468,12 @@ def _benchmark_routing_result(order: TaskOrder) -> dict:
 def _benchmark_compute_slot(order: TaskOrder) -> str:
     """Return the compute host/GPU slot used to limit benchmark concurrency."""
     routing_result = _benchmark_routing_result(order)
+    metadata = routing_result.get("metadata") if isinstance(routing_result, dict) else None
+    allocation_mode = (
+        metadata.get("compute_allocation_mode")
+        if isinstance(metadata, dict)
+        else None
+    )
     placements = routing_result.get("placements")
     placement = None
     if isinstance(placements, list):
@@ -484,6 +490,8 @@ def _benchmark_compute_slot(order: TaskOrder) -> str:
             or host
         )
         gpu = placement.get("gpu_device") or gpu
+    if allocation_mode == "node":
+        return f"{host}:node"
     return f"{host}:gpu={gpu}"
 
 
@@ -2709,7 +2717,13 @@ async def batch_auto_route(
                 order,
                 compute_allocation_mode=compute_allocation_mode,
             )
-            await _do_auto_route(db, order, picked, compute_gpu_id)
+            await _do_auto_route(
+                db,
+                order,
+                picked,
+                compute_gpu_id,
+                compute_allocation_mode=compute_allocation_mode,
+            )
             routed += 1
         except Exception as exc:
             failed.append({"order_id": order.id, "error": str(exc)})
@@ -3165,6 +3179,8 @@ async def _do_auto_route(
     order: TaskOrder,
     picked: dict,
     compute_gpu_id: str | None,
+    *,
+    compute_allocation_mode: str = "gpu_slot",
 ):
     """Shared logic: resolve picked nodes, build overrides, create instance, update order."""
     catalog = await _catalog_for_order(db, order)
@@ -3222,6 +3238,9 @@ async def _do_auto_route(
             "mode": "benchmark_auto_route",
             "route_source": "platform_managed",
             "route_source_label": "系统自动分配",
+            # Preserve the policy selected for this order even if the global
+            # setting changes before the managed benchmark finishes.
+            "compute_allocation_mode": compute_allocation_mode,
             "description": "平台按当前可用终端节点和计算节点完成本轮测评分配。",
         },
     }
@@ -3447,6 +3466,12 @@ async def auto_route_order(
         order,
         compute_allocation_mode=benchmark_compute_allocation_mode_from_settings(runtime_settings),
     )
-    await _do_auto_route(db, order, picked, compute_gpu_id)
+    await _do_auto_route(
+        db,
+        order,
+        picked,
+        compute_gpu_id,
+        compute_allocation_mode=benchmark_compute_allocation_mode_from_settings(runtime_settings),
+    )
     await db.commit()
     return {"status": "ok", "order_id": order_id, "instance_id": order.materialized_instance_id}

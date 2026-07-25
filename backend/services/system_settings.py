@@ -20,6 +20,7 @@ from services.modality_catalog import (
 SYSTEM_RUNTIME_KEY = "runtime_modes"
 PRODUCTION_MODE = "production"
 DEVELOPMENT_MODE = "development"
+RUNTIME_PROFILE_MODES = (PRODUCTION_MODE, DEVELOPMENT_MODE)
 
 DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "environment_mode": PRODUCTION_MODE,
@@ -37,7 +38,7 @@ DEFAULT_RUNTIME_SETTINGS: dict[str, Any] = {
     "task_resource_overrides": {},
     "benchmark_execution_defaults": {
         "default_task_count": 30,
-        "max_parallel": 6,
+        "max_parallel": 8,
         "per_compute_slot_limit": 1,
     },
     "notes": "标准模式用于常规运行；调试模式用于联调、排障和快速回归。",
@@ -138,17 +139,25 @@ def normalize_task_resource_overrides(value: dict[str, Any] | None = None) -> di
     return result
 
 
-def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
+def _normalize_environment_mode(value: Any) -> str:
+    mode = LEGACY_ENVIRONMENT_MODES.get(value, value)
+    if mode in ENVIRONMENT_MODE_LABELS:
+        return str(mode)
+    return DEFAULT_RUNTIME_SETTINGS["environment_mode"]
+
+
+def _normalized_settings(
+    value: dict[str, Any] | None = None,
+    *,
+    environment_mode: str | None = None,
+) -> dict[str, Any]:
     merged = deepcopy(DEFAULT_RUNTIME_SETTINGS)
     if isinstance(value, dict):
-        merged.update(value)
+        merged.update({key: value[key] for key in DEFAULT_RUNTIME_SETTINGS if key in value})
 
-    merged["environment_mode"] = LEGACY_ENVIRONMENT_MODES.get(
-        merged.get("environment_mode"),
-        merged.get("environment_mode"),
+    merged["environment_mode"] = _normalize_environment_mode(
+        environment_mode if environment_mode is not None else merged.get("environment_mode")
     )
-    if merged["environment_mode"] not in ENVIRONMENT_MODE_LABELS:
-        merged["environment_mode"] = DEFAULT_RUNTIME_SETTINGS["environment_mode"]
     if merged["intent_parser_mode"] not in INTENT_PARSER_MODE_LABELS:
         merged["intent_parser_mode"] = DEFAULT_RUNTIME_SETTINGS["intent_parser_mode"]
     if merged["benchmark_routing_mode"] not in BENCHMARK_ROUTING_MODE_LABELS:
@@ -157,6 +166,11 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
         merged["benchmark_compute_allocation_mode"] = DEFAULT_RUNTIME_SETTINGS[
             "benchmark_compute_allocation_mode"
         ]
+    # External routers return a concrete compute node plus GPU ID.  Keeping a
+    # node-level setting here would be misleading and could hide the slot that
+    # must be reserved during materialization.
+    if merged["benchmark_routing_mode"] == "external":
+        merged["benchmark_compute_allocation_mode"] = "gpu_slot"
 
     merged["intent_rule_fallback_enabled"] = bool(merged.get("intent_rule_fallback_enabled", True))
     merged["expert_mode"] = bool(merged.get("expert_mode", True))
@@ -197,11 +211,63 @@ def _normalized_settings(value: dict[str, Any] | None = None) -> dict[str, Any]:
     return merged
 
 
+def _persistable_profile(value: dict[str, Any]) -> dict[str, Any]:
+    """Drop presentation-only fields before persisting a runtime profile."""
+    return {key: value[key] for key in DEFAULT_RUNTIME_SETTINGS if key in value}
+
+
+def _runtime_profiles(value: dict[str, Any] | None = None) -> tuple[str, dict[str, dict[str, Any]]]:
+    """Read profile storage and transparently migrate the legacy flat shape.
+
+    Earlier releases kept one flat setting object and treated environment_mode as
+    a label.  Copy that object into both profiles on first write so switching
+    groups never silently discards the operator's existing configuration.
+    """
+    source = value if isinstance(value, dict) else {}
+    active_profile = _normalize_environment_mode(
+        source.get("active_profile", source.get("environment_mode"))
+    )
+    stored_profiles = source.get("profiles")
+    if isinstance(stored_profiles, dict):
+        profiles = {
+            mode: _normalized_settings(stored_profiles.get(mode), environment_mode=mode)
+            for mode in RUNTIME_PROFILE_MODES
+        }
+        return active_profile, profiles
+
+    profiles = {
+        mode: _normalized_settings(source, environment_mode=mode)
+        for mode in RUNTIME_PROFILE_MODES
+    }
+    return active_profile, profiles
+
+
+def _storage_payload(
+    active_profile: str,
+    profiles: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    persisted_profiles = {
+        mode: _persistable_profile(profiles[mode])
+        for mode in RUNTIME_PROFILE_MODES
+    }
+    # Retain the active profile at the top level for backwards-compatible SQL
+    # inspection scripts while all runtime reads use the selected profile.
+    return {
+        **persisted_profiles[active_profile],
+        "active_profile": active_profile,
+        "profiles": persisted_profiles,
+    }
+
+
 async def get_runtime_settings(db: AsyncSession) -> dict[str, Any]:
     row = (
         await db.execute(select(SystemSetting).where(SystemSetting.key == SYSTEM_RUNTIME_KEY))
     ).scalar_one_or_none()
-    return _normalized_settings(row.value if row else None)
+    active_profile, profiles = _runtime_profiles(row.value if row else None)
+    result = _normalized_settings(profiles[active_profile], environment_mode=active_profile)
+    result["active_profile"] = active_profile
+    result["available_profiles"] = list(RUNTIME_PROFILE_MODES)
+    return result
 
 
 async def update_runtime_settings(
@@ -210,17 +276,17 @@ async def update_runtime_settings(
     *,
     updated_by: str | None = None,
 ) -> dict[str, Any]:
-    value = _normalized_settings(payload)
-    # Derived read-only fields should not be persisted.
-    persisted = {
-        key: value[key]
-        for key in DEFAULT_RUNTIME_SETTINGS
-        if key in value
-    }
-
     row = (
         await db.execute(select(SystemSetting).where(SystemSetting.key == SYSTEM_RUNTIME_KEY))
     ).scalar_one_or_none()
+    active_profile, profiles = _runtime_profiles(row.value if row else None)
+    target_profile = _normalize_environment_mode(payload.get("environment_mode", active_profile))
+    merged = deepcopy(profiles[target_profile])
+    merged.update({key: payload[key] for key in DEFAULT_RUNTIME_SETTINGS if key in payload})
+    profiles[target_profile] = _normalized_settings(merged, environment_mode=target_profile)
+    active_profile = target_profile
+    persisted = _storage_payload(active_profile, profiles)
+
     if not row:
         row = SystemSetting(
             key=SYSTEM_RUNTIME_KEY,
@@ -234,7 +300,39 @@ async def update_runtime_settings(
         row.updated_by = updated_by
     await db.commit()
     await db.refresh(row)
-    return _normalized_settings(row.value)
+    return await get_runtime_settings(db)
+
+
+async def activate_runtime_profile(
+    db: AsyncSession,
+    environment_mode: str,
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    """Switch the profile used by all runtime consumers immediately."""
+    target_profile = _normalize_environment_mode(environment_mode)
+    if environment_mode not in ENVIRONMENT_MODE_LABELS:
+        raise ValueError(f"Unsupported runtime profile: {environment_mode}")
+
+    row = (
+        await db.execute(select(SystemSetting).where(SystemSetting.key == SYSTEM_RUNTIME_KEY))
+    ).scalar_one_or_none()
+    _, profiles = _runtime_profiles(row.value if row else None)
+    persisted = _storage_payload(target_profile, profiles)
+    if not row:
+        row = SystemSetting(
+            key=SYSTEM_RUNTIME_KEY,
+            value=persisted,
+            description="系统运行模式配置",
+            updated_by=updated_by,
+        )
+        db.add(row)
+    else:
+        row.value = persisted
+        row.updated_by = updated_by
+    await db.commit()
+    await db.refresh(row)
+    return await get_runtime_settings(db)
 
 
 def should_use_llm_intent_parser(runtime_settings: dict[str, Any]) -> bool:

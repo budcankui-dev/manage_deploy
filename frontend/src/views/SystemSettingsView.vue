@@ -15,19 +15,25 @@
     <el-card class="settings-card" v-loading="loading">
       <template #header>
         <div class="card-header">
-          <span>运行配置</span>
-          <el-button type="primary" :loading="saving" @click="saveSettings">保存设置</el-button>
+          <div class="card-header-title">
+            <span>运行配置</span>
+            <small>修改后自动保存并立即生效</small>
+          </div>
+          <div class="config-status" aria-live="polite">
+            <el-tag effect="plain">当前生效：{{ activeProfileLabel }}</el-tag>
+            <el-tag :type="saveStateType" effect="plain">{{ saveStateLabel }}</el-tag>
+          </div>
         </div>
       </template>
 
       <el-form label-position="top" class="settings-form">
         <el-form-item label="配置分组">
-          <el-radio-group v-model="form.environment_mode">
+          <el-radio-group v-model="activeProfile" :disabled="switching" @change="switchProfile">
             <el-radio-button label="production">标准模式</el-radio-button>
             <el-radio-button label="development">联调模式</el-radio-button>
           </el-radio-group>
           <p class="form-hint">
-            配置分组仅用于标记当前运行场景；实际链路由下方解析方式、路由方式和展示开关控制。
+            两个配置组独立保存。切换后立即启用所选配置组，业务测评、意图解析和路由接口将读取当前生效组。
           </p>
         </el-form-item>
 
@@ -63,7 +69,10 @@
             <div class="execution-defaults">
               <label>
                 <span>计算资源并发粒度</span>
-                <el-radio-group v-model="form.benchmark_compute_allocation_mode">
+                <el-tag v-if="form.benchmark_routing_mode === 'external'" type="warning" effect="plain">
+                  外部路由：GPU 槽位级
+                </el-tag>
+                <el-radio-group v-else v-model="form.benchmark_compute_allocation_mode">
                   <el-radio-button label="node">节点级</el-radio-button>
                   <el-radio-button label="gpu_slot">GPU 槽位级</el-radio-button>
                 </el-radio-group>
@@ -81,7 +90,7 @@
             <p class="form-hint">
               节点级模式下每台计算节点最多分配一个 GPU 测评任务；GPU 槽位级模式会按节点的 GPU 编号分别分配。
               默认并发任务数仍限制整轮测评总量，系统会按当前占用情况等待，避免资源争用影响基线判定。
-              该设置仅在“系统自动分配”时生效；外部路由系统回写哪个计算节点和 GPU，平台就按回写结果部署。
+              外部路由系统必须回写具体计算节点和 GPU 槽位，平台将严格按回写的槽位部署；系统自动分配时可选择节点级或 GPU 槽位级并发。
             </p>
           </el-card>
 
@@ -287,8 +296,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { adminApi } from '@/api'
 import { TASK_TYPE_LABELS } from '@/constants/businessTaskDisplay'
 
@@ -376,7 +385,7 @@ const DEFAULT_TASK_RESOURCE_OVERRIDES = {
 
 const DEFAULT_BENCHMARK_EXECUTION_DEFAULTS = {
   default_task_count: 30,
-  max_parallel: 6,
+  max_parallel: 8,
   per_compute_slot_limit: 1,
 }
 
@@ -388,6 +397,9 @@ const ROLE_ROWS = [
 
 const loading = ref(false)
 const saving = ref(false)
+const switching = ref(false)
+const activeProfile = ref('production')
+const saveState = ref('loading')
 const settings = ref({})
 const form = reactive({
   environment_mode: 'production',
@@ -412,6 +424,26 @@ const modalityPriorityRows = computed(() => {
   if (Array.isArray(rows) && rows.length) return rows
   return Object.entries(DEFAULT_MODALITY_PRIORITY_MAP).map(([modality, priority]) => ({ modality, priority }))
 })
+
+const activeProfileLabel = computed(() => (
+  activeProfile.value === 'development' ? '联调模式' : '标准模式'
+))
+
+const saveStateLabel = computed(() => ({
+  loading: '正在读取',
+  pending: '即将保存',
+  saving: '正在保存',
+  saved: '已自动保存',
+  error: '保存失败，请重试',
+}[saveState.value] || '已自动保存'))
+
+const saveStateType = computed(() => ({
+  loading: 'info',
+  pending: 'warning',
+  saving: 'warning',
+  saved: 'success',
+  error: 'danger',
+}[saveState.value] || 'success'))
 
 const modalityOptions = computed(() => Object.keys(DEFAULT_MODALITY_PRIORITY_MAP))
 
@@ -481,15 +513,22 @@ function normalizeBenchmarkExecutionDefaults(value) {
   }
 }
 
+let autosaveTimer = null
+let ignoreFormChanges = false
+let savePromise = null
+let queuedSave = false
+
 function applySettings(data) {
+  ignoreFormChanges = true
   settings.value = data || {}
+  activeProfile.value = data?.active_profile || data?.environment_mode || 'production'
   const loadedNotes = data?.notes || ''
   const hasLegacyEnvironmentNote = ['真实', '开发'].some((word) => loadedNotes.includes(`${word}环境`))
   const notes = hasLegacyEnvironmentNote
     ? '标准模式用于常规运行；联调模式用于接口联调、排障和快速回归。'
     : loadedNotes
   Object.assign(form, {
-    environment_mode: data?.environment_mode || 'production',
+    environment_mode: activeProfile.value,
     intent_parser_mode: data?.intent_parser_mode || 'llm',
     intent_rule_fallback_enabled: data?.intent_rule_fallback_enabled ?? true,
     benchmark_routing_mode: data?.benchmark_routing_mode || 'internal_auto',
@@ -505,37 +544,141 @@ function applySettings(data) {
     benchmark_execution_defaults: normalizeBenchmarkExecutionDefaults(data?.benchmark_execution_defaults),
     notes,
   })
+  nextTick(() => {
+    ignoreFormChanges = false
+  })
 }
 
 async function loadSettings() {
   loading.value = true
+  saveState.value = 'loading'
   try {
     const { data } = await adminApi.getSystemSettings()
     applySettings(data)
+    saveState.value = 'saved'
+  } catch {
+    saveState.value = 'error'
   } finally {
     loading.value = false
   }
 }
 
-async function saveSettings() {
-  saving.value = true
-  try {
-    const payload = {
-      ...form,
-      modality_priority_map: normalizePriorityMap(form.modality_priority_map),
-      task_modality_overrides: normalizeTaskModalityOverrides(form.task_modality_overrides),
-      task_resource_overrides: normalizeTaskResourceOverrides(form.task_resource_overrides),
-      benchmark_execution_defaults: normalizeBenchmarkExecutionDefaults(form.benchmark_execution_defaults),
-    }
-    const { data } = await adminApi.updateSystemSettings(payload)
-    applySettings(data)
-    ElMessage.success('系统设置已保存')
-  } finally {
-    saving.value = false
+function buildPayload() {
+  return {
+    ...form,
+    environment_mode: form.environment_mode,
+    modality_priority_map: normalizePriorityMap(form.modality_priority_map),
+    task_modality_overrides: normalizeTaskModalityOverrides(form.task_modality_overrides),
+    task_resource_overrides: normalizeTaskResourceOverrides(form.task_resource_overrides),
+    benchmark_execution_defaults: normalizeBenchmarkExecutionDefaults(form.benchmark_execution_defaults),
   }
 }
 
+async function persistSettings() {
+  if (savePromise) {
+    queuedSave = true
+    return savePromise
+  }
+
+  saving.value = true
+  saveState.value = 'saving'
+  savePromise = adminApi.updateSystemSettings(buildPayload())
+    .then(({ data }) => {
+      settings.value = data || settings.value
+      saveState.value = 'saved'
+    })
+    .catch(() => {
+      saveState.value = 'error'
+      throw new Error('系统设置保存失败')
+    })
+    .finally(() => {
+      saving.value = false
+      savePromise = null
+      if (queuedSave) {
+        queuedSave = false
+        scheduleAutosave(0)
+      }
+    })
+  return savePromise
+}
+
+function scheduleAutosave(delay = 450) {
+  if (ignoreFormChanges || switching.value || loading.value) return
+  if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  saveState.value = 'pending'
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = null
+    void persistSettings().catch(() => {})
+  }, delay)
+}
+
+async function flushAutosave() {
+  if (autosaveTimer) {
+    window.clearTimeout(autosaveTimer)
+    autosaveTimer = null
+    await persistSettings()
+  } else if (savePromise) {
+    await savePromise
+  }
+}
+
+async function switchProfile(mode) {
+  const previousProfile = form.environment_mode
+  if (mode === previousProfile) return
+  // el-radio-group updates activeProfile before its change handler runs. Keep
+  // the old profile selected until its pending changes have reached the API.
+  activeProfile.value = previousProfile
+  switching.value = true
+  try {
+    await flushAutosave()
+    saveState.value = 'saving'
+    const { data } = await adminApi.activateSystemSettingsProfile(mode)
+    applySettings(data)
+    saveState.value = 'saved'
+  } catch {
+    activeProfile.value = form.environment_mode
+    saveState.value = 'error'
+  } finally {
+    switching.value = false
+  }
+}
+
+watch(form, () => {
+  scheduleAutosave()
+}, { deep: true, flush: 'post' })
+
+watch(() => form.benchmark_routing_mode, (mode) => {
+  if (mode === 'external') {
+    form.benchmark_compute_allocation_mode = 'gpu_slot'
+  }
+})
+
+// These values decide how the next benchmark run is routed. Save them without
+// the normal debounce so an operator can move straight to the benchmark page.
+watch(
+  () => [form.benchmark_routing_mode, form.benchmark_compute_allocation_mode],
+  () => {
+    scheduleAutosave(0)
+  },
+  { flush: 'post' }
+)
+
 onMounted(loadSettings)
+
+onBeforeRouteLeave(async () => {
+  try {
+    await flushAutosave()
+    return true
+  } catch {
+    return false
+  }
+})
+
+onBeforeUnmount(() => {
+  if (autosaveTimer) {
+    window.clearTimeout(autosaveTimer)
+  }
+})
 </script>
 
 <style scoped>
@@ -585,6 +728,24 @@ onMounted(loadSettings)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.card-header-title {
+  display: grid;
+  gap: 3px;
+}
+
+.card-header-title small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.config-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .settings-form {

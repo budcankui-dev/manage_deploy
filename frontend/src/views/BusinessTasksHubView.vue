@@ -125,6 +125,15 @@
           <template #default="{ row }">
             <div class="order-cell">
               <strong>工单ID：{{ row.order_id?.slice(0, 8) || '-' }}</strong>
+              <el-button
+                v-if="row.order_id"
+                link
+                type="primary"
+                size="small"
+                @click.stop="copyOrderId(row.order_id)"
+              >
+                复制
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -320,6 +329,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi, businessApi, instancesApi, nodesApi, ordersApi, routingOrdersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import { extractErrorMessage } from '@/utils/errorMessage'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import {
   DEPLOYMENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -626,6 +636,12 @@ function formatMetric(value) {
 
 function shortId(value) {
   return value ? String(value).slice(0, 8) : ''
+}
+
+async function copyOrderId(id) {
+  if (!id) return
+  await copyTextToClipboard(id)
+  ElMessage.success('工单 ID 已复制')
 }
 
 function metricMeaningLabel(row) {

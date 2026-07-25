@@ -38,6 +38,10 @@
         <el-table-column min-width="190">
           <template #default="{ row }">
             <div class="order-item-name">{{ taskTypeLabel(row.task_type) || '业务工单' }}</div>
+            <div class="order-item-id">
+              <span>工单ID：{{ shortId(orderId(row)) }}</span>
+              <el-button link type="primary" size="small" @click.stop="copyOrderId(orderId(row))">复制</el-button>
+            </div>
             <div class="order-item-meta">
               <el-tag :type="statusTagType(row.status || row.order_status, row)" size="small">
                 {{ formatStatus(row.status || row.order_status, row) }}
@@ -82,6 +86,14 @@
         <div class="detail-toolbar">
           <span class="detail-toolbar-title">任务工单详情</span>
           <div class="detail-actions">
+            <el-button
+              v-if="selectedOrderId"
+              plain
+              size="small"
+              @click="copyOrderId(selectedOrderId)"
+            >
+              复制工单ID
+            </el-button>
             <el-button
               v-if="canStopOrder(detail)"
               type="primary"
@@ -131,6 +143,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { businessApi, ordersApi } from '@/api'
 import OrderDetailPanel from '@/components/OrderDetailPanel.vue'
 import { taskTypeLabel } from '@/constants/businessTaskDisplay'
+import { copyTextToClipboard } from '@/utils/clipboard'
+import {
+  orderStatusLabel as formatOrderStatusLabel,
+  orderStatusType as formatOrderStatusType,
+} from '@/constants/orderDisplay'
 
 const orders = ref([])
 const selectedOrderId = ref('')
@@ -151,6 +168,12 @@ function orderId(order) {
 
 function shortId(value) {
   return value ? String(value).slice(0, 12) : '-'
+}
+
+async function copyOrderId(id) {
+  if (!id) return
+  await copyTextToClipboard(id)
+  ElMessage.success('工单 ID 已复制')
 }
 
 function handleSelectionChange(rows) {
@@ -359,43 +382,17 @@ async function batchDeleteOrders() {
 }
 
 function formatStatus(status, order = null) {
-  if (isRouteOnlyWaitingOrder(order)) return '待启动'
-  return {
-    pending: '待分配',
-    routing: '分配中',
-    routed: '待部署',
-    materialized: '已生成实例/待启动',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-    awaiting_routing: '待分配',
-    orphaned: '待处理',
-  }[status] || status || '-'
+  return formatOrderStatusLabel({
+    ...(order || {}),
+    status: status || order?.status || order?.order_status,
+  })
 }
 
 function statusTagType(status, order = null) {
-  if (isRouteOnlyWaitingOrder(order)) return 'warning'
-  return {
-    pending: 'info',
-    routing: 'warning',
-    routed: 'warning',
-    materialized: 'warning',
-    running: 'success',
-    completed: 'success',
-    failed: 'danger',
-    cancelled: 'info',
-    awaiting_routing: 'warning',
-    orphaned: 'info',
-  }[status] || 'info'
-}
-
-function isRouteOnlyWaitingOrder(order) {
-  const deployment = order?.runtime_config?.platform_deployment
-  return order?.status === 'pending'
-    && order?.routing_status === 'completed'
-    && deployment?.mode === 'route_only'
-    && order?.materialized_instance_id == null
+  return formatOrderStatusType({
+    ...(order || {}),
+    status: status || order?.status || order?.order_status,
+  })
 }
 
 function formatTime(value) {
@@ -477,6 +474,16 @@ onMounted(loadOrders)
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-bottom: 6px;
+}
+
+.order-item-id {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .order-item-meta {

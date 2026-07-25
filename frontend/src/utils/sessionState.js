@@ -3,6 +3,8 @@ const SESSION_KEYS = [
   'role',
   'username',
   'lastConversationId',
+  'lastAdminRoute',
+  'lastUserRoute',
 ]
 
 function safeLocalStorage() {
@@ -31,3 +33,16 @@ export function getLastConversationId() {
   return safeLocalStorage()?.getItem('lastConversationId') || ''
 }
 
+function routeStorageKey(role) {
+  return role === 'admin' ? 'lastAdminRoute' : 'lastUserRoute'
+}
+
+export function setLastRoute(role, fullPath) {
+  const storage = safeLocalStorage()
+  if (!storage || !fullPath) return
+  storage.setItem(routeStorageKey(role), fullPath)
+}
+
+export function getLastRoute(role) {
+  return safeLocalStorage()?.getItem(routeStorageKey(role)) || ''
+}

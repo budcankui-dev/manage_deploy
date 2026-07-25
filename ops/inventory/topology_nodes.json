@@ -19,8 +19,9 @@
       "business_ip": "10.112.38.25",
       "acceptance_management_ip": "172.16.0.101",
       "acceptance_business_ip": "172.16.0.101",
-      "acceptance_business_ipv6": "3012:3::6e49:e736:feb7:22cd",
+      "acceptance_business_ipv6": "3012:3::9e69:d3ff:fe68:773",
       "acceptance_business_ipv6_candidates": [
+        "3012:3::9e69:d3ff:fe68:773",
         "3012:3::6e49:e736:feb7:22cd",
         "3012:3::53be:afcc:fcf8:e99e"
       ],
@@ -28,6 +29,10 @@
       "business_iface": "enx9c69d3680773",
       "docker_root_dir": "/data/hdd1/docker",
       "topology_zone": "compute",
+      "gpu_count": 1,
+      "gpu_model": "NVIDIA TITAN Xp",
+      "gpu_memory_mb": 12288,
+      "driver_version": "580.159.03",
       "is_schedulable": true,
       "is_routable": true
     },
@@ -49,6 +54,10 @@
       "business_iface": "enx9c69d3680d3d",
       "docker_root_dir": "/disk/sdb/docker",
       "topology_zone": "compute",
+      "gpu_count": 1,
+      "gpu_model": "NVIDIA TITAN X (Pascal)",
+      "gpu_memory_mb": 12288,
+      "driver_version": "580.105.08",
       "is_schedulable": true,
       "is_routable": true
     },
@@ -64,6 +73,10 @@
       "business_iface": "enp129s0f1",
       "docker_root_dir": "/data/docker",
       "topology_zone": "compute",
+      "gpu_count": 8,
+      "gpu_model": "Tesla P40",
+      "gpu_memory_mb": 24576,
+      "driver_version": "580.126.09",
       "is_schedulable": true,
       "is_routable": true
     }

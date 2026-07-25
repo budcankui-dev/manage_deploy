@@ -25,9 +25,10 @@ export function homePathForRole(role) {
 export function resolvePostLoginTarget(router, rawRedirect, role) {
   const homePath = homePathForRole(role)
   const redirect = Array.isArray(rawRedirect) ? rawRedirect[0] : rawRedirect
-  if (!redirect || typeof redirect !== 'string') return homePath
+  const target = redirect || getLastRoute(role)
+  if (!target || typeof target !== 'string') return homePath
 
-  const resolved = router.resolve(redirect)
+  const resolved = router.resolve(target)
   if (!resolved.name || resolved.name === 'Login' || resolved.name === 'Register') {
     return homePath
   }
@@ -42,3 +43,4 @@ export function resolvePostLoginTarget(router, rawRedirect, role) {
 
   return resolved.fullPath || homePath
 }
+import { getLastRoute } from '@/utils/sessionState'

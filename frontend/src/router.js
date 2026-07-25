@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { ADMIN_ROUTE_NAMES, USER_ROUTE_NAMES } from '@/utils/routeAccess'
+import { ADMIN_ROUTE_NAMES, USER_ROUTE_NAMES, resolvePostLoginTarget } from '@/utils/routeAccess'
+import { getLastRoute, setLastRoute } from '@/utils/sessionState'
 import { markAuthExpiredNotice } from '@/utils/authExpired'
 import {
   clearChunkReloadMarker,
@@ -14,7 +15,7 @@ const routes = [
     path: '/',
     redirect: () => {
       const auth = useAuthStore()
-      return auth.homePath
+      return getLastRoute(auth.role) || auth.homePath
     },
   },
   {
@@ -127,7 +128,7 @@ router.beforeEach(async (to) => {
 
   if (to.meta.public) {
     if (auth.isAuthenticated && (to.name === 'Login' || to.name === 'Register')) {
-      return auth.homePath
+      return resolvePostLoginTarget(router, null, auth.role)
     }
     return true
   }
@@ -162,6 +163,14 @@ router.onError((error, to) => {
 
 router.afterEach((to) => {
   clearChunkReloadMarker(to.fullPath)
+  if (to.meta.public) return
+  const auth = useAuthStore()
+  if (!auth.isAuthenticated || !to.name) return
+  if (auth.isAdmin && ADMIN_ROUTE_NAMES.has(to.name)) {
+    setLastRoute('admin', to.fullPath)
+  } else if (!auth.isAdmin && USER_ROUTE_NAMES.has(to.name)) {
+    setLastRoute('user', to.fullPath)
+  }
 })
 
 export default router
