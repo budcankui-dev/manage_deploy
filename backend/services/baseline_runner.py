@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from config import settings
 from services.deployment_profile import image_ref
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,9 @@ BENCHMARK_PROFILES = {
         "metric_key": "frame_latency_p90_ms",
         "operator": "<=",
         "unit": "ms",
-        "image": image_ref("metaverse-video-fusion"),
+        # Production can pin the verified fusion worker without changing the
+        # default acceptance-registry contract used by development.
+        "image": settings.benchmark_metaverse_image or image_ref("metaverse-video-fusion"),
         "command": "python3 /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",

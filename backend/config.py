@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     minio_bucket: str = "task-results"
     minio_access_key: str = ""
     minio_secret_key: str = ""
+    benchmark_metaverse_image: str = ""
 
     # Backend self-identity: how Worker containers reach this Manager process.
     # `backend_hostname` is looked up in the `nodes` table at startup; the

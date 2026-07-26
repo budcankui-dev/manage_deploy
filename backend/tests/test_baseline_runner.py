@@ -92,6 +92,28 @@ def test_baseline_images_follow_acceptance_registry_profile(monkeypatch):
     )
 
 
+def test_metaverse_baseline_image_can_be_pinned(monkeypatch):
+    monkeypatch.setenv(
+        "BENCHMARK_METAVERSE_IMAGE",
+        "172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad",
+    )
+
+    config_module = importlib.import_module("config")
+    importlib.reload(config_module)
+    module = importlib.import_module("services.baseline_runner")
+    module = importlib.reload(module)
+
+    try:
+        assert (
+            module.BENCHMARK_PROFILES["metaverse_video_fusion"]["image"]
+            == "172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad"
+        )
+    finally:
+        monkeypatch.delenv("BENCHMARK_METAVERSE_IMAGE", raising=False)
+        importlib.reload(config_module)
+        importlib.reload(module)
+
+
 def test_baseline_diagnostics_capture_backend_and_gpu_error():
     from services.baseline_runner import BENCHMARK_PROFILES
 
