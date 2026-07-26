@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 
 import pytest
 
@@ -93,13 +94,13 @@ def test_baseline_images_follow_acceptance_registry_profile(monkeypatch):
 
 
 def test_metaverse_baseline_image_can_be_pinned(monkeypatch):
-    monkeypatch.setenv(
-        "BENCHMARK_METAVERSE_IMAGE",
+    config_module = importlib.import_module("config")
+    original_image = config_module.settings.benchmark_metaverse_image
+    monkeypatch.setattr(
+        config_module.settings,
+        "benchmark_metaverse_image",
         "172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad",
     )
-
-    config_module = importlib.import_module("config")
-    importlib.reload(config_module)
     module = importlib.import_module("services.baseline_runner")
     module = importlib.reload(module)
 
@@ -108,9 +109,24 @@ def test_metaverse_baseline_image_can_be_pinned(monkeypatch):
             module.BENCHMARK_PROFILES["metaverse_video_fusion"]["image"]
             == "172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad"
         )
+        assert module.BENCHMARK_PROFILES["metaverse_video_fusion"]["pull_policy"] == "if_not_present"
+
+        received_policies = []
+
+        async def fake_run(*args):
+            received_policies.append(args[-1])
+            return {
+                "frame_latency_p90_ms": 10.0,
+                "actual_backend": "torch_cuda",
+                "device": "cuda:0",
+                "model_name": "MODNet",
+            }
+
+        monkeypatch.setattr(module, "_run_single_benchmark", fake_run)
+        asyncio.run(module.run_baseline_on_node("http://agent", "metaverse_video_fusion", runs=1))
+        assert received_policies == ["if_not_present"]
     finally:
-        monkeypatch.delenv("BENCHMARK_METAVERSE_IMAGE", raising=False)
-        importlib.reload(config_module)
+        monkeypatch.setattr(config_module.settings, "benchmark_metaverse_image", original_image)
         importlib.reload(module)
 
 

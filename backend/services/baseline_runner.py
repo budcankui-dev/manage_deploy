@@ -107,10 +107,15 @@ BENCHMARK_PROFILES = {
         },
         "gpu_id": "0",
         "profile_id": "metaverse_offline_fusion_720p",
+        # The production image is pinned to a verified tag. Re-pulling it for
+        # every sample can block a single-threaded Node Agent when the registry
+        # is temporarily slow; Docker still pulls it when it is absent locally.
+        "pull_policy": "if_not_present",
     },
 }
 
 STABILITY_THRESHOLD = 0.10  # 标准差 < 中位数 × 10%
+START_CONTAINER_TIMEOUT_SECONDS = 600.0
 
 DIAGNOSTIC_KEYS = (
     "backend",
@@ -157,11 +162,14 @@ async def run_baseline_on_node(
     command = profile.get("command")
     env = dict(profile["env"])
     gpu_id = profile.get("gpu_id")
+    pull_policy = profile.get("pull_policy", "always")
     warmup_runs = int(profile.get("warmup_runs", 0) or 0)
     values: list[float] = []
     run_diagnostics: list[dict[str, Any]] = []
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    # Node Agents use management-plane private addresses and must not inherit
+    # workstation or service proxy settings.
+    async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
         for i in range(warmup_runs):
             container_name = f"baseline-{task_type}-warmup{i}-{int(time.time())}"
             await _run_single_benchmark(
@@ -173,6 +181,7 @@ async def run_baseline_on_node(
                 profile["metric_key"], task_type,
                 command,
                 gpu_id,
+                pull_policy,
             )
             logger.info("Baseline warmup run %s/%s completed", i + 1, warmup_runs)
         for i in range(runs):
@@ -186,6 +195,7 @@ async def run_baseline_on_node(
                 profile["metric_key"], task_type,
                 command,
                 gpu_id,
+                pull_policy,
             )
             metric_value = float(result_payload[profile["metric_key"]])
             values.append(metric_value)
@@ -236,6 +246,7 @@ async def _run_single_benchmark(
     task_type: str | None = None,
     command: str | None = None,
     gpu_id: str | None = None,
+    pull_policy: str | None = "always",
 ) -> dict[str, Any]:
     """启动一个临时容器执行基准测试并收集结果。"""
     base_url = agent_address.rstrip("/")
@@ -250,11 +261,15 @@ async def _run_single_benchmark(
         "gpu_id": gpu_id,
         "network_mode": "host",
         "restart_policy": "no",
-        "pull_policy": "always",
+        "pull_policy": pull_policy,
     }
     resp = await client.post(
         f"{base_url}/containers/{task_id}/{node_id}/start",
         json=create_payload,
+        # A cold GPU worker image can take several minutes to download. Keep
+        # status/log calls on the normal client timeout, but do not abandon a
+        # valid first pull and leave its temporary container orphaned.
+        timeout=START_CONTAINER_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
 
