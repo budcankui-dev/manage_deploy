@@ -1196,7 +1196,14 @@ function formatDiagnosticBackend(diagnostics) {
 function formatDiagnosticGpuError(diagnostics) {
   const errors = diagnostics?.gpu_errors || []
   if (!errors.length) return ''
-  return `GPU 诊断：${errors[0]}`
+  const cudaBackend = (diagnostics?.actual_backends || []).some(value => String(value).toLowerCase().includes('cuda'))
+  const cudaDevice = (diagnostics?.devices || []).some(value => String(value).toLowerCase().startsWith('cuda'))
+  const actionableErrors = errors.filter(error => !(
+    cudaBackend
+    && cudaDevice
+    && String(error).includes('CUDA visible but GPU_DEVICE was not assigned')
+  ))
+  return actionableErrors.length ? `GPU 诊断：${actionableErrors[0]}` : ''
 }
 
 function handleOrderSelectionChange(rows) {

@@ -81,6 +81,21 @@ docker run --rm --gpus all --entrypoint python3 \
 
 如果提示没有 CUDA 或不是 `torch_cuda`，说明容器没有拿到 GPU，需要先检查 Docker GPU 支持。
 
+### 验收前预拉取
+
+源宇宙 worker 镜像较大。运行三节点批量基线或业务测评前，必须在
+`compute-1`、`compute-2`、`compute-3` 显式预拉取并确认 digest 一致：
+
+```bash
+docker pull 172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad
+docker image inspect 172.16.0.254:5000/metaverse-video-fusion:metaverse-48df9ad \
+  --format '{{index .RepoDigests 0}}'
+```
+
+当前验收镜像 digest 为
+`sha256:a5d06fecc53084859c39aa27acd9c049fa0a6150e5e2037ffa375a9ebd470a5d`。
+预拉取只更新镜像缓存，不启动或修改业务容器。
+
 ## 3. 注册模板
 
 确保后端使用 MySQL 启动，然后执行：

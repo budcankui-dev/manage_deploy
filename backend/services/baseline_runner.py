@@ -91,6 +91,7 @@ BENCHMARK_PROFILES = {
         "command": "python3 /app/src/compute_main.py",
         "env": {
             "BENCHMARK_MODE": "true",
+            "GPU_DEVICE": "0",
             "FRAME_COUNT": "180",
             "RESOLUTION": "720p",
             "FPS": "30",

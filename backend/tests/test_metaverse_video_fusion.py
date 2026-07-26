@@ -99,6 +99,7 @@ def test_metaverse_profile_match_and_gpu_guard():
     }
     assert _result_matches_baseline_profile("metaverse_video_fusion", metadata)
     assert env["METAVERSE_VIDEO0_ASSET"] == metadata["video0_asset"]
+    assert env["GPU_DEVICE"] == "0"
 
     evaluation = BusinessObjectiveEvaluationResult(
         task_type="metaverse_video_fusion",
