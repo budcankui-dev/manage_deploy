@@ -23,6 +23,7 @@ rsync -az --delete \
   --exclude='backend/*.db' \
   --exclude='.pytest_cache/' \
   --exclude='reports/' \
+  --exclude='logs/' \
   --exclude='output/' \
   ./ manage-admin:/home/bupt/manage_deploy/
 ```
