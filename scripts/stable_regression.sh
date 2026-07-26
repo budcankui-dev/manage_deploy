@@ -52,7 +52,9 @@ echo "== 4/6 Playwright 主流程 E2E =="
   E2E_USER_PASSWORD="${E2E_USER_PASSWORD:-123456}" \
   PLAYWRIGHT_HTML_OUTPUT_DIR="$REPORT_ROOT/playwright-report" \
   PLAYWRIGHT_TEST_OUTPUT_DIR="$REPORT_ROOT/playwright-results" \
-  npx playwright test --project="${PLAYWRIGHT_PROJECT:-chromium}" --workers="${PLAYWRIGHT_WORKERS:-1}" 2>&1 | tee "$REPORT_ROOT/playwright-e2e.log"
+  npx playwright test \
+    --project="${PLAYWRIGHT_PROJECT:-${PLAYWRIGHT_CHANNEL:-chromium}}" \
+    --workers="${PLAYWRIGHT_WORKERS:-1}" 2>&1 | tee "$REPORT_ROOT/playwright-e2e.log"
 )
 
 echo

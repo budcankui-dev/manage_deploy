@@ -594,8 +594,8 @@ const DEFAULT_DESTINATION_PORT_BY_TASK_TYPE = {
 }
 
 const ENDPOINT_IMAGE_BY_TASK_TYPE = {
-  high_throughput_matmul: '10.112.244.94:5000/scientific-matmul-endpoint:dev',
-  low_latency_video_pipeline: '10.112.244.94:5000/low-latency-video-endpoint:dev',
+  high_throughput_matmul: '172.16.0.254:5000/scientific-matmul-endpoint:dev',
+  low_latency_video_pipeline: '172.16.0.254:5000/low-latency-video-endpoint:dev',
 }
 
 let routingTimer = null
@@ -718,7 +718,7 @@ const receiverCommand = computed(() => {
   if (destinationEndpoint.business_ip) envLines.push(`  -e ENDPOINT_BUSINESS_IP=${destinationEndpoint.business_ip} \\`)
   if (destinationEndpoint.business_ipv6) envLines.push(`  -e ENDPOINT_BUSINESS_IPV6=${destinationEndpoint.business_ipv6} \\`)
   return [
-    'docker run --rm --network host \\',
+    'docker run --rm --pull always --network host \\',
     ...envLines,
     `  ${endpointImage.value} \\`,
     `  python /app/src/receiver_main.py --port ${destinationPort.value}`,
@@ -729,7 +729,7 @@ const sourceCommand = computed(() => {
   const profile = JSON.stringify(draft.value.data_profile || {})
   const lines = [
     '# 节点分配完成后，在工单详情中复制真实“计算服务接入地址”再启动源端',
-    'docker run --rm --network host \\',
+    'docker run --rm --pull always --network host \\',
     '  -e PEER_COMPUTE_URL=<工单详情中的计算服务接入地址> \\',
   ]
   if (draft.value?.task_type === 'low_latency_video_pipeline') {
@@ -892,8 +892,10 @@ function asInteger(value) {
 }
 
 function pushRangeError(errors, value, missingMessage, invalidMessage, minValue, maxValue) {
+  const errorKey = (message) => String(message).split(/不能为空|需要|请使用|（如|（例如|：/)[0].trim()
   const pushOnce = (message) => {
-    if (!errors.includes(message)) errors.push(message)
+    const key = errorKey(message)
+    if (!errors.some(item => errorKey(item) === key)) errors.push(message)
   }
   if (isBlankValue(value)) {
     pushOnce(missingMessage)
@@ -919,6 +921,7 @@ function getDraftValidationErrors(currentDraft) {
   } else if (currentDraft.task_type === 'low_latency_video_pipeline') {
     pushRangeError(errors, dp.frame_count, '视频片段帧范围不能为空（例如：100帧视频片段）', '视频片段帧范围需要是 1-100000 之间的整数', 1, 100000)
     pushRangeError(errors, dp.measured_frames, '参与统计帧数不能为空（例如：统计30帧）', '参与统计帧数需要是 1-100000 之间的整数', 1, 100000)
+    pushRangeError(errors, dp.fps, '帧率不能为空（例如：30fps）', 'fps 需要是 1-240 之间的整数', 1, 240)
   } else if (currentDraft.task_type === 'metaverse_video_fusion') {
     pushRangeError(errors, dp.frame_count, '视频帧数不能为空（例如：100帧）', '视频帧数需要是 1-100000 之间的整数', 1, 100000)
     if (isBlankValue(dp.resolution)) {

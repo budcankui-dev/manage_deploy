@@ -800,6 +800,10 @@ test('benchmark full-flow survives transient status polling failure and unlocks 
   await expect(page.locator('section').getByRole('button', { name: '开始完整测试流程' })).toBeEnabled()
   await expect(page.locator('.step-card').getByRole('button', { name: '运行测评' })).toBeEnabled()
   await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(3)
+
+  await expect(page.getByText('本轮 30 个测评任务已全部完成评估。')).toBeVisible()
+  await page.getByRole('button', { name: '创建测评工单' }).click()
+  await expect(page.getByText('本轮 30 个测评任务已全部完成评估。')).toHaveCount(0)
 })
 
 test('benchmark run button clears stale in-page runner lock and restarts backend run', async ({ page }) => {

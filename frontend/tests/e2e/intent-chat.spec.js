@@ -259,7 +259,7 @@ test('intent chat keeps incomplete video draft unsubmitted and compactly shows n
 
     await expect(page.getByText('参数待补充')).toBeVisible({ timeout: 20_000 })
     await expect(page.getByText('补全后系统才会允许提交任务')).toBeVisible()
-    await expect(page.getByText('帧率不能为空（例如：30fps）').first()).toBeVisible()
+    await expect(page.locator('.pending-card').getByText(/帧率.*30fps/)).toBeVisible()
     await expect(page.getByRole('button', { name: '确认提交任务' })).toHaveCount(0)
 
     await page.screenshot({

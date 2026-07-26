@@ -310,7 +310,9 @@ async def test_user_access_order_detail_includes_dynamic_manual_startup_guide(cl
     assert guide["receiver_url"] == "http://[3012:9::12]:9000"
     assert guide["sink"]["ssh_command"] == "ssh -p 22 switchpc1@172.16.0.152"
     assert guide["sink"]["ssh_password"] == "demo-password"
+    assert "docker run -d --pull always --name" in guide["receiver_command"]
     assert "receiver_main.py --port 9000" in guide["receiver_command"]
+    assert "docker run --rm --pull always --name" in guide["source_command"]
     assert "PEER_COMPUTE_URL='http://[3012:a::3]:18000'" in guide["source_command"]
     assert '"matrix_size":256' in guide["source_command"]
 

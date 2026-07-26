@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 import time
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.request import urlopen
 
 from _common.http_server import start_server
 
@@ -190,6 +191,30 @@ class ReceiverHandler(BaseHTTPRequestHandler):
                 content_type = "video/mp4"
             self._send_bytes(200, asset.read_bytes(), content_type)
             return
+        evidence_prefix = "/evidence/"
+        if parsed.path.startswith(evidence_prefix):
+            parts = parsed.path[len(evidence_prefix):].strip("/").split("/", 1)
+            if len(parts) != 2:
+                self._send_json(404, {"error": "evidence frame not found"})
+                return
+            order_id, frame_index = (unquote(part) for part in parts)
+            frame = _find_evidence_frame(ReceiverHandler.store.get(order_id), frame_index)
+            preview_url = frame.get("preview_url") if frame else None
+            if not _is_minio_presigned_url(preview_url):
+                self._send_json(404, {"error": "evidence frame not found"})
+                return
+            try:
+                with urlopen(preview_url, timeout=15) as response:
+                    content_type = response.headers.get_content_type()
+                    data = response.read(5 * 1024 * 1024 + 1)
+            except Exception as exc:
+                self._send_json(502, {"error": f"evidence frame unavailable: {exc}"})
+                return
+            if not content_type.startswith("image/") or len(data) > 5 * 1024 * 1024:
+                self._send_json(502, {"error": "invalid evidence frame"})
+                return
+            self._send_bytes(200, data, content_type)
+            return
         prefix = "/orders/"
         if parsed.path.startswith(prefix):
             order_id = unquote(parsed.path[len(prefix):].strip("/"))
@@ -254,8 +279,9 @@ def _render_receiver_page(
     result = payload.get("result") if isinstance(payload, dict) else {}
     result = result if isinstance(result, dict) else {}
     order_id = escape(str(latest.get("order_id") or payload.get("order_id") or "暂无结果"))
-    metric_key = escape(str(payload.get("metric_key") or "-"))
+    metric_key = str(payload.get("metric_key") or "-")
     metric_value = _metric_value(payload, result)
+    metric_display = escape(_metric_display(task_type, metric_key, metric_value))
     received_at = escape(str(latest.get("received_at") or "-"))
     status_text = "已完成" if latest.get("status") == "completed" else "运行中"
     task_title = _task_title(task_type)
@@ -339,6 +365,10 @@ def _render_receiver_page(
     .sample-table th, .sample-table td {{ border-bottom: 1px solid #e0e8f2; padding: 10px 12px; text-align: left; color: #142033; font-size: 14px; }}
     .sample-table th {{ background: #f3f7fb; font-weight: 800; }}
     pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e5edf9; border-radius: 12px; padding: 16px; max-height: 420px; overflow: auto; }}
+    details.card {{ padding: 0; }}
+    details.card summary {{ cursor: pointer; padding: 20px 24px; font-size: 18px; font-weight: 800; }}
+    details.card[open] summary {{ border-bottom: 1px solid var(--line); }}
+    .raw-data-body {{ padding: 0 24px 24px; }}
     code {{ background: rgba(15, 23, 42, 0.08); border-radius: 6px; padding: 2px 6px; }}
     @media (max-width: 840px) {{ .layout, .hero-head, .verdict-band {{ grid-template-columns: 1fr; }} h1 {{ font-size: 25px; }} }}
   </style>
@@ -359,7 +389,7 @@ def _render_receiver_page(
         <div class="metric"><span>接收状态</span><strong>{status_text}</strong></div>
         <div class="metric"><span>业务类型</span><strong>{task_title}</strong></div>
         <div class="metric"><span>接收时间</span><strong>{received_at}</strong></div>
-        <div class="metric"><span>当前指标</span><strong>{metric_key}: {escape(str(metric_value if metric_value is not None else "-"))}</strong></div>
+        <div class="metric"><span>当前指标</span><strong>{metric_display}</strong></div>
       </div>
     </section>
     <section class="card"><h2>本端接收信息</h2>{receiver_info}</section>
@@ -433,6 +463,16 @@ def _metric_value(payload: dict[str, Any], result: dict[str, Any]) -> Any:
     return value
 
 
+def _metric_display(task_type: str, metric_key: str, metric_value: Any) -> str:
+    if task_type == "high_throughput_matmul":
+        return f"有效计算性能：{_format_number(metric_value, ' GFLOPS')}"
+    if task_type == "low_latency_video_pipeline":
+        return f"P90 推理时延：{_format_number(metric_value, ' ms')}"
+    label = metric_key if metric_key and metric_key != "-" else "业务指标"
+    value = "-" if metric_value is None else str(metric_value)
+    return f"{label}：{value}"
+
+
 def _render_order_switcher(records: list[dict[str, Any]], selected_id: str) -> str:
     if not records:
         return '<div class="muted">暂无已接收工单。</div>'
@@ -461,7 +501,7 @@ def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str
     result_cards = _render_result_cards(task_type, result, payload.get("metric_key"))
     verdict = _render_business_verdict(task_type, result)
     if task_type == "low_latency_video_pipeline":
-        main_result = _render_video_result(result)
+        main_result = _render_video_result(result, order_id)
         evidence_html = _render_video_evidence(task_type, result)
     elif task_type == "high_throughput_matmul":
         main_result = _render_matmul_result(result)
@@ -481,11 +521,13 @@ def _render_order_panel(task_type: str, record: dict[str, Any], selected_id: str
           <div class="grid">{result_cards}</div>
         </section>
         {evidence_html}
-        <section class="card">
-          <h2>回调数据</h2>
-          <div class="muted">用于排查和复核。演示时优先查看上方业务结果、过程图表和输入输出说明。</div>
-          <pre>{raw_json}</pre>
-        </section>
+        <details class="card">
+          <summary>回调数据（排查用）</summary>
+          <div class="raw-data-body">
+            <div class="muted">用于排查和复核。演示时优先查看上方业务结果、过程图表和输入输出说明。</div>
+            <pre>{raw_json}</pre>
+          </div>
+        </details>
       </section>
     """
 
@@ -529,10 +571,22 @@ def _render_business_verdict(task_type: str, result: dict[str, Any]) -> str:
     return ""
 
 
-def _render_video_result(result: dict[str, Any]) -> str:
+def _render_video_result(result: dict[str, Any], order_id: str) -> str:
     preview_url = result.get("annotated_frame_data_url")
+    if not _is_safe_image_url(preview_url):
+        evidence_frames = result.get("evidence_frames")
+        if isinstance(evidence_frames, list):
+            preview_frame = next(
+                (
+                    item
+                    for item in reversed(evidence_frames)
+                    if isinstance(item, dict) and _is_safe_image_url(item.get("preview_url"))
+                ),
+                None,
+            )
+            preview_url = _frame_image_url(preview_frame, order_id) if preview_frame else None
     main_image = ""
-    if isinstance(preview_url, str) and _is_safe_raster_data_url(preview_url):
+    if _is_safe_render_image_url(preview_url):
         main_image = f'<img class="preview" src="{escape(preview_url, quote=True)}" alt="视频推理检测结果" />'
     else:
         main_image = '<div class="muted">暂无检测结果图片。任务运行中会持续接收检测帧；最终回调后会展示带中文标签和检测框的结果。</div>'
@@ -542,7 +596,7 @@ def _render_video_result(result: dict[str, Any]) -> str:
       <div class="inline-evidence">
         <h3>检测帧结果</h3>
         <div class="muted">本次已接收 {frame_count} 张检测帧；点击或悬停缩略图可查看帧序号、单帧时延和识别目标。若任务仍在运行，页面会自动刷新显示新增帧。</div>
-        {_render_preview_frame_gallery(result)}
+        {_render_preview_frame_gallery(result, order_id)}
       </div>
     """
 
@@ -813,11 +867,15 @@ def _render_latency_chart(samples: Any) -> str:
     """
 
 
-def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
+def _render_preview_frame_gallery(result: dict[str, Any], order_id: str) -> str:
     frames = result.get("preview_frames")
     if not isinstance(frames, list) or not frames:
+        evidence_frames = result.get("evidence_frames")
+        if isinstance(evidence_frames, list) and evidence_frames:
+            frames = evidence_frames
+    if not isinstance(frames, list) or not frames:
         preview_url = result.get("annotated_frame_data_url")
-        if isinstance(preview_url, str) and _is_safe_raster_data_url(preview_url):
+        if _is_safe_image_url(preview_url):
             frames = [
                 {
                     "frame_index": result.get("annotated_frame_index", "-"),
@@ -834,12 +892,18 @@ def _render_preview_frame_gallery(result: dict[str, Any]) -> str:
     for item in frames[:8]:
         if not isinstance(item, dict):
             continue
-        data_url = item.get("data_url")
-        if not isinstance(data_url, str) or not _is_safe_raster_data_url(data_url):
+        data_url = _frame_image_url(item, order_id)
+        if not _is_safe_render_image_url(data_url):
             continue
         frame_index = escape(str(item.get("frame_index", "-")))
         latency_ms = _format_number(item.get("latency_ms"), " ms")
-        label = escape(str(item.get("top_label_zh") or item.get("top_label") or "-"))
+        label = escape(str(
+            item.get("top_label_zh")
+            or item.get("label_zh")
+            or item.get("top_label")
+            or item.get("label")
+            or "-"
+        ))
         confidence = item.get("confidence")
         confidence_text = f"，置信度 {float(confidence):.2f}" if isinstance(confidence, int | float) else ""
         title_parts = [f"第 {frame_index} 帧", f"推理时延 {latency_ms}", f"识别目标 {label}"]
@@ -865,10 +929,57 @@ def _frame_count(result: dict[str, Any]) -> int:
     frames = result.get("preview_frames")
     if isinstance(frames, list) and frames:
         return len(frames)
+    evidence_frames = result.get("evidence_frames")
+    if isinstance(evidence_frames, list) and evidence_frames:
+        return len(evidence_frames)
     samples = result.get("samples")
     if isinstance(samples, list) and samples:
         return len(samples)
     return 1 if result.get("annotated_frame_data_url") else 0
+
+
+def _is_safe_image_url(value: Any) -> bool:
+    return isinstance(value, str) and (
+        _is_safe_raster_data_url(value)
+        or value.startswith("http://")
+        or value.startswith("https://")
+    )
+
+
+def _is_safe_render_image_url(value: Any) -> bool:
+    return _is_safe_image_url(value) or (isinstance(value, str) and value.startswith("/evidence/"))
+
+
+def _frame_image_url(frame: dict[str, Any], order_id: str) -> str | None:
+    data_url = frame.get("data_url")
+    if isinstance(data_url, str) and _is_safe_raster_data_url(data_url):
+        return data_url
+    preview_url = frame.get("preview_url")
+    frame_index = frame.get("frame_index")
+    if _is_safe_image_url(preview_url) and frame_index is not None:
+        return f"/evidence/{quote(order_id, safe='')}/{quote(str(frame_index), safe='')}"
+    return None
+
+
+def _find_evidence_frame(record: dict[str, Any] | None, frame_index: str) -> dict[str, Any] | None:
+    payload = record.get("final_payload") or record.get("payload") if isinstance(record, dict) else {}
+    result = payload.get("result") if isinstance(payload, dict) else {}
+    frames = result.get("evidence_frames") if isinstance(result, dict) else []
+    return next(
+        (
+            item
+            for item in frames or []
+            if isinstance(item, dict) and str(item.get("frame_index")) == str(frame_index)
+        ),
+        None,
+    )
+
+
+def _is_minio_presigned_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and "X-Amz-Signature" in parse_qs(parsed.query)
 
 
 def _render_detection_list(detections: Any) -> str:

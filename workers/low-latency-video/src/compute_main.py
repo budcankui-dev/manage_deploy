@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -91,6 +92,11 @@ def upload_video_evidence(result: dict, instance_id: str) -> dict:
             if key not in {"content", "content_type"}
         }
         archived.update({"uri": uri, "content_type": content_type})
+        archived["preview_url"] = client.presigned_get_object(
+            bucket,
+            key,
+            expires=timedelta(days=7),
+        )
         archived_frames.append(archived)
         object_entries.append(
             {

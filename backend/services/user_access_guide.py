@@ -65,7 +65,7 @@ def _shell_env(env: dict[str, Any]) -> str:
 def _docker_run(*, name: str, image: str, env: dict[str, Any], command: str, detached: bool) -> str:
     mode = "-d " if detached else "--rm "
     return (
-        f"docker run {mode}--name {shlex.quote(name)} --network host "
+        f"docker run {mode}--pull always --name {shlex.quote(name)} --network host "
         f"{_shell_env(env)} {shlex.quote(image)} {command}"
     )
 

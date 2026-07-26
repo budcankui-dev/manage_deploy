@@ -17,6 +17,9 @@ class FakeMinio:
             "length": length,
         }
 
+    def presigned_get_object(self, bucket, key, expires):
+        return f"http://minio.example/{bucket}/{key}?expires={int(expires.total_seconds())}"
+
 
 def test_upload_video_evidence_writes_manifest_and_every_measured_frame(monkeypatch):
     client = FakeMinio()
@@ -58,6 +61,7 @@ def test_upload_video_evidence_writes_manifest_and_every_measured_frame(monkeypa
         (12, "s3://task-results/instance-1/video/frames/000012.jpg"),
         (42, "s3://task-results/instance-1/video/frames/000042.jpg"),
     ]
+    assert uploaded["evidence_frames"][0]["preview_url"].startswith("http://minio.example/")
     assert client.objects[("task-results", "instance-1/video/frames/000012.jpg")]["content"] == b"frame-12"
     manifest = json.loads(client.objects[("task-results", "instance-1/video/result.json")]["content"])
     assert manifest["schema_version"] == "video-evidence/v1"

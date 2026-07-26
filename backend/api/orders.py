@@ -2949,6 +2949,30 @@ async def _cleanup_evaluated_benchmark_instance(
     return True
 
 
+async def _cleanup_evaluated_benchmark_orders(
+    db: AsyncSession,
+    orders: list[TaskOrder],
+    instance_map: dict[str, TaskInstance],
+    eval_map: dict[str, BusinessObjectiveEvaluation],
+) -> tuple[list[str], dict[str, str]]:
+    """Clean evaluated runtimes, including results reported during this advance."""
+    cleaned: list[str] = []
+    failed: dict[str, str] = {}
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        if not instance_id or instance_id not in eval_map:
+            continue
+        instance = instance_map.get(instance_id)
+        if not instance:
+            continue
+        try:
+            if await _cleanup_evaluated_benchmark_instance(db, order, instance):
+                cleaned.append(instance_id)
+        except Exception as exc:
+            failed[order.id] = f"cleanup evaluated instance failed: {exc}"
+    return cleaned, failed
+
+
 async def _reevaluate_orders_from_latest_metrics(
     db: AsyncSession,
     orders: list[TaskOrder],
@@ -3039,18 +3063,14 @@ async def _advance_controlled_benchmark_run(
     cleaned: list[str] = []
     failed: dict[str, str] = dict(recalc_failed)
     if payload.cleanup_evaluated:
-        for order in orders:
-            instance_id = order.materialized_instance_id
-            if not instance_id or instance_id not in eval_map:
-                continue
-            instance = instance_map.get(instance_id)
-            if not instance:
-                continue
-            try:
-                if await _cleanup_evaluated_benchmark_instance(db, order, instance):
-                    cleaned.append(instance_id)
-            except Exception as exc:
-                failed[order.id] = f"cleanup evaluated instance failed: {exc}"
+        initial_cleaned, initial_cleanup_failed = await _cleanup_evaluated_benchmark_orders(
+            db,
+            orders,
+            instance_map,
+            eval_map,
+        )
+        cleaned.extend(initial_cleaned)
+        failed.update(initial_cleanup_failed)
         if cleaned:
             await db.commit()
             run_instance_map = await _instances_for_orders(db, run_orders)
@@ -3143,6 +3163,17 @@ async def _advance_controlled_benchmark_run(
         db,
         [order.materialized_instance_id for order in run_orders if order.materialized_instance_id],
     )
+    if payload.cleanup_evaluated:
+        final_cleaned, final_cleanup_failed = await _cleanup_evaluated_benchmark_orders(
+            db,
+            orders,
+            run_instance_map,
+            eval_map,
+        )
+        cleaned.extend(final_cleaned)
+        failed.update(final_cleanup_failed)
+        if final_cleaned:
+            await db.commit()
     success_count = sum(1 for evaluation in eval_map.values() if evaluation.business_success)
     evaluated_count = len(eval_map)
     pending_to_start = 0

@@ -217,6 +217,7 @@ def _receiver_env(node: dict[str, Any], port: int) -> dict[str, str]:
     mapping = {
         "ENDPOINT_NODE_ALIAS": node.get("hostname"),
         "ENDPOINT_TOPOLOGY_NODE_ID": node.get("topology_node_id"),
+        "ENDPOINT_MANAGEMENT_IP": node.get("management_ip"),
         "ENDPOINT_BUSINESS_IP": node.get("business_ip"),
         "ENDPOINT_BUSINESS_IPV6": node.get("business_ipv6"),
     }
@@ -232,7 +233,24 @@ def _delete_endpoint_container(*, node: dict[str, Any], task_id: str, node_id: s
         print(f"WARN delete {node.get('hostname')} {task_id}/{node_id}: {response.status_code} {response.text}")
 
 
-def _delete_old_receivers(node: dict[str, Any]) -> None:
+def _delete_old_receivers(node: dict[str, Any], port: int) -> None:
+    address = _preferred_business_address(node)
+    if address:
+        try:
+            latest = requests.get(_format_service_url(address, port, "/latest"), timeout=5)
+            if latest.status_code == 200:
+                payload = latest.json()
+                order_ids = [str(payload.get("order_id") or "")]
+                order_ids.extend(str(item or "") for item in payload.get("stored_orders") or [])
+                for order_id in dict.fromkeys(item for item in order_ids if item):
+                    _delete_endpoint_container(
+                        node=node,
+                        task_id=f"user-demo-{order_id[:8]}",
+                        node_id="receiver",
+                        quiet=True,
+                    )
+        except (requests.RequestException, ValueError):
+            pass
     response = _agent_request("GET", node, "/containers/managed", timeout=30)
     if response.status_code >= 400:
         print(f"WARN list old receivers on {node.get('hostname')}: {response.status_code} {response.text}")
@@ -244,6 +262,27 @@ def _delete_old_receivers(node: dict[str, Any]) -> None:
         deleted = _agent_request("DELETE", node, f"/managed-containers/{name}", timeout=30)
         if deleted.status_code >= 400:
             print(f"WARN delete old receiver {name}: {deleted.status_code} {deleted.text}")
+
+
+def _wait_endpoint_running(node: dict[str, Any], task_id: str, node_id: str, timeout_sec: float = 10.0) -> None:
+    deadline = time.time() + timeout_sec
+    last_status = "unknown"
+    consecutive_running = 0
+    while time.time() < deadline:
+        response = _agent_request("GET", node, f"/containers/{task_id}/{node_id}/status", timeout=10)
+        if response.status_code == 200:
+            last_status = str(response.json().get("status") or "unknown")
+            if last_status == "running":
+                consecutive_running += 1
+                if consecutive_running >= 4:
+                    return
+            else:
+                consecutive_running = 0
+            if last_status in {"exited", "dead"}:
+                logs = _agent_request("GET", node, f"/containers/{task_id}/{node_id}/logs?tail=50", timeout=10)
+                raise RuntimeError(f"endpoint container exited on {node.get('hostname')}: {logs.text[:1000]}")
+        time.sleep(0.5)
+    raise RuntimeError(f"endpoint container not running on {node.get('hostname')}: status={last_status}")
 
 
 def _extract_metric(record: dict[str, Any], expected_metric_key: str | None = None) -> tuple[str | None, Any]:
@@ -354,7 +393,7 @@ def main() -> int:
     print("[4/8] 启动目的端 receiver 容器")
     demo_task_id = f"user-demo-{order_id[:8]}"
     receiver_url = _format_service_url(destination_ip, args.destination_port)
-    _delete_old_receivers(destination_node)
+    _delete_old_receivers(destination_node, args.destination_port)
     _start_endpoint_container(
         node=destination_node,
         task_id=demo_task_id,
@@ -363,6 +402,7 @@ def main() -> int:
         command=f"python3 /app/src/receiver_main.py --port {args.destination_port}",
         env=_receiver_env(destination_node, args.destination_port),
     )
+    _wait_endpoint_running(destination_node, demo_task_id, "receiver")
     print(f"  receiver={receiver_url}/")
 
     print("[5/8] 获取或回写路由结果，物化 compute-only 实例")
@@ -430,7 +470,16 @@ def main() -> int:
     order = _get(session, f"{base}/api/orders/{order_id}")
     instance_id = order.get("materialized_instance_id")
     _assert(bool(instance_id), f"order has no materialized_instance_id: {order}")
-    _post(session, f"{base}/api/instances/{instance_id}/start", timeout=180)
+    instance = {}
+    for _ in range(15):
+        instance = _get(session, f"{base}/api/instances/{instance_id}")
+        if str(instance.get("status") or "").lower() in {"starting", "running", "ready"}:
+            break
+        time.sleep(1)
+    if str(instance.get("status") or "").lower() in {"starting", "running", "ready"}:
+        print(f"  instance={instance_id}:已由平台启动")
+    else:
+        _post(session, f"{base}/api/instances/{instance_id}/start", timeout=180)
 
     print("[7/8] 启动源端 source 容器提交输入")
     source_env = {

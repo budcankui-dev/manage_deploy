@@ -3781,6 +3781,107 @@ async def test_controlled_benchmark_reports_whole_run_after_completed_cleanup(cl
 
 
 @pytest.mark.asyncio
+async def test_controlled_benchmark_cleans_result_reported_during_start(client, db_session, monkeypatch):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-fast-result-user")
+    await _set_runtime_settings(db_session, benchmark_routing_mode="internal_auto")
+
+    run_id = "fast-result-cleanup-run"
+    instance_id = "fast-result-cleanup-instance"
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="fast result cleanup order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": run_id},
+            "business_task": {
+                "task_type": "high_throughput_matmul",
+                "business_objective": {
+                    "metric_key": "effective_gflops",
+                    "operator": ">=",
+                    "unit": "GFLOPS",
+                },
+            },
+            "routing_result": {
+                "placements": [
+                    {"task_node_id": "source", "topology_node_id": "h1"},
+                    {"task_node_id": "compute", "topology_node_id": "compute-1", "gpu_device": "0"},
+                    {"task_node_id": "sink", "topology_node_id": "h2"},
+                ],
+            },
+        },
+        is_benchmark=True,
+        materialized_instance_id=instance_id,
+    )
+    instance = TaskInstance(
+        id=instance_id,
+        template_id=template_id,
+        name="fast result cleanup instance",
+        status=TaskStatus.PENDING,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    db_session.add_all([order, instance])
+    await db_session.flush()
+
+    async def ok_preflight(*args, **kwargs):
+        class Result:
+            ok = True
+            conflicts = []
+
+        return Result()
+
+    evaluation = BusinessObjectiveEvaluation(
+        instance_id=instance_id,
+        task_type="high_throughput_matmul",
+        routing_strategy="resource_guarantee",
+        metric_key="effective_gflops",
+        actual_value=240,
+        target_value=200,
+        operator=">=",
+        unit="GFLOPS",
+        business_success=True,
+    )
+    evaluation_reads = 0
+
+    async def evaluation_after_start(*args, **kwargs):
+        nonlocal evaluation_reads
+        evaluation_reads += 1
+        return {} if evaluation_reads == 1 else {instance_id: evaluation}
+
+    cleaned: list[str] = []
+
+    async def record_cleanup(db, cleanup_order, cleanup_instance):
+        cleaned.append(cleanup_instance.id)
+        return True
+
+    monkeypatch.setattr(orders_api, "_preflight_instance_plan", ok_preflight)
+    monkeypatch.setattr(orders_api, "_schedule_background_benchmark_start", lambda _instance_id: None)
+    monkeypatch.setattr(orders_api, "_latest_evaluations_by_instance", evaluation_after_start)
+    monkeypatch.setattr(orders_api, "_cleanup_evaluated_benchmark_instance", record_cleanup)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={
+            "benchmark_run_id": run_id,
+            "task_type": "high_throughput_matmul",
+            "cleanup_evaluated": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evaluated"] == 1
+    assert body["cleaned"] == 1
+    assert body["failed"] == {}
+    assert cleaned == [instance_id]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_order_instances_rejects_active_instance(client, db_session):
     _node_ids, template_id = await _seed_business_fixture(client)
     headers, admin = await _auth_headers(client, db_session, username="active-cleanup-admin", role=UserRole.ADMIN)

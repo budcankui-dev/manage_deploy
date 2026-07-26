@@ -1527,8 +1527,12 @@ function newBenchmarkRunId() {
 }
 
 function setCurrentBenchmarkRunId(runId) {
+  const nextRunId = runId || ''
+  if (currentBenchmarkRunId.value !== nextRunId) {
+    controlledStartStatus.value = ''
+  }
   dataLoadGeneration.value += 1
-  currentBenchmarkRunId.value = runId || ''
+  currentBenchmarkRunId.value = nextRunId
   if (runId) {
     localStorage.setItem(BENCHMARK_RUN_STORAGE_KEY, runId)
   } else {

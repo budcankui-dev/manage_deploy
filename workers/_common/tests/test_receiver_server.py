@@ -11,7 +11,12 @@ WORKERS_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKERS_DIR))
 
 from _common.http_server import start_server  # noqa: E402
-from _common.receiver_server import ReceiverConfig, ReceiverHandler, ReceiverStore  # noqa: E402
+from _common.receiver_server import (  # noqa: E402
+    ReceiverConfig,
+    ReceiverHandler,
+    ReceiverStore,
+    _render_receiver_page,
+)
 
 
 def _free_port() -> int:
@@ -161,6 +166,7 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     assert "基线 × 1.5" in body
     assert "P90 推理时延" in body
     assert "18.6 ms" in body
+    assert "P90 推理时延：18.6 ms" in body
     assert "车辆" in body
     assert "h2" in body
     assert "h18015002" in body
@@ -185,6 +191,8 @@ def test_receiver_homepage_renders_latest_result_for_demo(tmp_path):
     assert "18.6 ms" in body
     assert "检测目标列表" in body
     assert "bbox: [10, 20, 80, 120]" in body
+    assert "<summary>回调数据（排查用）</summary>" in body
+    assert '<details class="card">' in body
     assert "/orders/video-order-1" in body
     assert '<img class="preview" src="data:image/jpeg;base64,abc123"' in body
     assert '<img class="thumb-image" src="data:image/jpeg;base64,frame30"' in body
@@ -240,6 +248,7 @@ def test_receiver_homepage_supports_switching_between_orders_on_fixed_port(tmp_p
     assert "基线 × 0.8" in body
     assert "有效计算性能" in body
     assert "122.5 GFLOPS" in body
+    assert "有效计算性能：122.5 GFLOPS" in body
     assert "验收演示操作提示" not in body
     assert "ssh switchpc1@" not in body
     assert "172.16.0.254:5000/scientific-matmul-endpoint:dev" not in body
@@ -255,6 +264,49 @@ def test_receiver_homepage_supports_switching_between_orders_on_fixed_port(tmp_p
     assert "matmul-order-old" in old_body
     assert "91.2 GFLOPS" in old_body
     assert "matmul-order-new" in old_body
+
+
+def test_receiver_homepage_renders_minio_presigned_video_frames(tmp_path):
+    store = ReceiverStore(tmp_path)
+    store.put(
+        {
+            "event_type": "final",
+            "order_id": "video-minio-preview",
+            "task_type": "low_latency_video_pipeline",
+            "metric_key": "frame_latency_p90_ms",
+            "result": {
+                "frame_latency_p90_ms": 18.6,
+                "measured_frames": 2,
+                "evidence_frames": [
+                    {
+                        "frame_index": 30,
+                        "latency_ms": 17.2,
+                        "label_zh": "瓶子",
+                        "preview_url": "http://minio.example/frame-30.jpg?X-Amz-Signature=test",
+                    },
+                    {
+                        "frame_index": 60,
+                        "latency_ms": 18.6,
+                        "label_zh": "瓶子",
+                        "preview_url": "http://minio.example/frame-60.jpg?X-Amz-Signature=test",
+                    },
+                ],
+            },
+        }
+    )
+
+    body = _render_receiver_page(
+        "low_latency_video_pipeline",
+        store.summary(),
+        ReceiverConfig(task_type="low_latency_video_pipeline", port=9100),
+        selected_order_id="video-minio-preview",
+    )
+
+    assert "本次已接收 2 张检测帧" in body
+    assert 'src="/evidence/video-minio-preview/60"' in body
+    assert 'src="/evidence/video-minio-preview/30"' in body
+    assert "目标 瓶子" in body
+    assert "暂无检测结果图片" not in body
 
 
 def test_receiver_progress_events_do_not_replace_final_payload(tmp_path):
