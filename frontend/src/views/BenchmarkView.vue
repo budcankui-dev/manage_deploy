@@ -217,7 +217,7 @@
           <span class="step-num">3</span>
           <div>
             <div class="step-title">执行</div>
-            <div class="step-desc">实时查看待分配、已分配、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
+            <div class="step-desc">实时查看待分配、已分配待启动、运行中和已评估数量；点击运行测评后，系统会按小批次分批运行直到本轮完成。</div>
           </div>
           <div class="header-actions">
             <el-button
@@ -282,7 +282,7 @@
         </div>
         <div class="status-cell routed">
           <div class="status-num">{{ executionStats.routed }}</div>
-          <div class="status-label">已分配</div>
+          <div class="status-label">已分配待启动</div>
         </div>
         <div class="status-cell running">
           <div class="status-num">{{ executionStats.running }}</div>
@@ -297,8 +297,18 @@
           <div class="status-label">失败</div>
         </div>
       </div>
-      <p class="status-note">说明：点一次“运行测评”即可自动跑完整轮；系统会根据节点资源、路由结果和当前占用情况分批执行。</p>
-      <p v-if="executionStatusText" class="status-note strong-note">{{ executionStatusText }}</p>
+      <p class="status-note">说明：五项数字按当前阶段互斥统计，总和为本轮工单数；点一次“运行测评”即可自动跑完整轮。</p>
+      <p v-if="executionStatusText && !liveProgressEntries.length" class="status-note strong-note">{{ executionStatusText }}</p>
+      <div v-if="liveProgressEntries.length" class="live-progress-stream">
+        <div class="live-progress-title">
+          <span class="live-progress-dot"></span>
+          {{ liveProgressTitle }}
+        </div>
+        <div v-for="entry in liveProgressEntries" :key="entry.key" class="live-progress-line">
+          <span>{{ entry.time }}</span>
+          <strong>{{ entry.message }}</strong>
+        </div>
+      </div>
     </el-card>
 
     <el-card class="step-card evidence-card">
@@ -620,6 +630,9 @@ const benchmarkRunSession = ref(readBenchmarkRunSession())
 const controlledStartStatus = ref('')
 const benchmarkStopLoading = ref(false)
 const dashboardUpdatedAt = ref('')
+const liveProgressEntries = ref([])
+const managedBenchmarkServerRunning = ref(false)
+const benchmarkAutoRefreshing = ref(false)
 const detailDrawerVisible = ref(false)
 const detailLoading = ref(false)
 const detailTab = ref('business')
@@ -662,6 +675,8 @@ const executionFormTouched = ref(false)
 let resumeTimer = null
 let visibilityHandler = null
 let baselineLockTimer = null
+let benchmarkAutoRefreshTimer = null
+const BENCHMARK_AUTO_REFRESH_MS = 2500
 const stoppedBenchmarkRunKeys = new Set()
 const settingsForm = reactive({
   benchmark_routing_mode: 'internal_auto',
@@ -903,6 +918,9 @@ const benchmarkFlowBusy = computed(() =>
     batchCreateLoading.value ||
     evaluationFlowBusy.value ||
     currentRunSessionBlocksCreation.value
+)
+const liveProgressTitle = computed(() =>
+  shouldAutoRefreshBenchmark() ? '实时进度（自动刷新）' : '本轮进度记录'
 )
 
 const executionStatusText = computed(() => {
@@ -1562,6 +1580,8 @@ async function refreshBenchmarkPage() {
   if (currentRunSessionActive.value && !benchmarkRunCompleted.value) {
     scheduleResumeBenchmarkRun(0)
   }
+  appendExecutionSnapshot()
+  scheduleBenchmarkAutoRefresh()
 }
 
 function reconcileBenchmarkRunSessionAfterLoad() {
@@ -1596,6 +1616,9 @@ function setCurrentBenchmarkRunId(runId) {
     controlledStartStatus.value = ''
   }
   dataLoadGeneration.value += 1
+  cancelBenchmarkAutoRefresh()
+  managedBenchmarkServerRunning.value = false
+  liveProgressEntries.value = []
   currentBenchmarkRunId.value = nextRunId
   if (runId) {
     localStorage.setItem(BENCHMARK_RUN_STORAGE_KEY, runId)
@@ -1624,6 +1647,8 @@ async function selectBenchmarkRun(runId) {
   if (currentRunSessionActive.value) {
     scheduleResumeBenchmarkRun(0)
   }
+  appendExecutionSnapshot()
+  scheduleBenchmarkAutoRefresh(0)
 }
 
 function enterNewBenchmarkRun() {
@@ -1650,6 +1675,8 @@ async function loadAll() {
   }
   syncBenchmarkRunSession()
   reconcileBenchmarkRunSessionAfterLoad()
+  appendExecutionSnapshot()
+  scheduleBenchmarkAutoRefresh()
 }
 
 function pause(ms) {
@@ -2070,6 +2097,29 @@ function formatManagedBenchmarkStatus(data) {
   return baseMessage || '后台测评推进中，页面会自动刷新进度。'
 }
 
+function appendLiveProgress(message, timestamp = null) {
+  const normalized = String(message || '').trim()
+  if (!normalized) return
+  if (liveProgressEntries.value.some(entry => entry.message === normalized)) return
+  const date = timestamp ? new Date(timestamp) : new Date()
+  liveProgressEntries.value = [
+    ...liveProgressEntries.value,
+    {
+      key: `${Date.now()}-${liveProgressEntries.value.length}`,
+      time: formatTime(Number.isNaN(date.getTime()) ? new Date() : date),
+      message: normalized,
+    },
+  ].slice(-5)
+}
+
+function appendExecutionSnapshot() {
+  if (!currentBenchmarkRunId.value || !hasBenchmarkWork.value || !shouldAutoRefreshBenchmark()) return
+  const stats = executionStats.value
+  appendLiveProgress(
+    `待分配 ${stats.waitingRoute}，已分配待启动 ${stats.routed}，运行中 ${stats.running}，已评估 ${stats.completed}，失败 ${stats.failed}`
+  )
+}
+
 async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
   let latest = null
   let transientFailures = 0
@@ -2087,7 +2137,12 @@ async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
       data = response.data
       latest = data
       controlledStartStatus.value = formatManagedBenchmarkStatus(data)
+      managedBenchmarkServerRunning.value = Boolean(
+        data?.running || ['running', 'waiting_resource', 'stopping'].includes(data?.phase)
+      )
+      appendLiveProgress(controlledStartStatus.value, data?.updated_at)
       await Promise.all([loadOrders(), loadSummary()])
+      appendExecutionSnapshot()
       transientFailures = 0
     } catch (error) {
       if (shouldSuppressOperationError(error) || !isRetryableBenchmarkPollError(error) || transientFailures >= 3) {
@@ -2100,26 +2155,31 @@ async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
     }
 
     if (data.phase === 'completed') {
+      managedBenchmarkServerRunning.value = false
       const total = Number(data.progress?.total || summaryAggregate.value?.count || 0)
       ElMessage.success(total ? `本轮 ${total} 个测评任务已全部完成评估` : '本轮测评已完成')
       clearCurrentBenchmarkRunSession()
       return latest
     }
     if (data.phase === 'stopped') {
+      managedBenchmarkServerRunning.value = false
       markBenchmarkRunSession('stopped')
       return latest
     }
     if (data.phase === 'idle') {
+      managedBenchmarkServerRunning.value = false
       clearCurrentBenchmarkRunSession()
       ElMessage.warning(data.message || '后台测评状态已重置，请重新点击运行测评继续推进。')
       return latest
     }
     if (data.phase === 'blocked') {
+      managedBenchmarkServerRunning.value = false
       clearCurrentBenchmarkRunSession()
       ElMessage.warning(data.message || '当前轮次暂无法继续推进，请查看工单后重试或停止本轮测评。')
       return latest
     }
     if (data.phase === 'failed') {
+      managedBenchmarkServerRunning.value = false
       clearCurrentBenchmarkRunSession()
       ElMessage.warning(data.message || '后台测评推进遇到异常，请刷新后重试或停止本轮测评。')
       return latest
@@ -2128,6 +2188,68 @@ async function pollManagedBenchmarkRun(runId, runTaskType, runnerKey) {
   }
   controlledStartStatus.value = '测评状态轮询已到达上限，请刷新页面查看最新结果。'
   return latest
+}
+
+function shouldAutoRefreshBenchmark() {
+  if (!currentBenchmarkRunId.value || benchmarkRunStopped.value || benchmarkRunCompleted.value) return false
+  return benchmarkRunHasActiveWork.value || currentRunSessionBlocksCreation.value || managedBenchmarkServerRunning.value
+}
+
+function cancelBenchmarkAutoRefresh() {
+  if (!benchmarkAutoRefreshTimer) return
+  window.clearTimeout(benchmarkAutoRefreshTimer)
+  benchmarkAutoRefreshTimer = null
+}
+
+function scheduleBenchmarkAutoRefresh(delay = BENCHMARK_AUTO_REFRESH_MS) {
+  cancelBenchmarkAutoRefresh()
+  if (!shouldAutoRefreshBenchmark()) return
+  benchmarkAutoRefreshTimer = window.setTimeout(async () => {
+    benchmarkAutoRefreshTimer = null
+    if (document.visibilityState === 'visible') {
+      await refreshBenchmarkProgressSnapshot()
+    }
+    scheduleBenchmarkAutoRefresh()
+  }, delay)
+}
+
+async function refreshBenchmarkProgressSnapshot() {
+  if (
+    benchmarkAutoRefreshing.value ||
+    startLoading.value ||
+    restoringRunSession.value ||
+    !currentBenchmarkRunId.value
+  ) return
+
+  benchmarkAutoRefreshing.value = true
+  const runId = currentBenchmarkRunId.value
+  const runTaskType = taskType.value
+  try {
+    const { data } = await ordersApi.managedBenchmarkRunStatus({
+      benchmark_run_id: runId,
+      task_type: runTaskType,
+    }, { silentError: true })
+    if (currentBenchmarkRunId.value !== runId || taskType.value !== runTaskType) return
+
+    managedBenchmarkServerRunning.value = Boolean(
+      data?.running || ['running', 'waiting_resource', 'stopping'].includes(data?.phase)
+    )
+    if (data?.phase !== 'idle') {
+      controlledStartStatus.value = formatManagedBenchmarkStatus(data)
+      appendLiveProgress(controlledStartStatus.value, data?.updated_at)
+    }
+    await Promise.all([loadOrders(), loadSummary()])
+    appendExecutionSnapshot()
+    reconcileBenchmarkRunSessionAfterLoad()
+    if (benchmarkRunCompleted.value) {
+      managedBenchmarkServerRunning.value = false
+      clearCurrentBenchmarkRunSession()
+    }
+  } catch {
+    // Preserve the last snapshot and retry silently on the next interval.
+  } finally {
+    benchmarkAutoRefreshing.value = false
+  }
 }
 
 async function doStartAll() {
@@ -2278,22 +2400,27 @@ watch(taskType, async () => {
   if (currentRunSessionActive.value) {
     scheduleResumeBenchmarkRun(0)
   }
+  appendExecutionSnapshot()
+  scheduleBenchmarkAutoRefresh(0)
 })
 onMounted(async () => {
   syncBaselineRunLock()
   baselineLockTimer = window.setInterval(syncBaselineRunLock, 1000)
   await loadAll()
   scheduleResumeBenchmarkRun(0)
+  scheduleBenchmarkAutoRefresh(0)
   visibilityHandler = () => {
     if (document.visibilityState === 'visible') {
       syncBenchmarkRunSession()
       scheduleResumeBenchmarkRun(0)
+      scheduleBenchmarkAutoRefresh(0)
     }
   }
   document.addEventListener('visibilitychange', visibilityHandler)
 })
 
 onUnmounted(() => {
+  cancelBenchmarkAutoRefresh()
   if (resumeTimer) {
     clearTimeout(resumeTimer)
     resumeTimer = null
@@ -2604,6 +2731,52 @@ onUnmounted(() => {
 .strong-note {
   color: #1f6f43;
   font-weight: 600;
+}
+
+.live-progress-stream {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d9e8df;
+  border-radius: 6px;
+  background: #f7fbf8;
+}
+
+.live-progress-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  color: #1f6f43;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.live-progress-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22a06b;
+  box-shadow: 0 0 0 3px rgb(34 160 107 / 14%);
+}
+
+.live-progress-line {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 10px;
+  padding: 3px 0;
+  color: #52635a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.live-progress-line span {
+  color: #84918a;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-progress-line strong {
+  color: #33463b;
+  font-weight: 500;
 }
 
 .status-cell {

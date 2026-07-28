@@ -14,6 +14,11 @@ test.beforeEach(async ({ page }) => {
     contentType: 'application/json',
     body: JSON.stringify([]),
   }))
+  await page.route('**/api/orders/benchmark/managed-run/status**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ phase: 'idle', running: false, progress: null }),
+  }))
 })
 
 async function ensureAdminUser(request) {
@@ -416,6 +421,99 @@ test('benchmark running state survives sidebar navigation', async ({ page }, tes
     path: testInfo.outputPath('benchmark-running-state-survives-navigation.png'),
     fullPage: true,
   })
+})
+
+test('selected active benchmark run refreshes without a local run session', async ({ page }) => {
+  let statusRequests = 0
+  let evaluated = 0
+  const runId = 'high_throughput_matmul-e2e-auto-refresh'
+
+  await installAdminSession(page)
+  await page.addInitScript((selectedRunId) => {
+    window.localStorage.setItem('manage-deploy:benchmark-run-id', selectedRunId)
+    window.localStorage.removeItem('manage-deploy:benchmark-run-session')
+  }, runId)
+  await mockAdminApi(page)
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: [], failed: {} }),
+  }))
+  await page.route('**/api/orders/benchmark/managed-run/status**', async route => {
+    statusRequests += 1
+    evaluated = statusRequests >= 1 ? 1 : 0
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        phase: 'running',
+        message: `测评运行中：已评估 ${evaluated}/2。`,
+        running: true,
+        updated_at: new Date().toISOString(),
+        progress: {
+          total: 2,
+          evaluated,
+          active: 1,
+          started: 0,
+          cleaned: evaluated,
+          pending_to_start: 1 - evaluated,
+        },
+      }),
+    })
+  })
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      task_type: 'high_throughput_matmul',
+      count: 2,
+      evaluated_count: evaluated,
+      success_count: evaluated,
+      business_success_rate: evaluated ? 1 : null,
+    }]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      items: [
+        {
+          id: 'order-auto-refresh-running',
+          task_type: 'high_throughput_matmul',
+          status: 'materialized',
+          routing_status: 'completed',
+          deployment_status: 'running',
+          materialized_instance_id: 'instance-auto-refresh-running',
+          runtime_config: { benchmark: { run_id: runId } },
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'order-auto-refresh-completed',
+          task_type: 'high_throughput_matmul',
+          status: evaluated ? 'completed' : 'routed',
+          routing_status: 'completed',
+          deployment_status: evaluated ? 'stopped' : null,
+          materialized_instance_id: evaluated ? 'instance-auto-refresh-completed' : null,
+          business_success: evaluated ? true : null,
+          runtime_config: { benchmark: { run_id: runId } },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    }),
+  }))
+
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+
+  await expect.poll(() => statusRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(1)
+  await expect(page.getByText('实时进度（自动刷新）')).toBeVisible()
+  await expect(page.getByText('已评估 1/2').first()).toBeVisible()
+  await expect(page.getByText('已分配待启动', { exact: true })).toBeVisible()
+  await expect(page.getByText(/五项数字按当前阶段互斥统计/)).toBeVisible()
 })
 
 test('benchmark full-flow click locks immediately before batch API returns', async ({ page }) => {
