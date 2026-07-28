@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 import statistics
 from collections import defaultdict
@@ -85,6 +86,7 @@ from services.user_access_guide import build_user_access_guide
 from .instances import _build_preflight_plan_from_instance, _create_instance_from_template, _preflight_instance_plan
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+logger = logging.getLogger(__name__)
 
 
 BENCHMARK_TASK_CONFIGS = {
@@ -207,22 +209,44 @@ def _reject_active_instance_for_cleanup(instance: TaskInstance) -> None:
 async def _background_benchmark_start(instance_id: str) -> None:
     async with async_session_maker() as session:
         executor = DAGExecutor(session)
-        await executor.execute_dag_start(instance_id, claimed_start=True)
+        success, error = await executor.execute_dag_start(instance_id, claimed_start=True)
+        if not success:
+            logger.warning(
+                "Background benchmark start failed instance=%s error=%s",
+                instance_id,
+                error or "unknown error",
+            )
 
 
 _BACKGROUND_BENCHMARK_START_TASKS: dict[str, asyncio.Task] = {}
 
 
-def _schedule_background_benchmark_start(instance_id: str) -> None:
+def _schedule_background_benchmark_start(instance_id: str) -> bool:
+    existing = _BACKGROUND_BENCHMARK_START_TASKS.get(instance_id)
+    if existing and not existing.done():
+        return False
+
     task = asyncio.create_task(_background_benchmark_start(instance_id))
     _BACKGROUND_BENCHMARK_START_TASKS[instance_id] = task
-    task.add_done_callback(
-        lambda done_task, current_instance_id=instance_id: (
+
+    def finish(done_task: asyncio.Task, current_instance_id: str = instance_id) -> None:
+        if _BACKGROUND_BENCHMARK_START_TASKS.get(current_instance_id) is done_task:
             _BACKGROUND_BENCHMARK_START_TASKS.pop(current_instance_id, None)
-            if _BACKGROUND_BENCHMARK_START_TASKS.get(current_instance_id) is done_task
-            else None
-        )
-    )
+        if done_task.cancelled():
+            return
+        try:
+            error = done_task.exception()
+        except asyncio.CancelledError:
+            return
+        if error:
+            logger.error(
+                "Background benchmark start crashed instance=%s",
+                current_instance_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    task.add_done_callback(finish)
+    return True
 
 
 def _benchmark_task_type(order: TaskOrder) -> str | None:
@@ -2268,6 +2292,7 @@ async def receive_routing_result(
     flag_modified(order, "runtime_config")
     order.materialized_instance_id = instance.id
     order.status = OrderStatus.MATERIALIZED
+    order.error_message = None
     order.routing_status = (
         RoutingStatus.NETWORK_BINDING_READY.value
         if require_network_ready
@@ -2441,6 +2466,8 @@ class ManagedBenchmarkRunRequest(ControlledBenchmarkStartRequest):
 _MANAGED_BENCHMARK_TASKS: dict[str, asyncio.Task] = {}
 _MANAGED_BENCHMARK_STATUS: dict[str, dict[str, Any]] = {}
 _MANAGED_BENCHMARK_LOCK = asyncio.Lock()
+_MANAGED_BENCHMARK_ACTIVE_PHASES = {"running", "waiting_resource", "cleaning", "recovering"}
+_MANAGED_BENCHMARK_WATCHDOG_JOB_ID = "managed_benchmark_watchdog"
 
 
 def _managed_benchmark_key(task_type: str | None, benchmark_run_id: str | None) -> str:
@@ -2482,6 +2509,101 @@ def _benchmark_status_payload(
 def _is_managed_benchmark_running(key: str) -> bool:
     task = _MANAGED_BENCHMARK_TASKS.get(key)
     return bool(task and not task.done())
+
+
+async def _set_managed_benchmark_control(
+    *,
+    benchmark_run_id: str,
+    task_type: str | None,
+    phase: str,
+    payload: ManagedBenchmarkRunRequest | None = None,
+    user_id: str | None = None,
+    error: str | None = None,
+    session_maker=None,
+    db: AsyncSession | None = None,
+) -> int:
+    """Persist enough run intent to rebuild the in-memory controller after restart."""
+    now = business_now().isoformat()
+    async def apply(session: AsyncSession) -> int:
+        updated = 0
+        rows = await session.execute(
+            select(TaskOrder).where(
+                TaskOrder.is_benchmark.is_(True),
+                TaskOrder.deleted_at.is_(None),
+            )
+        )
+        for order in rows.scalars().all():
+            if _benchmark_run_id(order) != benchmark_run_id:
+                continue
+            if task_type and _benchmark_task_type(order) != task_type:
+                continue
+            config = dict(order.runtime_config or {})
+            benchmark = dict(config.get("benchmark") or {})
+            previous = dict(benchmark.get("managed_run") or {})
+            control = {
+                **previous,
+                "phase": phase,
+                "updated_at": now,
+                "error": error,
+            }
+            if not control.get("started_at"):
+                control["started_at"] = now
+            if user_id:
+                control["requested_by"] = user_id
+            if payload is not None:
+                control.update({
+                    "max_parallel": payload.max_parallel,
+                    "per_compute_slot_limit": payload.per_compute_slot_limit,
+                    "cleanup_evaluated": payload.cleanup_evaluated,
+                    "retry_failed": payload.retry_failed,
+                    "poll_interval_seconds": payload.poll_interval_seconds,
+                    "max_rounds": payload.max_rounds,
+                })
+            if phase not in _MANAGED_BENCHMARK_ACTIVE_PHASES:
+                control["finished_at"] = now
+            else:
+                control.pop("finished_at", None)
+            benchmark["managed_run"] = control
+            config["benchmark"] = benchmark
+            order.runtime_config = config
+            flag_modified(order, "runtime_config")
+            updated += 1
+        await session.commit()
+        return updated
+
+    if db is not None:
+        return await apply(db)
+    session_maker = session_maker or async_session_maker
+    async with session_maker() as session:
+        return await apply(session)
+
+
+async def _set_managed_benchmark_control_safely(**kwargs) -> None:
+    try:
+        await _set_managed_benchmark_control(**kwargs)
+    except Exception:
+        logger.exception(
+            "Failed to persist managed benchmark state run=%s phase=%s",
+            kwargs.get("benchmark_run_id"),
+            kwargs.get("phase"),
+        )
+
+
+def _schedule_managed_benchmark_task(
+    key: str,
+    payload: ManagedBenchmarkRunRequest,
+    user_id: str,
+) -> asyncio.Task:
+    task = asyncio.create_task(_run_managed_benchmark_loop(key, payload, user_id))
+    _MANAGED_BENCHMARK_TASKS[key] = task
+    task.add_done_callback(
+        lambda done_task, task_key=key: (
+            _MANAGED_BENCHMARK_TASKS.pop(task_key, None)
+            if _MANAGED_BENCHMARK_TASKS.get(task_key) is done_task
+            else None
+        )
+    )
+    return task
 
 
 def _request_managed_benchmark_stop(benchmark_run_id: str | None, task_type: str | None) -> None:
@@ -2560,6 +2682,7 @@ async def _run_managed_benchmark_loop(
     payload = payload.model_copy(update={"wait_seconds": 0})
     try:
         idle_rounds = 0
+        consecutive_errors = 0
         for round_index in range(1, payload.max_rounds + 1):
             status = _MANAGED_BENCHMARK_STATUS.get(key, {})
             if status.get("stop_requested"):
@@ -2570,14 +2693,39 @@ async def _run_managed_benchmark_loop(
                     payload=payload,
                     progress=status.get("progress"),
                 )
+                await _set_managed_benchmark_control_safely(
+                    benchmark_run_id=payload.benchmark_run_id,
+                    task_type=payload.task_type,
+                    phase="stopped",
+                    payload=payload,
+                    user_id=user_id,
+                )
                 return
 
-            async with async_session_maker() as session:
-                user = await session.get(User, user_id)
-                if not user:
-                    raise RuntimeError("当前登录用户不存在，请重新登录后再运行测评。")
-                progress = await _advance_controlled_benchmark_run(session, payload, user)
-                await session.commit()
+            try:
+                async with async_session_maker() as session:
+                    user = await session.get(User, user_id)
+                    if not user:
+                        raise RuntimeError("当前登录用户不存在，请重新登录后再运行测评。")
+                    progress = await _advance_controlled_benchmark_run(session, payload, user)
+                    await session.commit()
+                consecutive_errors = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                consecutive_errors += 1
+                if consecutive_errors >= 3:
+                    raise
+                _benchmark_status_payload(
+                    key,
+                    phase="waiting_resource",
+                    message=f"后台推进暂时异常，正在自动重试（{consecutive_errors}/3）。",
+                    payload=payload,
+                    progress=_MANAGED_BENCHMARK_STATUS.get(key, {}).get("progress"),
+                    error=str(exc),
+                )
+                await asyncio.sleep(payload.poll_interval_seconds)
+                continue
 
             total = int(progress.get("total") or 0)
             evaluated = int(progress.get("evaluated") or 0)
@@ -2586,11 +2734,12 @@ async def _run_managed_benchmark_loop(
             pending = int(progress.get("pending_to_start") or 0)
             started = int(progress.get("started") or 0)
             cleaned = int(progress.get("cleaned") or 0)
+            cleanup_pending = int(progress.get("cleanup_pending") or 0)
             waiting = len(progress.get("waiting_resource") or {})
             failed = len(progress.get("failed") or {})
 
             progress["round"] = round_index
-            if total > 0 and evaluated >= total:
+            if total > 0 and evaluated >= total and not cleanup_pending:
                 _benchmark_status_payload(
                     key,
                     phase="completed",
@@ -2598,9 +2747,23 @@ async def _run_managed_benchmark_loop(
                     payload=payload,
                     progress=progress,
                 )
+                await _set_managed_benchmark_control_safely(
+                    benchmark_run_id=payload.benchmark_run_id,
+                    task_type=payload.task_type,
+                    phase="completed",
+                    payload=payload,
+                    user_id=user_id,
+                )
                 return
 
-            if not total:
+            if total > 0 and evaluated >= total and cleanup_pending:
+                idle_rounds += 1
+                phase = "cleaning"
+                message = (
+                    f"本轮 {evaluated}/{total} 个任务已完成评估，"
+                    f"正在重试清理剩余 {cleanup_pending} 个运行实例。"
+                )
+            elif not total:
                 idle_rounds += 1
                 phase = "waiting"
                 message = "当前轮次还没有可运行的测评工单，请先创建并完成节点分配。"
@@ -2634,6 +2797,13 @@ async def _run_managed_benchmark_loop(
                 progress=progress,
             )
             if phase == "blocked" and idle_rounds >= 3:
+                await _set_managed_benchmark_control_safely(
+                    benchmark_run_id=payload.benchmark_run_id,
+                    task_type=payload.task_type,
+                    phase="blocked",
+                    payload=payload,
+                    user_id=user_id,
+                )
                 return
             await asyncio.sleep(payload.poll_interval_seconds if idle_rounds else 2)
 
@@ -2645,14 +2815,34 @@ async def _run_managed_benchmark_loop(
             payload=payload,
             progress=status.get("progress"),
         )
+        await _set_managed_benchmark_control_safely(
+            benchmark_run_id=payload.benchmark_run_id,
+            task_type=payload.task_type,
+            phase="blocked",
+            payload=payload,
+            user_id=user_id,
+        )
     except asyncio.CancelledError:
         status = _MANAGED_BENCHMARK_STATUS.get(key, {})
+        explicitly_stopped = bool(status.get("stop_requested"))
+        persisted_phase = "stopped" if explicitly_stopped else "recovering"
         _benchmark_status_payload(
             key,
-            phase="stopped",
-            message="当前测评轮次已停止。",
+            phase=persisted_phase,
+            message=(
+                "当前测评轮次已停止。"
+                if explicitly_stopped
+                else "后台进程中断，重启后将自动恢复当前测评轮次。"
+            ),
             payload=payload,
             progress=status.get("progress"),
+        )
+        await _set_managed_benchmark_control_safely(
+            benchmark_run_id=payload.benchmark_run_id,
+            task_type=payload.task_type,
+            phase=persisted_phase,
+            payload=payload,
+            user_id=user_id,
         )
         raise
     except Exception as exc:
@@ -2665,10 +2855,128 @@ async def _run_managed_benchmark_loop(
             progress=status.get("progress"),
             error=str(exc),
         )
+        await _set_managed_benchmark_control_safely(
+            benchmark_run_id=payload.benchmark_run_id,
+            task_type=payload.task_type,
+            phase="failed",
+            payload=payload,
+            user_id=user_id,
+            error=str(exc),
+        )
+
+
+async def restore_managed_benchmark_runs(session_maker=None) -> int:
+    """Recreate controllers whose durable run marker survived a process restart."""
+    session_maker = session_maker or async_session_maker
+    candidates: dict[tuple[str, str], tuple[TaskOrder, dict[str, Any]]] = {}
+    async with session_maker() as db:
+        rows = await db.execute(
+            select(TaskOrder).where(
+                TaskOrder.is_benchmark.is_(True),
+                TaskOrder.deleted_at.is_(None),
+            )
+        )
+        for order in rows.scalars().all():
+            run_id = _benchmark_run_id(order)
+            task_type = _benchmark_task_type(order)
+            benchmark = (order.runtime_config or {}).get("benchmark") or {}
+            control = benchmark.get("managed_run") or {}
+            if not run_id or not task_type or control.get("phase") not in _MANAGED_BENCHMARK_ACTIVE_PHASES:
+                continue
+            key = (task_type, run_id)
+            previous = candidates.get(key)
+            if previous is None or str(control.get("updated_at") or "") > str(previous[1].get("updated_at") or ""):
+                candidates[key] = (order, control)
+
+    restored = 0
+    for (task_type, run_id), (order, control) in candidates.items():
+        user_id = str(control.get("requested_by") or order.user_id or "")
+        if not user_id:
+            await _set_managed_benchmark_control_safely(
+                benchmark_run_id=run_id,
+                task_type=task_type,
+                phase="failed",
+                error="managed benchmark owner is missing",
+                session_maker=session_maker,
+            )
+            continue
+        try:
+            payload = ManagedBenchmarkRunRequest(
+                benchmark_run_id=run_id,
+                task_type=task_type,
+                max_parallel=control.get("max_parallel", 8),
+                per_compute_slot_limit=control.get("per_compute_slot_limit", 1),
+                cleanup_evaluated=control.get("cleanup_evaluated", True),
+                retry_failed=control.get("retry_failed", False),
+                poll_interval_seconds=control.get("poll_interval_seconds", 5),
+                max_rounds=control.get("max_rounds", 720),
+            )
+        except Exception as exc:
+            await _set_managed_benchmark_control_safely(
+                benchmark_run_id=run_id,
+                task_type=task_type,
+                phase="failed",
+                user_id=user_id,
+                error=f"invalid persisted managed benchmark config: {exc}",
+                session_maker=session_maker,
+            )
+            continue
+
+        task_key = _managed_benchmark_key(task_type, run_id)
+        async with _MANAGED_BENCHMARK_LOCK:
+            if _is_managed_benchmark_running(task_key):
+                continue
+            _benchmark_status_payload(
+                task_key,
+                phase="recovering",
+                message="检测到未完成测评轮次，后台已自动恢复推进。",
+                payload=payload,
+                progress=None,
+            )
+            _schedule_managed_benchmark_task(task_key, payload, user_id)
+            restored += 1
+    if restored:
+        logger.info("Restored %d managed benchmark run(s)", restored)
+    return restored
+
+
+async def shutdown_managed_benchmark_tasks() -> None:
+    """Quiesce in-memory benchmark work so durable controllers can recover it."""
+    tasks = [
+        task
+        for task in [
+            *_BACKGROUND_BENCHMARK_START_TASKS.values(),
+            *_MANAGED_BENCHMARK_TASKS.values(),
+        ]
+        if not task.done()
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def start_managed_benchmark_watchdog(interval_seconds: int = 15) -> None:
+    """Periodically restore a controller that disappeared without a terminal state."""
+    from services.scheduler import scheduler
+
+    if scheduler.get_job(_MANAGED_BENCHMARK_WATCHDOG_JOB_ID):
+        scheduler.remove_job(_MANAGED_BENCHMARK_WATCHDOG_JOB_ID)
+    scheduler.add_job(
+        restore_managed_benchmark_runs,
+        trigger="interval",
+        seconds=interval_seconds,
+        id=_MANAGED_BENCHMARK_WATCHDOG_JOB_ID,
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
 
 @router.post("/benchmark/managed-run")
 async def start_managed_benchmark_run(
     payload: ManagedBenchmarkRunRequest | None = None,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """后台托管推进本轮测评，避免浏览器切页或请求超时导致轮次卡住。"""
@@ -2692,15 +3000,15 @@ async def start_managed_benchmark_run(
             progress=None,
         )
         status.pop("stop_requested", None)
-        task = asyncio.create_task(_run_managed_benchmark_loop(key, payload, current_user.id))
-        _MANAGED_BENCHMARK_TASKS[key] = task
-        task.add_done_callback(
-            lambda done_task, task_key=key: (
-                _MANAGED_BENCHMARK_TASKS.pop(task_key, None)
-                if _MANAGED_BENCHMARK_TASKS.get(task_key) is done_task
-                else None
-            )
+        await _set_managed_benchmark_control(
+            benchmark_run_id=payload.benchmark_run_id,
+            task_type=payload.task_type,
+            phase="running",
+            payload=payload,
+            user_id=current_user.id,
+            db=db,
         )
+        _schedule_managed_benchmark_task(key, payload, current_user.id)
     return {**status, "already_running": False}
 
 
@@ -2856,6 +3164,15 @@ async def stop_benchmark_run(
             await db.rollback()
             failed[order_id] = str(exc)
 
+    if request.benchmark_run_id:
+        await _set_managed_benchmark_control_safely(
+            benchmark_run_id=request.benchmark_run_id,
+            task_type=request.task_type,
+            phase="stopped",
+            user_id=current_user.id,
+            error="; ".join(failed.values()) if failed else None,
+            db=db,
+        )
     return BatchOperationResponse(succeeded=succeeded, failed=failed)
 
 
@@ -3091,13 +3408,9 @@ async def _cleanup_evaluated_benchmark_instance(
     """Stop/remove a benchmark runtime instance while preserving order evidence."""
     if instance.status not in (TaskStatus.STOPPED, TaskStatus.PENDING):
         executor = DAGExecutor(db)
-        await executor.execute_dag_stop(instance.id)
-    await emit_release_events_for_order(
-        db,
-        order,
-        reason="benchmark_cleanup",
-        metadata={"instance_id": instance.id, "preserve_order": True},
-    )
+        stopped, stop_error = await executor.execute_dag_stop(instance.id)
+        if not stopped:
+            raise RuntimeError(stop_error or "failed to stop benchmark instance")
 
     refreshed = (
         await db.execute(
@@ -3111,7 +3424,15 @@ async def _cleanup_evaluated_benchmark_instance(
             order.status = OrderStatus.COMPLETED
         return False
 
-    await cleanup_instance_runtime(db, refreshed)
+    cleanup_warnings = await cleanup_instance_runtime(db, refreshed)
+    if cleanup_warnings:
+        raise RuntimeError(f"容器清理失败：{'；'.join(cleanup_warnings)}")
+    await emit_release_events_for_order(
+        db,
+        order,
+        reason="benchmark_cleanup",
+        metadata={"instance_id": instance.id, "preserve_order": True},
+    )
     await purge_instance_artifacts_preserve_evidence(db, refreshed.id)
     await mark_orders_completed_for_instance(db, refreshed.id)
     if order.status == OrderStatus.MATERIALIZED:
@@ -3230,6 +3551,22 @@ async def _advance_controlled_benchmark_run(
         if instance_id in startable_instance_ids
     }
 
+    # A process restart can leave the durable claim at STARTING after its
+    # in-memory asyncio task disappears. Node Agent startup is idempotent, so
+    # re-dispatch only orphaned, unevaluated benchmark starts.
+    recovered_start_ids: list[str] = []
+    for order in orders:
+        instance_id = order.materialized_instance_id
+        instance = instance_map.get(instance_id or "")
+        if (
+            instance_id
+            and instance_id not in eval_map
+            and instance
+            and instance.status == TaskStatus.STARTING
+            and _schedule_background_benchmark_start(instance_id)
+        ):
+            recovered_start_ids.append(instance_id)
+
     cleaned: list[str] = []
     failed: dict[str, str] = dict(recalc_failed)
     if payload.cleanup_evaluated:
@@ -3344,8 +3681,14 @@ async def _advance_controlled_benchmark_run(
         failed.update(final_cleanup_failed)
         if final_cleaned:
             await db.commit()
+            run_instance_map = await _instances_for_orders(db, run_orders)
     success_count = sum(1 for evaluation in eval_map.values() if evaluation.business_success)
     evaluated_count = len(eval_map)
+    cleanup_pending = (
+        sum(1 for instance_id in eval_map if instance_id in run_instance_map)
+        if payload.cleanup_evaluated
+        else 0
+    )
     waiting_route = sum(
         1
         for order in run_orders
@@ -3375,9 +3718,11 @@ async def _advance_controlled_benchmark_run(
         "waiting_route": waiting_route,
         "pending_to_start": pending_to_start,
         "started": len(started),
+        "recovered_starts": recovered_start_ids,
         "skipped_busy": skipped_busy,
         "waiting_resource": waiting_resource,
         "cleaned": len(cleaned),
+        "cleanup_pending": cleanup_pending,
         "failed": failed,
         "instance_ids": started,
         "success_rate": success_count / evaluated_count if evaluated_count else None,
@@ -3491,6 +3836,7 @@ async def _do_auto_route(
     order.runtime_config = rc
     flag_modified(order, "runtime_config")
     order.routing_status = RoutingStatus.COMPLETED.value
+    order.error_message = None
 
     start_time = order.business_start_time or order.scheduled_start_time or business_now()
     end_time = order.business_end_time or order.scheduled_end_time or (start_time + timedelta(hours=1))

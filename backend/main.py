@@ -39,9 +39,24 @@ async def lifespan(app: FastAPI):
         await restore_pending_jobs()
     except Exception:
         logger.exception("Failed to restore scheduled jobs on startup")
-    yield
-    logger.info("Shutting down application...")
-    TaskScheduler.shutdown()
+    try:
+        from api.orders import restore_managed_benchmark_runs, start_managed_benchmark_watchdog
+
+        await restore_managed_benchmark_runs()
+        start_managed_benchmark_watchdog()
+    except Exception:
+        logger.exception("Failed to restore managed benchmark runs on startup")
+    try:
+        yield
+    finally:
+        logger.info("Shutting down application...")
+        TaskScheduler.shutdown()
+        try:
+            from api.orders import shutdown_managed_benchmark_tasks
+
+            await shutdown_managed_benchmark_tasks()
+        except Exception:
+            logger.exception("Failed to quiesce managed benchmark tasks")
 
 
 app = FastAPI(

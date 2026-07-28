@@ -18,6 +18,7 @@ from models import (
     TaskMetric,
     TaskOrder,
     TaskResultObject,
+    TaskTemplate,
     User,
 )
 
@@ -1218,6 +1219,10 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     )
     assert create_response.status_code == 200
     order_id = create_response.json()["order_ids"][0]
+    created_row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    created_order = created_row.scalar_one()
+    created_order.error_message = "temporary routing capacity error"
+    await db_session.commit()
 
     payload = {
         "strategy": "cost_priority",
@@ -1247,6 +1252,7 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one()
     assert order.routing_status == RoutingStatus.NETWORK_BINDING_READY.value
+    assert order.error_message is None
     routing_result = order.runtime_config["routing_result"]
     assert routing_result["selected_strategy"] == "GPU_EXCLUSIVE_LOW_RENT"
     assert routing_result["external_routing_id"] == "route-meta-001"
@@ -3662,7 +3668,22 @@ async def test_external_network_ready_defers_benchmark_start_to_managed_runner(
 async def test_managed_benchmark_run_exposes_background_status(client, db_session, monkeypatch):
     import api.orders as orders_api
 
-    headers, _admin = await _auth_headers(client, db_session, username="managed-run-admin", role=UserRole.ADMIN)
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, admin = await _auth_headers(client, db_session, username="managed-run-admin", role=UserRole.ADMIN)
+    managed_order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="managed run durable control order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        runtime_config={
+            "benchmark": {"run_id": "managed-run-test"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+    )
+    db_session.add(managed_order)
+    await db_session.commit()
     seen: list[tuple[str, str | None]] = []
 
     async def fake_managed_loop(key, payload, user_id):
@@ -3711,6 +3732,399 @@ async def test_managed_benchmark_run_exposes_background_status(client, db_sessio
     assert body["phase"] == "completed"
     assert body["progress"]["evaluated"] == 1
     assert seen and seen[0][0] == "high_throughput_matmul::managed-run-test"
+    await db_session.refresh(managed_order)
+    durable_control = managed_order.runtime_config["benchmark"]["managed_run"]
+    assert durable_control["phase"] == "running"
+    assert durable_control["requested_by"] == admin.id
+    assert durable_control["max_parallel"] == 8
+
+
+@pytest.mark.asyncio
+async def test_restore_managed_benchmark_runs_is_idempotent(db_session, monkeypatch):
+    import asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="restore-managed-admin", password_hash="test", role=UserRole.ADMIN)
+    template = TaskTemplate(name="restore managed template")
+    db_session.add_all([user, template])
+    await db_session.flush()
+    run_id = "restore-managed-run"
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template.id,
+        name="restore managed order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        runtime_config={
+            "benchmark": {
+                "run_id": run_id,
+                "managed_run": {
+                    "phase": "running",
+                    "requested_by": user.id,
+                    "max_parallel": 4,
+                    "per_compute_slot_limit": 2,
+                    "cleanup_evaluated": True,
+                    "retry_failed": False,
+                    "poll_interval_seconds": 3,
+                    "max_rounds": 100,
+                    "updated_at": "2026-07-28T20:00:00+08:00",
+                },
+            },
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+    )
+    db_session.add(order)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+
+    release = asyncio.Event()
+    seen = []
+
+    async def hold_recovered_loop(key, payload, user_id):
+        seen.append((key, payload.max_parallel, payload.per_compute_slot_limit, user_id))
+        await release.wait()
+
+    monkeypatch.setattr(orders_api, "_run_managed_benchmark_loop", hold_recovered_loop)
+    task_key = orders_api._managed_benchmark_key("high_throughput_matmul", run_id)
+    orders_api._MANAGED_BENCHMARK_TASKS.pop(task_key, None)
+    orders_api._MANAGED_BENCHMARK_STATUS.pop(task_key, None)
+
+    first = await orders_api.restore_managed_benchmark_runs(session_maker=session_maker)
+    await asyncio.sleep(0)
+    second = await orders_api.restore_managed_benchmark_runs(session_maker=session_maker)
+
+    assert first == 1
+    assert second == 0
+    assert seen == [(task_key, 4, 2, user.id)]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[task_key]["phase"] == "recovering"
+
+    release.set()
+    await orders_api._MANAGED_BENCHMARK_TASKS[task_key]
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_restore_managed_benchmark_runs_ignores_terminal_marker(db_session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="terminal-managed-admin", password_hash="test", role=UserRole.ADMIN)
+    template = TaskTemplate(name="terminal managed template")
+    db_session.add_all([user, template])
+    await db_session.flush()
+    db_session.add(TaskOrder(
+        user_id=user.id,
+        template_id=template.id,
+        name="completed managed order",
+        status=OrderStatus.COMPLETED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {
+                "run_id": "terminal-managed-run",
+                "managed_run": {"phase": "completed", "requested_by": user.id},
+            },
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+    ))
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(
+        orders_api,
+        "_schedule_managed_benchmark_task",
+        lambda *_args: pytest.fail("terminal run must not be restored"),
+    )
+
+    restored = await orders_api.restore_managed_benchmark_runs(session_maker=session_maker)
+
+    assert restored == 0
+
+
+@pytest.mark.asyncio
+async def test_evaluated_cleanup_keeps_evidence_when_container_delete_fails(db_session, monkeypatch):
+    import api.orders as orders_api
+
+    user = User(username="cleanup-retry-user", password_hash="test", role=UserRole.ADMIN)
+    template = TaskTemplate(name="cleanup retry template")
+    db_session.add_all([user, template])
+    await db_session.flush()
+    instance = TaskInstance(
+        id="cleanup-retry-instance",
+        template_id=template.id,
+        name="cleanup retry instance",
+        status=TaskStatus.RUNNING,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template.id,
+        name="cleanup retry order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "cleanup-retry-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+        materialized_instance_id=instance.id,
+    )
+    db_session.add_all([instance, order])
+    await db_session.commit()
+
+    class SuccessfulStopExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_stop(self, instance_id):
+            instance.status = TaskStatus.STOPPED
+            return True, None
+
+    release_events = []
+
+    async def record_release(*args, **kwargs):
+        release_events.append((args, kwargs))
+
+    monkeypatch.setattr(orders_api, "DAGExecutor", SuccessfulStopExecutor)
+    async def failed_cleanup(*_args, **_kwargs):
+        return ["compute: node agent unavailable"]
+
+    monkeypatch.setattr(orders_api, "cleanup_instance_runtime", failed_cleanup)
+    monkeypatch.setattr(orders_api, "emit_release_events_for_order", record_release)
+
+    with pytest.raises(RuntimeError, match="node agent unavailable"):
+        await orders_api._cleanup_evaluated_benchmark_instance(db_session, order, instance)
+
+    assert release_events == []
+    assert order.status == OrderStatus.MATERIALIZED
+    assert await db_session.get(TaskInstance, instance.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_controlled_benchmark_redispatches_orphaned_starting_instance(
+    client, db_session, monkeypatch
+):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="recover-starting-user")
+    run_id = "recover-starting-run"
+    instance_id = "recover-starting-instance"
+    db_session.add_all([
+        TaskOrder(
+            user_id=user.id,
+            template_id=template_id,
+            name="recover orphaned starting order",
+            status=OrderStatus.MATERIALIZED,
+            routing_status=RoutingStatus.COMPLETED.value,
+            runtime_config={
+                "benchmark": {"run_id": run_id},
+                "business_task": {
+                    "task_type": "high_throughput_matmul",
+                    "business_objective": {
+                        "metric_key": "effective_gflops",
+                        "operator": ">=",
+                        "unit": "GFLOPS",
+                    },
+                },
+            },
+            is_benchmark=True,
+            materialized_instance_id=instance_id,
+        ),
+        TaskInstance(
+            id=instance_id,
+            template_id=template_id,
+            name="recover orphaned starting instance",
+            status=TaskStatus.STARTING,
+            deployment_mode=DeploymentMode.IMMEDIATE,
+        ),
+    ])
+    await db_session.commit()
+
+    dispatched: list[str] = []
+
+    def record_dispatch(current_instance_id: str) -> bool:
+        dispatched.append(current_instance_id)
+        return True
+
+    monkeypatch.setattr(orders_api, "_schedule_background_benchmark_start", record_dispatch)
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={"benchmark_run_id": run_id, "task_type": "high_throughput_matmul"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["recovered_starts"] == [instance_id]
+    assert body["active"] == 1
+    assert body["started"] == 0
+    assert dispatched == [instance_id]
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_retries_transient_advance_errors(db_session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-transient-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+
+    attempts = 0
+
+    async def transient_then_complete(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError(f"temporary database failure {attempts}")
+        return {
+            "total": 1,
+            "evaluated": 1,
+            "success": 1,
+            "active": 0,
+            "waiting_route": 0,
+            "pending_to_start": 0,
+            "started": 0,
+            "cleaned": 1,
+            "cleanup_pending": 0,
+            "waiting_resource": {},
+            "failed": {},
+        }
+
+    persisted: list[str] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs["phase"])
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", transient_then_complete)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    key = "high_throughput_matmul::managed-transient-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-transient-run",
+        task_type="high_throughput_matmul",
+        poll_interval_seconds=1,
+        max_rounds=3,
+    )
+
+    await orders_api._run_managed_benchmark_loop(key, payload, user.id)
+
+    assert attempts == 3
+    assert persisted == ["completed"]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["phase"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_retries_cleanup_before_completing(db_session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-cleanup-retry-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+
+    attempts = 0
+
+    async def cleanup_then_complete(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        cleanup_pending = 1 if attempts == 1 else 0
+        return {
+            "total": 1,
+            "evaluated": 1,
+            "success": 1,
+            "active": 0,
+            "waiting_route": 0,
+            "pending_to_start": 0,
+            "started": 0,
+            "cleaned": 0 if cleanup_pending else 1,
+            "cleanup_pending": cleanup_pending,
+            "waiting_resource": {},
+            "failed": {"order-1": "agent unavailable"} if cleanup_pending else {},
+        }
+
+    persisted: list[str] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs["phase"])
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", cleanup_then_complete)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    key = "high_throughput_matmul::managed-cleanup-retry-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-cleanup-retry-run",
+        task_type="high_throughput_matmul",
+        poll_interval_seconds=1,
+        max_rounds=2,
+    )
+
+    await orders_api._run_managed_benchmark_loop(key, payload, user.id)
+
+    assert attempts == 2
+    assert persisted == ["completed"]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["phase"] == "completed"
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["progress"]["cleanup_pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_cancellation_persists_recovering(db_session, monkeypatch):
+    import asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-cancel-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_advance(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+
+    persisted: list[str] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs["phase"])
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", hold_advance)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    key = "high_throughput_matmul::managed-cancel-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-cancel-run",
+        task_type="high_throughput_matmul",
+    )
+    task = asyncio.create_task(orders_api._run_managed_benchmark_loop(key, payload, user.id))
+    await entered.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert persisted == ["recovering"]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["phase"] == "recovering"
+
+
+def test_managed_benchmark_watchdog_registration_is_idempotent():
+    import api.orders as orders_api
+    from services.scheduler import scheduler
+
+    orders_api.start_managed_benchmark_watchdog(interval_seconds=17)
+    orders_api.start_managed_benchmark_watchdog(interval_seconds=19)
+
+    job = scheduler.get_job(orders_api._MANAGED_BENCHMARK_WATCHDOG_JOB_ID)
+    assert job is not None
+    assert int(job.trigger.interval.total_seconds()) == 19
+    scheduler.remove_job(orders_api._MANAGED_BENCHMARK_WATCHDOG_JOB_ID)
 
 
 @pytest.mark.asyncio

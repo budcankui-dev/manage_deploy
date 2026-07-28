@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -60,6 +61,11 @@ from services.time_utils import business_now
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
+_MANAGED_CONTAINER_NAME_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+_STOPPED_CONTAINER_STATUSES = {"exited", "dead"}
 
 
 def _find_override(t_node: TaskTemplateNode, overrides: list[TaskInstanceNodeOverride]) -> TaskInstanceNodeOverride | None:
@@ -122,6 +128,71 @@ async def _cleanup_instance_runtime(db: AsyncSession, instance: TaskInstance) ->
     return errors
 
 
+async def _cleanup_stopped_orphan_port_conflicts(
+    db: AsyncSession,
+    executor: DAGExecutor,
+    machine: NodeModel,
+    conflict_messages: list[str],
+) -> list[str]:
+    """Delete only stopped managed containers that no longer exist in the DB."""
+    candidate_names = {
+        match.group(0)
+        for message in conflict_messages
+        for match in _MANAGED_CONTAINER_NAME_RE.finditer(message)
+    }
+    if not candidate_names:
+        return []
+
+    known_rows = await db.execute(
+        select(TaskInstanceNode.container_name).where(
+            TaskInstanceNode.container_name.in_(candidate_names)
+        )
+    )
+    orphan_names = candidate_names - {name for name in known_rows.scalars().all() if name}
+    if not orphan_names:
+        return []
+
+    endpoint = executor._get_agent_endpoint(machine)
+    success, result = await executor.agent_client.list_managed_containers(endpoint)
+    if not success:
+        logger.warning(
+            "Unable to inspect stopped orphan conflicts on %s: %s",
+            machine.hostname,
+            result.get("error") or "unknown error",
+        )
+        return []
+    containers = {
+        item.get("container_name"): item
+        for item in result.get("containers", [])
+        if isinstance(item, dict) and item.get("container_name")
+    }
+
+    removed: list[str] = []
+    for container_name in sorted(orphan_names):
+        container = containers.get(container_name)
+        if not container or str(container.get("status") or "").lower() not in _STOPPED_CONTAINER_STATUSES:
+            continue
+        deleted, delete_result = await executor.agent_client.delete_container_by_name(
+            endpoint,
+            container_name,
+        )
+        if deleted:
+            removed.append(container_name)
+            logger.info(
+                "Removed stopped orphan container blocking preflight node=%s container=%s",
+                machine.hostname,
+                container_name,
+            )
+        else:
+            logger.warning(
+                "Failed to remove stopped orphan container node=%s container=%s error=%s",
+                machine.hostname,
+                container_name,
+                delete_result.get("error") or "unknown error",
+            )
+    return removed
+
+
 async def _preflight_instance_plan(
     db: AsyncSession,
     node_plans: list[dict],
@@ -182,6 +253,20 @@ async def _preflight_instance_plan(
             network_mode=network_mode,
             exclude_container_name=plan.get("container_name"),
         )
+        if success and result.get("conflicts"):
+            removed_orphans = await _cleanup_stopped_orphan_port_conflicts(
+                db,
+                executor,
+                machine,
+                result.get("conflicts") or [],
+            )
+            if removed_orphans:
+                success, result = await executor.agent_client.preflight_ports(
+                    management_ip=executor._get_agent_endpoint(machine),
+                    ports=ports,
+                    network_mode=network_mode,
+                    exclude_container_name=plan.get("container_name"),
+                )
         if not success:
             if instance_id_for_events:
                 # Use an INDEPENDENT session so the audit row survives a later

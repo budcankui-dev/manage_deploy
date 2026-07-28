@@ -230,7 +230,19 @@ class AgentClient:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
-                    return True, {"containers": response.json()}
+                    try:
+                        containers = response.json()
+                    except ValueError as exc:
+                        return False, {
+                            "error": f"Node Agent returned invalid JSON: {exc}",
+                            "status_code": response.status_code,
+                        }
+                    if not isinstance(containers, list):
+                        return False, {
+                            "error": "Node Agent returned an invalid managed-container payload",
+                            "status_code": response.status_code,
+                        }
+                    return True, {"containers": containers}
                 return False, {"error": response.text}
         except httpx.RequestError as e:
             return False, {"error": str(e)}

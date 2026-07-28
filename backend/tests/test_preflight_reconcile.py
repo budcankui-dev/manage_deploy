@@ -20,12 +20,92 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from api.instances import _reconcile_stale_running_node
+from api.instances import (
+    _cleanup_stopped_orphan_port_conflicts,
+    _reconcile_stale_running_node,
+)
 from database import Base
 from enums import NodeStatus, TaskStatus
-from models import TaskEvent, TaskInstance, TaskInstanceNode, TaskTemplate
+from models import Node, TaskEvent, TaskInstance, TaskInstanceNode, TaskTemplate
 from services import dag_executor as dag_executor_module
 from services.dag_executor import DAGExecutor
+
+
+@pytest.mark.asyncio
+async def test_preflight_cleans_only_stopped_orphan_container_conflicts(db_session):
+    stopped_orphan = (
+        "11111111-1111-4111-8111-111111111111_"
+        "22222222-2222-4222-8222-222222222222"
+    )
+    running_orphan = (
+        "33333333-3333-4333-8333-333333333333_"
+        "44444444-4444-4444-8444-444444444444"
+    )
+    known_stopped = (
+        "55555555-5555-4555-8555-555555555555_"
+        "66666666-6666-4666-8666-666666666666"
+    )
+    template = TaskTemplate(id="orphan-template", name="orphan template")
+    worker = Node(
+        id="orphan-worker",
+        hostname="compute-orphan-test",
+        management_ip="10.0.0.1",
+        business_ip="10.0.1.1",
+        agent_address="http://10.0.0.1:8001",
+    )
+    instance = TaskInstance(
+        id="55555555-5555-4555-8555-555555555555",
+        template_id=template.id,
+        name="known stopped instance",
+        status=TaskStatus.STOPPED,
+    )
+    node = TaskInstanceNode(
+        id="66666666-6666-4666-8666-666666666666",
+        instance_id=instance.id,
+        template_node_id="known-template-node",
+        name="compute",
+        image="image:dev",
+        node_id=worker.id,
+        container_name=known_stopped,
+        status=NodeStatus.STOPPED,
+    )
+    db_session.add_all([template, worker, instance, node])
+    await db_session.commit()
+
+    class FakeAgent:
+        def __init__(self):
+            self.deleted: list[str] = []
+
+        async def list_managed_containers(self, _endpoint):
+            return True, {"containers": [
+                {"container_name": stopped_orphan, "status": "exited"},
+                {"container_name": running_orphan, "status": "running"},
+                {"container_name": known_stopped, "status": "exited"},
+            ]}
+
+        async def delete_container_by_name(self, _endpoint, container_name):
+            self.deleted.append(container_name)
+            return True, {}
+
+    agent = FakeAgent()
+    executor = SimpleNamespace(
+        agent_client=agent,
+        _get_agent_endpoint=lambda _machine: "http://10.0.0.1:8001",
+    )
+    machine = _make_machine()
+
+    removed = await _cleanup_stopped_orphan_port_conflicts(
+        db_session,
+        executor,
+        machine,
+        [
+            f"宿主机端口 18000 已被容器登记占用: {stopped_orphan}, {running_orphan}",
+            f"宿主机端口 18001 已被容器登记占用: {known_stopped}",
+        ],
+    )
+
+    assert removed == [stopped_orphan]
+    assert agent.deleted == [stopped_orphan]
 
 
 class FakeDb:
