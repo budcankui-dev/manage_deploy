@@ -3,6 +3,19 @@ import { expect, test } from '@playwright/test'
 const username = process.env.E2E_ADMIN_USERNAME || 'codex-e2e-admin'
 const password = process.env.E2E_ADMIN_PASSWORD || '123456'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('https://fonts.googleapis.com/**', async route => route.fulfill({
+    status: 200,
+    contentType: 'text/css',
+    body: '',
+  }))
+  await page.route('**/api/orders/benchmark/runs**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+})
+
 async function ensureAdminUser(request) {
   let login = await request.post('/api/auth/login', {
     data: { username, password },
@@ -935,6 +948,7 @@ test('benchmark run button clears stale in-page runner lock and restarts backend
 
 test('benchmark run deletion stops active instances and clears the whole run', async ({ page }) => {
   const runId = 'high_throughput_matmul-e2e-delete-run'
+  const historyRunId = 'high_throughput_matmul-e2e-history-run'
   const requestSequence = []
   let deleted = false
 
@@ -956,7 +970,13 @@ test('benchmark run deletion stops active instances and clears the whole run', a
   await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(deleted ? [] : [{
+    body: JSON.stringify(new URL(route.request().url()).searchParams.get('benchmark_run_id') === historyRunId ? [{
+      task_type: 'high_throughput_matmul',
+      count: 1,
+      evaluated_count: 1,
+      success_count: 1,
+      business_success_rate: 1,
+    }] : deleted ? [] : [{
       task_type: 'high_throughput_matmul',
       count: 2,
       evaluated_count: 0,
@@ -967,7 +987,14 @@ test('benchmark run deletion stops active instances and clears the whole run', a
   await page.route('**/api/orders?**', async route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(deleted ? [] : [
+    body: JSON.stringify(new URL(route.request().url()).searchParams.get('benchmark_run_id') === historyRunId ? [{
+      id: 'order-history-completed',
+      task_type: 'high_throughput_matmul',
+      status: 'completed',
+      routing_status: 'completed',
+      deployment_status: 'stopped',
+      runtime_config: { benchmark: { run_id: historyRunId } },
+    }] : deleted ? [] : [
       {
         id: 'order-running',
         task_type: 'high_throughput_matmul',
@@ -985,6 +1012,29 @@ test('benchmark run deletion stops active instances and clears the whole run', a
         deployment_status: null,
         error_message: 'GPU slot conflict for compute-1:gpu0',
         runtime_config: { benchmark: { run_id: runId } },
+      },
+    ]),
+  }))
+  await page.route('**/api/orders/benchmark/runs**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(deleted ? [{
+      benchmark_run_id: historyRunId,
+      task_type: 'high_throughput_matmul',
+      created_at: '2026-07-27T12:00:00',
+      order_count: 1,
+    }] : [
+      {
+        benchmark_run_id: runId,
+        task_type: 'high_throughput_matmul',
+        created_at: '2026-07-28T12:00:00',
+        order_count: 2,
+      },
+      {
+        benchmark_run_id: historyRunId,
+        task_type: 'high_throughput_matmul',
+        created_at: '2026-07-27T12:00:00',
+        order_count: 1,
       },
     ]),
   }))
@@ -1006,7 +1056,7 @@ test('benchmark run deletion stops active instances and clears the whole run', a
     })
   })
 
-  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('.status-cell.waiting .status-num')).toHaveText('0')
   await expect(page.locator('.status-cell.running .status-num')).toHaveText('1')
   await expect(page.locator('.status-cell.failed .status-num')).toHaveText('1')
@@ -1023,8 +1073,16 @@ test('benchmark run deletion stops active instances and clears the whole run', a
   })
   expect(requestSequence[1].payload).toEqual(requestSequence[0].payload)
   await expect(page.getByText('暂无测试工单')).toBeVisible()
+  await expect(page.getByText('待创建新轮次，填写参数后创建测评工单或开始完整测试流程。')).toBeVisible()
+  await expect(page.locator('.status-num')).toHaveText(['0', '0', '0', '0', '0'])
   await expect(page).not.toHaveURL(/benchmark_run_id=/)
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem('manage-deploy:benchmark-run-id'))).toBeNull()
+
+  await page.locator('.run-select').click()
+  await page.getByRole('option', { name: `${historyRunId}（1 个工单）` }).click()
+  await expect(page).toHaveURL(new RegExp(`benchmark_run_id=${historyRunId}`))
+  await expect(page.locator('.status-cell.done .status-num')).toHaveText('1')
+  await expect(page.getByText('100.0%')).toBeVisible()
 })
 
 test('completed external-route evidence can still stop running containers', async ({ page }) => {

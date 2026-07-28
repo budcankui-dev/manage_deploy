@@ -6,9 +6,31 @@
         <h1>业务目标成功率闭环验证</h1>
         <p class="hero-subtitle">按基线、创建测试工单、运行测评、成功率统计四步完成业务目标成功率验证；判定要求已评估任务 ≥ 30 且成功率 ≥ 90%。</p>
         <div class="run-strip">
-          <span>当前测评轮次</span>
-          <strong>{{ currentBenchmarkRunId || '历史全部数据' }}</strong>
-          <small>{{ currentBenchmarkRunId ? '本页列表、运行按钮和结果统计均限定在该轮次。' : '旧数据未带轮次标记，当前按全部历史测试工单统计。' }}</small>
+          <span>测评轮次</span>
+          <el-select
+            class="run-select"
+            :model-value="currentBenchmarkRunId"
+            :loading="benchmarkRunsLoading"
+            placeholder="选择历史轮次"
+            @change="selectBenchmarkRun"
+          >
+            <el-option
+              v-for="run in benchmarkRuns"
+              :key="run.benchmark_run_id"
+              :label="formatBenchmarkRunOption(run)"
+              :value="run.benchmark_run_id"
+            />
+          </el-select>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :disabled="!currentBenchmarkRunId || benchmarkFlowBusy"
+            @click="enterNewBenchmarkRun"
+          >
+            新建轮次
+          </el-button>
+          <small>{{ currentBenchmarkRunId ? '列表和统计仅显示所选轮次。' : '待创建新轮次，填写参数后创建测评工单或开始完整测试流程。' }}</small>
         </div>
       </div>
       <div class="hero-actions">
@@ -437,6 +459,7 @@
             type="primary"
             plain
             :loading="resultRefreshing"
+            :disabled="!currentBenchmarkRunId"
             @click="refreshAcceptanceResult"
           >
             计算/更新成功率
@@ -449,7 +472,7 @@
         <div class="result-meta-grid">
           <div>
             <span>统计口径</span>
-            <strong>{{ currentBenchmarkRunId ? '当前测评轮次' : '全部历史测试工单' }}</strong>
+            <strong>当前测评轮次</strong>
           </div>
           <div>
             <span>总工单数</span>
@@ -579,6 +602,8 @@ const nodes = ref([])
 const nodesLoading = ref(false)
 const baselines = ref([])
 const baselinesLoading = ref(false)
+const benchmarkRuns = ref([])
+const benchmarkRunsLoading = ref(false)
 const orders = ref([])
 const summary = ref([])
 const testingNodes = ref(new Map())
@@ -1354,26 +1379,38 @@ async function loadBaselines() {
   }
 }
 
+async function loadBenchmarkRuns() {
+  const requestedTaskType = taskType.value
+  benchmarkRunsLoading.value = true
+  try {
+    const { data } = await ordersApi.listBenchmarkRuns({ task_type: requestedTaskType, limit: 50 })
+    if (taskType.value !== requestedTaskType) return
+    benchmarkRuns.value = Array.isArray(data) ? data : (data.items || [])
+  } finally {
+    benchmarkRunsLoading.value = false
+  }
+}
+
+function formatBenchmarkRunOption(run) {
+  const count = Number(run?.order_count || 0)
+  return `${run?.benchmark_run_id || '未知轮次'}（${count} 个工单）`
+}
+
 async function loadOrders() {
+  if (!currentBenchmarkRunId.value) {
+    dataLoadGeneration.value += 1
+    orders.value = []
+    return
+  }
   const snapshot = buildDataLoadSnapshot()
   const params = { is_benchmark: true, task_type: taskType.value, limit: 100 }
-  if (currentBenchmarkRunId.value) {
-    params.benchmark_run_id = currentBenchmarkRunId.value
-    // Preserve cancelled records for the selected run so a completed stop operation
-    // remains visible after refreshing the page.
-    params.include_cancelled = true
-  }
+  params.benchmark_run_id = currentBenchmarkRunId.value
+  // Preserve cancelled records for the selected run so a completed stop operation
+  // remains visible after refreshing the page.
+  params.include_cancelled = true
   const { data } = await ordersApi.list(params)
   if (!isCurrentDataLoad(snapshot)) return
   orders.value = Array.isArray(data) ? data : (data.items || [])
-  if (!currentBenchmarkRunId.value) {
-    const latestRunId = orders.value.find(order => order.runtime_config?.benchmark?.run_id)
-      ?.runtime_config?.benchmark?.run_id
-    if (latestRunId) {
-      setCurrentBenchmarkRunId(latestRunId)
-      await loadOrders()
-    }
-  }
 }
 
 async function resolveTaskTypeForBenchmarkRun() {
@@ -1397,10 +1434,17 @@ async function resolveTaskTypeForBenchmarkRun() {
 }
 
 async function loadSummary() {
+  if (!currentBenchmarkRunId.value) {
+    dataLoadGeneration.value += 1
+    summary.value = []
+    dashboardUpdatedAt.value = formatTime(new Date())
+    return
+  }
   const snapshot = buildDataLoadSnapshot()
-  const params = { is_benchmark: true, task_type: taskType.value }
-  if (currentBenchmarkRunId.value) {
-    params.benchmark_run_id = currentBenchmarkRunId.value
+  const params = {
+    is_benchmark: true,
+    task_type: taskType.value,
+    benchmark_run_id: currentBenchmarkRunId.value,
   }
   const { data } = await businessApi.summary(params)
   if (!isCurrentDataLoad(snapshot)) return
@@ -1409,6 +1453,7 @@ async function loadSummary() {
 }
 
 async function refreshAcceptanceResult(options = {}) {
+  if (!currentBenchmarkRunId.value) return null
   const { silent = false } = options
   resultRefreshing.value = true
   try {
@@ -1566,8 +1611,33 @@ function setCurrentBenchmarkRunId(runId) {
   router.replace({ query: nextQuery }).catch(() => {})
 }
 
+async function selectBenchmarkRun(runId) {
+  if (!runId || runId === currentBenchmarkRunId.value) return
+  setCurrentBenchmarkRunId(runId)
+  selectedOrderIds.value = []
+  await Promise.all([loadOrders(), loadSummary()])
+  if (orders.value.length) {
+    await refreshAcceptanceResult({ silent: true })
+  }
+  syncBenchmarkRunSession()
+  reconcileBenchmarkRunSessionAfterLoad()
+  if (currentRunSessionActive.value) {
+    scheduleResumeBenchmarkRun(0)
+  }
+}
+
+function enterNewBenchmarkRun() {
+  cancelResumeBenchmarkRun()
+  setCurrentBenchmarkRunId('')
+  selectedOrderIds.value = []
+  orders.value = []
+  summary.value = []
+  controlledStartStatus.value = ''
+  dashboardUpdatedAt.value = formatTime(new Date())
+}
+
 async function loadAll() {
-  await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines()])
+  await Promise.all([loadSystemSettings(), loadNodes(), loadBaselines(), loadBenchmarkRuns()])
   await loadOrders()
   if (currentBenchmarkRunId.value && !orders.value.length) {
     const taskTypeChanged = await resolveTaskTypeForBenchmarkRun()
@@ -1678,7 +1748,7 @@ async function createBatch(options = {}) {
     })
     setCurrentBenchmarkRunId(data.benchmark_run_id || runId)
     ElMessage.success(`已创建 ${data.created} 条测评工单`)
-    await Promise.all([loadOrders(), loadSummary()])
+    await Promise.all([loadOrders(), loadSummary(), loadBenchmarkRuns()])
     if (!keepSession) {
       clearCurrentBenchmarkRunSession()
     }
@@ -1810,7 +1880,7 @@ async function deleteSelectedOrders() {
     const { data } = await ordersApi.batchDelete(selectedOrderIds.value, { silentError: true })
     showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
     if (!Object.keys(data.failed || {}).length) selectedOrderIds.value = []
-    await Promise.all([loadOrders(), loadSummary()])
+    await Promise.all([loadOrders(), loadSummary(), loadBenchmarkRuns()])
   } catch (error) {
     showOperationWarning(error, '删除选中工单未完成，请刷新状态后重试。')
   } finally {
@@ -1873,9 +1943,9 @@ async function deleteCurrentBenchmarkRun() {
     if (!failedCount) {
       clearBenchmarkRunSession(taskType.value, runId)
       selectedOrderIds.value = []
-      setCurrentBenchmarkRunId('')
+      enterNewBenchmarkRun()
     }
-    await Promise.all([loadOrders(), loadSummary()])
+    await Promise.all([loadOrders(), loadSummary(), loadBenchmarkRuns()])
   } catch (error) {
     showOperationWarning(error, '删除本轮工单未完成，请刷新状态后重试。')
   } finally {
@@ -2197,7 +2267,7 @@ watch(taskType, async () => {
   ) {
     setCurrentBenchmarkRunId('')
   }
-  await Promise.all([loadBaselines(), loadOrders()])
+  await Promise.all([loadBaselines(), loadBenchmarkRuns(), loadOrders()])
   if (orders.value.length) {
     await refreshAcceptanceResult({ silent: true })
   } else {
@@ -2298,6 +2368,10 @@ onUnmounted(() => {
 .run-strip strong {
   color: #1f2d3d;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.run-select {
+  width: min(390px, 100%);
 }
 
 .run-strip small {

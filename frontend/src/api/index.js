@@ -111,6 +111,7 @@ export const instancesApi = {
 
 export const ordersApi = {
   list: (params = {}) => api.get('/orders', { params }),
+  listBenchmarkRuns: (params = {}) => api.get('/orders/benchmark/runs', { params }),
   get: (id) => api.get(`/orders/${id}`),
   create: (data) => api.post('/orders', data),
   delete: (id, config = {}) => api.delete(`/orders/${id}`, { ...withTimeout(LONG_RUNNING_TIMEOUT), ...config }),

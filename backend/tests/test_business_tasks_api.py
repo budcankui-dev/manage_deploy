@@ -5232,3 +5232,87 @@ async def test_result_object_content_requires_order_access_and_returns_minio_byt
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/jpeg"
     assert response.content == b"jpeg-bytes"
+
+
+@pytest.mark.asyncio
+async def test_list_benchmark_runs_returns_distinct_active_runs_in_latest_order(client, db_session):
+    headers, admin = await _auth_headers(
+        client,
+        db_session,
+        username="benchmark-runs-admin",
+        role=UserRole.ADMIN,
+    )
+
+    def runtime_config(run_id: str, task_type: str = "high_throughput_matmul"):
+        return {
+            "benchmark": {"run_id": run_id},
+            "business_task": {"task_type": task_type},
+        }
+
+    db_session.add_all(
+        [
+            TaskOrder(
+                user_id=admin.id,
+                template_id="template-1",
+                name="latest run order 1",
+                is_benchmark=True,
+                runtime_config=runtime_config("run-latest"),
+                created_at=datetime(2026, 7, 28, 12, 0, 0),
+            ),
+            TaskOrder(
+                user_id=admin.id,
+                template_id="template-1",
+                name="latest run order 2",
+                is_benchmark=True,
+                runtime_config=runtime_config("run-latest"),
+                created_at=datetime(2026, 7, 28, 11, 59, 0),
+            ),
+            TaskOrder(
+                user_id=admin.id,
+                template_id="template-1",
+                name="older run order",
+                is_benchmark=True,
+                runtime_config=runtime_config("run-older"),
+                created_at=datetime(2026, 7, 27, 12, 0, 0),
+            ),
+            TaskOrder(
+                user_id=admin.id,
+                template_id="template-1",
+                name="deleted run order",
+                is_benchmark=True,
+                runtime_config=runtime_config("run-deleted"),
+                deleted_at=datetime(2026, 7, 28, 13, 0, 0),
+                created_at=datetime(2026, 7, 28, 12, 30, 0),
+            ),
+            TaskOrder(
+                user_id=admin.id,
+                template_id="template-1",
+                name="other task run",
+                is_benchmark=True,
+                runtime_config=runtime_config("video-run", "low_latency_video_pipeline"),
+                created_at=datetime(2026, 7, 28, 12, 15, 0),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/orders/benchmark/runs?task_type=high_throughput_matmul",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "benchmark_run_id": "run-latest",
+            "task_type": "high_throughput_matmul",
+            "created_at": "2026-07-28T12:00:00",
+            "order_count": 2,
+        },
+        {
+            "benchmark_run_id": "run-older",
+            "task_type": "high_throughput_matmul",
+            "created_at": "2026-07-27T12:00:00",
+            "order_count": 1,
+        },
+    ]

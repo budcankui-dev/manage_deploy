@@ -234,6 +234,13 @@ def _benchmark_task_type(order: TaskOrder) -> str | None:
     return None
 
 
+class BenchmarkRunSummary(BaseModel):
+    benchmark_run_id: str
+    task_type: str
+    created_at: datetime
+    order_count: int
+
+
 def _apply_order_visibility(query, current_user: User):
     if current_user.role != UserRole.ADMIN:
         query = query.where(TaskOrder.user_id == current_user.id)
@@ -1095,6 +1102,42 @@ async def list_orders(
             )
         )
     return responses
+
+
+@router.get("/benchmark/runs", response_model=list[BenchmarkRunSummary])
+async def list_benchmark_runs(
+    task_type: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List existing benchmark runs without loading every order into the UI."""
+    query = select(TaskOrder).where(
+        TaskOrder.is_benchmark.is_(True),
+        TaskOrder.deleted_at.is_(None),
+    )
+    query = _apply_order_visibility(query, current_user)
+    rows = await db.execute(query.order_by(TaskOrder.created_at.desc()))
+
+    runs: dict[str, BenchmarkRunSummary] = {}
+    max_runs = max(1, min(limit, 100))
+    for order in rows.scalars().all():
+        run_id = _benchmark_run_id(order)
+        order_task_type = _benchmark_task_type(order)
+        if not run_id or not order_task_type or (task_type and order_task_type != task_type):
+            continue
+        if run_id in runs:
+            runs[run_id].order_count += 1
+            continue
+        if len(runs) >= max_runs:
+            continue
+        runs[run_id] = BenchmarkRunSummary(
+            benchmark_run_id=run_id,
+            task_type=order_task_type,
+            created_at=order.created_at,
+            order_count=1,
+        )
+    return list(runs.values())
 
 
 @router.get("/{order_id}", response_model=TaskOrderDetailResponse)
