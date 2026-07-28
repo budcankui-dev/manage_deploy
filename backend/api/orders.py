@@ -2631,6 +2631,15 @@ async def stop_benchmark_run(
     orders, failed = await _resolve_batch_orders(db, request, current_user)
     task_scheduler = TaskScheduler()
     succeeded: list[str] = []
+    instance_ids = [order.materialized_instance_id for order in orders if order.materialized_instance_id]
+    evaluated_instance_ids: set[str] = set()
+    if instance_ids:
+        evaluation_rows = await db.execute(
+            select(BusinessObjectiveEvaluation.instance_id).where(
+                BusinessObjectiveEvaluation.instance_id.in_(instance_ids)
+            )
+        )
+        evaluated_instance_ids = set(evaluation_rows.scalars().all())
 
     for order in orders:
         try:
@@ -2666,8 +2675,11 @@ async def stop_benchmark_run(
             instance = result.scalar_one_or_none()
             if not instance:
                 if order.status == OrderStatus.MATERIALIZED:
-                    order.status = OrderStatus.CANCELLED
-                    order.error_message = order.error_message or "测评已停止，关联实例不存在"
+                    if order.materialized_instance_id in evaluated_instance_ids:
+                        order.status = OrderStatus.COMPLETED
+                    else:
+                        order.status = OrderStatus.CANCELLED
+                        order.error_message = order.error_message or "测评已停止，关联实例不存在"
                 succeeded.append(order.id)
                 continue
 
@@ -2690,8 +2702,11 @@ async def stop_benchmark_run(
             )
             await purge_instance_artifacts_preserve_evidence(db, instance.id)
             if order.status == OrderStatus.MATERIALIZED:
-                order.status = OrderStatus.CANCELLED
-                order.error_message = order.error_message or "测评已手动停止"
+                if instance.id in evaluated_instance_ids:
+                    order.status = OrderStatus.COMPLETED
+                else:
+                    order.status = OrderStatus.CANCELLED
+                    order.error_message = order.error_message or "测评已手动停止"
             succeeded.append(order.id)
         except Exception as exc:
             failed[order.id] = str(exc)

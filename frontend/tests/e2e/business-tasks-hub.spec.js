@@ -933,6 +933,151 @@ test('benchmark run button clears stale in-page runner lock and restarts backend
   expect(startRequests).toBe(1)
 })
 
+test('benchmark run deletion stops active instances and clears the whole run', async ({ page }) => {
+  const runId = 'high_throughput_matmul-e2e-delete-run'
+  const requestSequence = []
+  let deleted = false
+
+  await installAdminSession(page)
+  await page.addInitScript((benchmarkRunId) => {
+    window.localStorage.setItem('manage-deploy:benchmark-run-id', benchmarkRunId)
+  }, runId)
+  await mockAdminApi(page)
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: [], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(deleted ? [] : [{
+      task_type: 'high_throughput_matmul',
+      count: 2,
+      evaluated_count: 0,
+      success_count: 0,
+      business_success_rate: null,
+    }]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(deleted ? [] : [
+      {
+        id: 'order-running',
+        task_type: 'high_throughput_matmul',
+        status: 'materialized',
+        routing_status: 'completed',
+        deployment_status: 'running',
+        materialized_instance_id: 'instance-running',
+        runtime_config: { benchmark: { run_id: runId } },
+      },
+      {
+        id: 'order-routing-failed',
+        task_type: 'high_throughput_matmul',
+        status: 'pending',
+        routing_status: 'failed',
+        deployment_status: null,
+        error_message: 'GPU slot conflict for compute-1:gpu0',
+        runtime_config: { benchmark: { run_id: runId } },
+      },
+    ]),
+  }))
+  await page.route('**/api/orders/benchmark/stop', async route => {
+    requestSequence.push({ path: 'stop', payload: route.request().postDataJSON() })
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ succeeded: ['order-running', 'order-routing-failed'], failed: {} }),
+    })
+  })
+  await page.route('**/api/orders/batch/delete', async route => {
+    requestSequence.push({ path: 'delete', payload: route.request().postDataJSON() })
+    deleted = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ succeeded: ['order-running', 'order-routing-failed'], failed: {} }),
+    })
+  })
+
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+  await expect(page.locator('.status-cell.waiting .status-num')).toHaveText('0')
+  await expect(page.locator('.status-cell.running .status-num')).toHaveText('1')
+  await expect(page.locator('.status-cell.failed .status-num')).toHaveText('1')
+  await expect(page.getByText('当前待分配工单：').locator('strong')).toHaveText('0')
+
+  await page.getByRole('button', { name: '删除本轮工单' }).click()
+  await page.getByRole('button', { name: '停止并删除' }).click()
+
+  await expect.poll(() => requestSequence.map(item => item.path)).toEqual(['stop', 'delete'])
+  expect(requestSequence[0].payload).toEqual({
+    benchmark_run_id: runId,
+    task_type: 'high_throughput_matmul',
+    is_benchmark: true,
+  })
+  expect(requestSequence[1].payload).toEqual(requestSequence[0].payload)
+  await expect(page.getByText('暂无测试工单')).toBeVisible()
+  await expect(page).not.toHaveURL(/benchmark_run_id=/)
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem('manage-deploy:benchmark-run-id'))).toBeNull()
+})
+
+test('completed external-route evidence can still stop running containers', async ({ page }) => {
+  const runId = 'high_throughput_matmul-e2e-external-running'
+
+  await installAdminSession(page)
+  await page.addInitScript((benchmarkRunId) => {
+    window.localStorage.setItem('manage-deploy:benchmark-run-id', benchmarkRunId)
+  }, runId)
+  await mockAdminApi(page)
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: ['order-external-running'], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      task_type: 'high_throughput_matmul',
+      count: 1,
+      evaluated_count: 1,
+      success_count: 1,
+      business_success_rate: 1,
+    }]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      id: 'order-external-running',
+      task_type: 'high_throughput_matmul',
+      status: 'materialized',
+      order_status: 'materialized',
+      routing_status: 'completed',
+      deployment_status: 'running',
+      materialized_instance_id: 'instance-external-running',
+      business_success: true,
+      runtime_config: { benchmark: { run_id: runId } },
+    }]),
+  }))
+
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+
+  await expect(page.locator('.status-cell.done .status-num')).toHaveText('1')
+  await expect(page.getByRole('button', { name: '停止本轮测评' })).toBeEnabled()
+})
+
 test('optional headed matmul demo trigger is visible', async ({ page, request }, testInfo) => {
   test.skip(
     process.env.E2E_TRIGGER_MATMUL_DEMO !== '1',

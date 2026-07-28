@@ -297,24 +297,46 @@
               任务中心查看本轮
             </el-button>
             <el-button
+              v-if="selectedOrderIds.length"
               size="small"
               type="warning"
               plain
-              :disabled="!selectedOrderIds.length && !currentBenchmarkRunId"
+              :disabled="cleanupLoading || deleteLoading"
               :loading="cleanupLoading"
               @click="cleanupSelectedOrderInstances"
             >
-              {{ selectedOrderIds.length ? '清理选中实例' : '清理本轮实例' }}
+              清理选中实例
+            </el-button>
+            <el-button
+              v-if="selectedOrderIds.length"
+              size="small"
+              type="danger"
+              plain
+              :disabled="cleanupLoading || deleteLoading"
+              :loading="deleteLoading"
+              @click="deleteSelectedOrders"
+            >
+              删除选中工单
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              :disabled="!currentBenchmarkRunId || cleanupLoading || deleteLoading"
+              :loading="cleanupLoading"
+              @click="cleanupCurrentBenchmarkRun"
+            >
+              清理本轮实例
             </el-button>
             <el-button
               size="small"
               type="danger"
               plain
-              :disabled="!selectedOrderIds.length && !currentBenchmarkRunId"
+              :disabled="!currentBenchmarkRunId || cleanupLoading || deleteLoading"
               :loading="deleteLoading"
-              @click="deleteSelectedOrders"
+              @click="deleteCurrentBenchmarkRun"
             >
-              {{ selectedOrderIds.length ? '删除选中工单' : '删除本轮工单' }}
+              删除本轮工单
             </el-button>
             <el-button size="small" plain :disabled="routeLoading || startLoading" @click="refreshBenchmarkPage">刷新工单列表</el-button>
           </div>
@@ -717,7 +739,7 @@ const orderStats = computed(() => {
   const stats = { waitingRoute: 0, routed: 0, running: 0, completed: 0, failed: 0 }
   orders.value.forEach(order => {
     const deploymentStatus = order.deployment_status || order.instance_status || ''
-    if (order.status === 'failed' || deploymentStatus === 'failed') {
+    if (order.status === 'failed' || order.routing_status === 'failed' || deploymentStatus === 'failed') {
       stats.failed += 1
     } else if (deploymentStatus === 'running' || order.status === 'running') {
       stats.running += 1
@@ -778,11 +800,7 @@ const executionStats = computed(() => {
 
 const pendingWorkCount = computed(() => {
   if (benchmarkRunStopped.value) return 0
-  const aggregate = summaryAggregate.value
-  if (aggregate?.count) {
-    return Math.max(0, (aggregate.count || 0) - (aggregate.evaluated_count || 0))
-  }
-  return orderStats.value.waitingRoute + orderStats.value.routed
+  return executionStats.value.waitingRoute + executionStats.value.routed
 })
 
 const hasBenchmarkWork = computed(() =>
@@ -808,19 +826,20 @@ const benchmarkRunCompleted = computed(() => {
 })
 
 const benchmarkRunHasActiveWork = computed(() => {
-  if (!hasBenchmarkWork.value || benchmarkRunCompleted.value) return false
+  if (!hasBenchmarkWork.value) return false
   const hasActiveDeployment = orders.value.some((order) => (
     ['starting', 'running', 'stopping'].includes(String(order.deployment_status || ''))
     || ['materialized'].includes(String(order.order_status || '')) && order.business_success == null
   ))
   if (hasActiveDeployment) return true
+  if (benchmarkRunCompleted.value) return false
   return orderStats.value.running > 0 ||
     orderStats.value.routed > 0 ||
     orderStats.value.waitingRoute > 0
 })
 
 const canStopBenchmarkRun = computed(() =>
-  Boolean(currentBenchmarkRunId.value && orders.value.length && !benchmarkRunCompleted.value && !benchmarkRunStopped.value)
+  Boolean(currentBenchmarkRunId.value && benchmarkRunHasActiveWork.value && !benchmarkRunStopped.value)
     && !benchmarkStopLoading.value
 )
 
@@ -1761,33 +1780,25 @@ function showBatchOperationResult(data, successText) {
 }
 
 async function cleanupSelectedOrderInstances() {
-  if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
+  if (!selectedOrderIds.value.length) return
   cleanupLoading.value = true
   try {
-    const payload = selectedOrderIds.value.length
-      ? selectedOrderIds.value
-      : {
-          benchmark_run_id: currentBenchmarkRunId.value,
-          task_type: taskType.value,
-          is_benchmark: true,
-        }
-    const { data } = await ordersApi.cleanupInstances(payload, { silentError: true })
+    const { data } = await ordersApi.cleanupInstances(selectedOrderIds.value, { silentError: true })
     showBatchOperationResult(data, (count) => `已清理 ${count} 个工单实例，工单证据已保留`)
+    if (!Object.keys(data.failed || {}).length) selectedOrderIds.value = []
     await Promise.all([loadOrders(), loadSummary()])
   } catch (error) {
-    showOperationWarning(error, '清理本轮实例未完成，请刷新状态后重试。')
+    showOperationWarning(error, '清理选中实例未完成，请刷新状态后重试。')
   } finally {
     cleanupLoading.value = false
   }
 }
 
 async function deleteSelectedOrders() {
-  if (!selectedOrderIds.value.length && !currentBenchmarkRunId.value) return
-  const deletingCurrentRun = !selectedOrderIds.value.length
-  const countText = deletingCurrentRun ? '当前测评轮次的全部' : `选中的 ${selectedOrderIds.value.length} 个`
+  if (!selectedOrderIds.value.length) return
   try {
     await ElMessageBox.confirm(
-      `将删除${countText}测试工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
+      `将删除选中的 ${selectedOrderIds.value.length} 个测试工单及其关联实例，删除后不再参与成功率统计，继续吗？`,
       '确认删除工单',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -1796,16 +1807,74 @@ async function deleteSelectedOrders() {
   }
   deleteLoading.value = true
   try {
-    const payload = selectedOrderIds.value.length
-      ? selectedOrderIds.value
-      : {
-          benchmark_run_id: currentBenchmarkRunId.value,
-          task_type: taskType.value,
-          is_benchmark: true,
-        }
-    const { data } = await ordersApi.batchDelete(payload, { silentError: true })
+    const { data } = await ordersApi.batchDelete(selectedOrderIds.value, { silentError: true })
     showBatchOperationResult(data, (count) => `已删除 ${count} 个工单`)
     if (!Object.keys(data.failed || {}).length) selectedOrderIds.value = []
+    await Promise.all([loadOrders(), loadSummary()])
+  } catch (error) {
+    showOperationWarning(error, '删除选中工单未完成，请刷新状态后重试。')
+  } finally {
+    deleteLoading.value = false
+  }
+}
+
+function currentBenchmarkRunPayload() {
+  return {
+    benchmark_run_id: currentBenchmarkRunId.value,
+    task_type: taskType.value,
+    is_benchmark: true,
+  }
+}
+
+async function cleanupCurrentBenchmarkRun() {
+  if (!currentBenchmarkRunId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将停止本轮仍在运行的任务并释放全部容器实例；工单、路由结果和评估证据会保留。继续吗？',
+      '确认清理本轮实例',
+      { type: 'warning', confirmButtonText: '停止并清理', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  cleanupLoading.value = true
+  try {
+    const { data } = await ordersApi.stopBenchmarkRun(currentBenchmarkRunPayload(), { silentError: true })
+    showBatchOperationResult(data, (count) => `已停止并清理 ${count} 个工单实例，工单证据已保留`)
+    clearCurrentBenchmarkRunSession()
+    selectedOrderIds.value = []
+    await Promise.all([loadOrders(), loadSummary()])
+  } catch (error) {
+    showOperationWarning(error, '清理本轮实例未完成，请刷新状态后重试。')
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+async function deleteCurrentBenchmarkRun() {
+  if (!currentBenchmarkRunId.value) return
+  const runId = currentBenchmarkRunId.value
+  try {
+    await ElMessageBox.confirm(
+      '将先停止并释放本轮仍在运行的实例，再删除本轮全部工单；删除后不再参与成功率统计。继续吗？',
+      '确认删除本轮工单',
+      { type: 'warning', confirmButtonText: '停止并删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  deleteLoading.value = true
+  try {
+    const payload = currentBenchmarkRunPayload()
+    await ordersApi.stopBenchmarkRun(payload, { silentError: true })
+    const { data } = await ordersApi.batchDelete(payload, { silentError: true })
+    const failedCount = Object.keys(data.failed || {}).length
+    showBatchOperationResult(data, (count) => `已删除 ${count} 个本轮工单`)
+    if (!failedCount) {
+      clearBenchmarkRunSession(taskType.value, runId)
+      selectedOrderIds.value = []
+      setCurrentBenchmarkRunId('')
+    }
     await Promise.all([loadOrders(), loadSummary()])
   } catch (error) {
     showOperationWarning(error, '删除本轮工单未完成，请刷新状态后重试。')

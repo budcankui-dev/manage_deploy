@@ -3971,6 +3971,19 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
         is_benchmark=True,
         materialized_instance_id="completed-stop-run-instance",
     )
+    evaluated_order = TaskOrder(
+        user_id=admin.id,
+        template_id=template_id,
+        name="evaluated running benchmark order",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.COMPLETED.value,
+        runtime_config={
+            "benchmark": {"run_id": "stop-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+        materialized_instance_id="evaluated-stop-run-instance",
+    )
     running_instance = TaskInstance(
         id="stop-run-instance",
         template_id=template_id,
@@ -3983,7 +3996,32 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
         name="completed benchmark instance",
         status=TaskStatus.STOPPED,
     )
-    db_session.add_all([pending_order, running_order, completed_order, running_instance, completed_instance])
+    evaluated_instance = TaskInstance(
+        id="evaluated-stop-run-instance",
+        template_id=template_id,
+        name="evaluated running benchmark instance",
+        status=TaskStatus.RUNNING,
+    )
+    evaluation = BusinessObjectiveEvaluation(
+        instance_id=evaluated_instance.id,
+        task_type="high_throughput_matmul",
+        metric_key="effective_gflops",
+        actual_value=5500,
+        target_value=4400,
+        operator=">=",
+        unit="GFLOPS",
+        business_success=True,
+    )
+    db_session.add_all([
+        pending_order,
+        running_order,
+        completed_order,
+        evaluated_order,
+        running_instance,
+        completed_instance,
+        evaluated_instance,
+        evaluation,
+    ])
     await db_session.commit()
 
     stopped_instances = []
@@ -4009,9 +4047,14 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body["succeeded"]) == {pending_order.id, running_order.id, completed_order.id}
+    assert set(body["succeeded"]) == {
+        pending_order.id,
+        running_order.id,
+        completed_order.id,
+        evaluated_order.id,
+    }
     assert body["failed"] == {}
-    assert stopped_instances == ["stop-run-instance"]
+    assert stopped_instances == ["stop-run-instance", "evaluated-stop-run-instance"]
 
     refreshed_pending = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == pending_order.id))
@@ -4022,11 +4065,17 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
     refreshed_completed = (
         await db_session.execute(select(TaskOrder).where(TaskOrder.id == completed_order.id))
     ).scalar_one()
+    refreshed_evaluated = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == evaluated_order.id))
+    ).scalar_one()
     removed_running_instance = (
         await db_session.execute(select(TaskInstance).where(TaskInstance.id == running_instance.id))
     ).scalar_one_or_none()
     remaining_completed_instance = (
         await db_session.execute(select(TaskInstance).where(TaskInstance.id == completed_instance.id))
+    ).scalar_one_or_none()
+    removed_evaluated_instance = (
+        await db_session.execute(select(TaskInstance).where(TaskInstance.id == evaluated_instance.id))
     ).scalar_one_or_none()
     assert refreshed_pending.status == OrderStatus.CANCELLED
     assert refreshed_pending.routing_status == RoutingStatus.CANCELLED.value
@@ -4034,6 +4083,8 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
     assert removed_running_instance is None
     assert refreshed_completed.status == OrderStatus.COMPLETED
     assert remaining_completed_instance is not None
+    assert refreshed_evaluated.status == OrderStatus.COMPLETED
+    assert removed_evaluated_instance is None
 
 
 @pytest.mark.asyncio
