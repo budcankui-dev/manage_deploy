@@ -7,6 +7,7 @@ import re
 
 from database import get_db
 from agents.agent_client import AgentClient
+from enums import NodeKind
 from models import Node as NodeModel, TaskInstanceNode
 from schemas import (
     NodeCreate,
@@ -37,6 +38,9 @@ async def _load_node_or_404(db: AsyncSession, node_id: str) -> NodeModel:
 
 
 async def _list_orphan_containers(db: AsyncSession, node: NodeModel) -> list[OrphanContainerResponse]:
+    if node.node_kind == NodeKind.ADMIN or node.node_kind == NodeKind.ADMIN.value:
+        return []
+
     success, result = await AgentClient().list_managed_containers(_get_node_endpoint(node))
     if not success:
         raise HTTPException(status_code=500, detail=result.get("error") or "Failed to list managed containers")

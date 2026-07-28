@@ -182,6 +182,30 @@ async def test_list_node_orphans_filters_known_container_names(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_node_orphans_skips_admin_without_agent(monkeypatch):
+    node = Node(
+        hostname="admin",
+        agent_address="http://172.16.0.254:8001",
+        management_ip="172.16.0.254",
+        business_ip="172.16.0.254",
+        node_kind="admin",
+        is_schedulable=False,
+    )
+    node.id = "admin-node"
+    db = FakeSession(node)
+    db.values = [node]
+
+    async def fail_if_called(self, _endpoint):
+        raise AssertionError("admin nodes do not run a Node Agent")
+
+    monkeypatch.setattr("api.nodes.AgentClient.list_managed_containers", fail_if_called)
+
+    result = await list_node_orphans("admin-node", db)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_sync_node_resources_updates_hardware_fields(monkeypatch):
     node = Node(
         hostname="worker-a",
