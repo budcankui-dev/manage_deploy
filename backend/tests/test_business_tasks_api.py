@@ -3656,6 +3656,39 @@ async def test_managed_benchmark_run_exposes_background_status(client, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_controlled_benchmark_reports_orders_waiting_for_external_route(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-waiting-route-user")
+    run_id = "waiting-external-route-run"
+    db_session.add(TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="benchmark order waiting for external route",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.COMPUTING.value,
+        runtime_config={
+            "benchmark": {"run_id": run_id},
+            "business_task": {"task_type": "high_throughput_matmul"},
+        },
+        is_benchmark=True,
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/orders/start-controlled-routed",
+        headers=headers,
+        json={"benchmark_run_id": run_id, "task_type": "high_throughput_matmul"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["waiting_route"] == 1
+    assert body["pending_to_start"] == 0
+    assert body["failed"] == {}
+
+
+@pytest.mark.asyncio
 async def test_controlled_benchmark_reports_whole_run_after_completed_cleanup(client, db_session, monkeypatch):
     import api.orders as orders_api
 
@@ -3930,6 +3963,7 @@ async def test_cleanup_order_instances_rejects_active_instance(client, db_sessio
 @pytest.mark.asyncio
 async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(client, db_session, monkeypatch):
     import api.orders as orders_api
+    import asyncio
 
     _node_ids, template_id = await _seed_business_fixture(client)
     headers, admin = await _auth_headers(client, db_session, username="stop-benchmark-admin", role=UserRole.ADMIN)
@@ -4025,12 +4059,39 @@ async def test_stop_benchmark_run_cancels_unfinished_and_preserves_completed(cli
     await db_session.commit()
 
     stopped_instances = []
+    quiesced_tasks = []
+
+    async def finish_managed_work():
+        await asyncio.sleep(0.01)
+        quiesced_tasks.append("managed")
+
+    async def finish_background_start():
+        await asyncio.sleep(0.01)
+        quiesced_tasks.append("background_start")
+
+    managed_key = orders_api._managed_benchmark_key("high_throughput_matmul", "stop-run")
+    managed_task = asyncio.create_task(finish_managed_work())
+    background_task = asyncio.create_task(finish_background_start())
+    monkeypatch.setitem(orders_api._MANAGED_BENCHMARK_TASKS, managed_key, managed_task)
+    monkeypatch.setitem(orders_api._MANAGED_BENCHMARK_STATUS, managed_key, {
+        "benchmark_run_id": "stop-run",
+        "task_type": "high_throughput_matmul",
+    })
+    monkeypatch.setitem(
+        orders_api._BACKGROUND_BENCHMARK_START_TASKS,
+        running_instance.id,
+        background_task,
+    )
 
     class FakeExecutor:
         def __init__(self, db):
             self.db = db
 
         async def execute_dag_stop(self, instance_id):
+            assert set(quiesced_tasks) == {"managed", "background_start"}
+            pending_during_cleanup = await self.db.get(TaskOrder, pending_order.id)
+            assert pending_during_cleanup.status == OrderStatus.CANCELLED
+            assert pending_during_cleanup.routing_status == RoutingStatus.CANCELLED.value
             stopped_instances.append(instance_id)
             return True, None
 

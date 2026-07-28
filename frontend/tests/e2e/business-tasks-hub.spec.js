@@ -1078,6 +1078,95 @@ test('completed external-route evidence can still stop running containers', asyn
   await expect(page.getByRole('button', { name: '停止本轮测评' })).toBeEnabled()
 })
 
+test('external routing run starts while part of the batch still waits for placement', async ({ page }) => {
+  const runId = 'high_throughput_matmul-e2e-partial-external-route'
+  let startRequests = 0
+  let started = false
+
+  await installAdminSession(page)
+  await page.addInitScript((benchmarkRunId) => {
+    window.localStorage.setItem('manage-deploy:benchmark-run-id', benchmarkRunId)
+  }, runId)
+  await mockAdminApi(page)
+  await page.route('**/api/admin/system-settings', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ...mockSystemSettings, benchmark_routing_mode: 'external' }),
+  }))
+  await page.route('**/api/baselines**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: [], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      task_type: 'high_throughput_matmul',
+      count: 30,
+      evaluated_count: 1,
+      success_count: 1,
+      business_success_rate: 1,
+    }]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {
+        id: 'order-routed',
+        task_type: 'high_throughput_matmul',
+        status: 'materialized',
+        routing_status: 'completed',
+        deployment_status: 'running',
+        materialized_instance_id: 'instance-routed',
+        business_success: true,
+        runtime_config: { benchmark: { run_id: runId } },
+      },
+      {
+        id: 'order-waiting-route',
+        task_type: 'high_throughput_matmul',
+        status: 'pending',
+        routing_status: 'pending',
+        deployment_status: null,
+        business_success: null,
+        runtime_config: { benchmark: { run_id: runId } },
+      },
+    ]),
+  }))
+  await page.route('**/api/orders/benchmark/managed-run/status**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(started
+      ? {
+          phase: 'completed',
+          message: '测试已完成。',
+          running: false,
+          progress: { total: 2, evaluated: 2, success: 2, active: 0, waiting_route: 0, pending_to_start: 0 },
+        }
+      : { phase: 'idle', message: '当前轮次没有后台测评任务。', running: false, progress: null }),
+  }))
+  await page.route('**/api/orders/benchmark/managed-run', async route => {
+    startRequests += 1
+    started = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ phase: 'running', running: true }),
+    })
+  })
+
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+  await expect(page.locator('.status-cell.waiting .status-num')).toHaveText('1')
+  await page.getByRole('button', { name: '运行测评' }).click()
+  await expect.poll(() => startRequests).toBe(1)
+})
+
 test('optional headed matmul demo trigger is visible', async ({ page, request }, testInfo) => {
   test.skip(
     process.env.E2E_TRIGGER_MATMUL_DEMO !== '1',

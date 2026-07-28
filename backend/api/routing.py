@@ -298,17 +298,20 @@ async def confirm_routing_order_network_ready(
         start_action = "expired"
         await db.commit()
     else:
-        await db.commit()
-
         if instance and payload.auto_start:
             scheduler = TaskScheduler()
             try:
                 if start_time and start_time > now:
+                    await db.commit()
                     await scheduler.schedule_task_start(instance.id, start_time)
                     start_action = "scheduled"
                 else:
+                    # Keep the order row lock until the immediate DAG start has
+                    # committed. A concurrent benchmark stop then waits here
+                    # instead of deleting instance-node rows during startup.
                     executor = DAGExecutor(db)
                     success, error = await executor.execute_dag_start(instance.id)
+                    await db.commit()
                     if success:
                         start_action = "started"
                     else:
@@ -319,6 +322,10 @@ async def confirm_routing_order_network_ready(
             except Exception as exc:
                 start_action = "start_failed"
                 start_error = str(exc)
+                if db.in_transaction():
+                    await db.commit()
+        else:
+            await db.commit()
 
     return {
         "status": "ok",

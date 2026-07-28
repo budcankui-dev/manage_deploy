@@ -210,8 +210,19 @@ async def _background_benchmark_start(instance_id: str) -> None:
         await executor.execute_dag_start(instance_id, claimed_start=True)
 
 
+_BACKGROUND_BENCHMARK_START_TASKS: dict[str, asyncio.Task] = {}
+
+
 def _schedule_background_benchmark_start(instance_id: str) -> None:
-    asyncio.create_task(_background_benchmark_start(instance_id))
+    task = asyncio.create_task(_background_benchmark_start(instance_id))
+    _BACKGROUND_BENCHMARK_START_TASKS[instance_id] = task
+    task.add_done_callback(
+        lambda done_task, current_instance_id=instance_id: (
+            _BACKGROUND_BENCHMARK_START_TASKS.pop(current_instance_id, None)
+            if _BACKGROUND_BENCHMARK_START_TASKS.get(current_instance_id) is done_task
+            else None
+        )
+    )
 
 
 def _benchmark_task_type(order: TaskOrder) -> str | None:
@@ -2444,6 +2455,60 @@ def _request_managed_benchmark_stop(benchmark_run_id: str | None, task_type: str
         status["updated_at"] = business_now().isoformat()
 
 
+async def _wait_for_managed_benchmark_tasks(
+    benchmark_run_id: str | None,
+    task_type: str | None,
+    *,
+    timeout_seconds: float = 60,
+) -> None:
+    if not benchmark_run_id:
+        return
+    tasks = [
+        task
+        for key, task in _MANAGED_BENCHMARK_TASKS.items()
+        if not task.done()
+        and (status := _MANAGED_BENCHMARK_STATUS.get(key))
+        and status.get("benchmark_run_id") == benchmark_run_id
+        and (not task_type or status.get("task_type") == task_type)
+    ]
+    if not tasks:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="后台测评仍在完成当前操作，请稍后重试停止本轮测评。",
+        ) from exc
+
+
+async def _wait_for_background_benchmark_starts(
+    instance_ids: list[str],
+    *,
+    timeout_seconds: float = 60,
+) -> None:
+    tasks = [
+        task
+        for instance_id in instance_ids
+        if (task := _BACKGROUND_BENCHMARK_START_TASKS.get(instance_id)) and not task.done()
+    ]
+    if not tasks:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="部分实例仍在启动，请稍后重试停止本轮测评。",
+        ) from exc
+
+
 async def _run_managed_benchmark_loop(
     key: str,
     payload: ManagedBenchmarkRunRequest,
@@ -2474,6 +2539,7 @@ async def _run_managed_benchmark_loop(
             total = int(progress.get("total") or 0)
             evaluated = int(progress.get("evaluated") or 0)
             active = int(progress.get("active") or 0)
+            waiting_route = int(progress.get("waiting_route") or 0)
             pending = int(progress.get("pending_to_start") or 0)
             started = int(progress.get("started") or 0)
             cleaned = int(progress.get("cleaned") or 0)
@@ -2502,12 +2568,12 @@ async def _run_managed_benchmark_loop(
                     f"测评运行中：已评估 {evaluated}/{total}，"
                     f"本轮启动 {started} 个，运行中 {active} 个，已释放实例 {cleaned} 个。"
                 )
-            elif pending or waiting:
+            elif pending or waiting or waiting_route:
                 idle_rounds += 1
                 phase = "waiting_resource"
                 message = (
                     f"等待资源释放后继续推进：已评估 {evaluated}/{total}，"
-                    f"待启动 {pending} 个，资源等待 {waiting} 个。"
+                    f"待路由 {waiting_route} 个，待启动 {pending} 个，资源等待 {waiting} 个。"
                 )
             else:
                 idle_rounds += 1
@@ -2628,10 +2694,22 @@ async def stop_benchmark_run(
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Admin role required")
     _request_managed_benchmark_stop(request.benchmark_run_id, request.task_type)
+    await _wait_for_managed_benchmark_tasks(request.benchmark_run_id, request.task_type)
     orders, failed = await _resolve_batch_orders(db, request, current_user)
+    if orders:
+        # Serialize cancellation with external /result callbacks. The callback
+        # also locks the order row, so it either finishes materialization first
+        # (and is cleaned below) or observes CANCELLED and returns 409.
+        locked_rows = await db.execute(
+            select(TaskOrder).where(TaskOrder.id.in_([order.id for order in orders])).with_for_update()
+        )
+        locked_by_id = {order.id: order for order in locked_rows.scalars().all()}
+        orders = [locked_by_id[order.id] for order in orders if order.id in locked_by_id]
+    order_ids = [order.id for order in orders]
     task_scheduler = TaskScheduler()
     succeeded: list[str] = []
     instance_ids = [order.materialized_instance_id for order in orders if order.materialized_instance_id]
+    await _wait_for_background_benchmark_starts(instance_ids)
     evaluated_instance_ids: set[str] = set()
     if instance_ids:
         evaluation_rows = await db.execute(
@@ -2641,8 +2719,28 @@ async def stop_benchmark_run(
         )
         evaluated_instance_ids = set(evaluation_rows.scalars().all())
 
+    # Publish cancellation before the slower remote container cleanup. This
+    # prevents the external router from claiming more orders during shutdown.
     for order in orders:
+        if order.status == OrderStatus.COMPLETED or order.materialized_instance_id:
+            continue
+        order.status = OrderStatus.CANCELLED
+        order.routing_status = RoutingStatus.CANCELLED.value
+        if order.routing_request_id:
+            routing_row = await db.execute(
+                select(RoutingRequest).where(RoutingRequest.id == order.routing_request_id)
+            )
+            routing = routing_row.scalar_one_or_none()
+            if routing:
+                routing.status = RoutingRequestStatus.CANCELLED
+    await db.commit()
+
+    for order_id in order_ids:
         try:
+            order = await db.get(TaskOrder, order_id)
+            if not order:
+                failed[order_id] = "Order not found during benchmark stop"
+                continue
             # 已评估/已完成的工单保留作为验收证据，不反向改状态。
             if order.status == OrderStatus.COMPLETED:
                 succeeded.append(order.id)
@@ -2665,6 +2763,7 @@ async def stop_benchmark_run(
                     metadata={"benchmark_run_id": request.benchmark_run_id, "cancel_unmaterialized": True},
                 )
                 succeeded.append(order.id)
+                await db.commit()
                 continue
 
             result = await db.execute(
@@ -2681,6 +2780,7 @@ async def stop_benchmark_run(
                         order.status = OrderStatus.CANCELLED
                         order.error_message = order.error_message or "测评已停止，关联实例不存在"
                 succeeded.append(order.id)
+                await db.commit()
                 continue
 
             await task_scheduler.cancel_all_schedules(instance.id)
@@ -2708,10 +2808,11 @@ async def stop_benchmark_run(
                     order.status = OrderStatus.CANCELLED
                     order.error_message = order.error_message or "测评已手动停止"
             succeeded.append(order.id)
+            await db.commit()
         except Exception as exc:
-            failed[order.id] = str(exc)
+            await db.rollback()
+            failed[order_id] = str(exc)
 
-    await db.commit()
     return BatchOperationResponse(succeeded=succeeded, failed=failed)
 
 
@@ -2884,19 +2985,30 @@ async def _controlled_benchmark_orders(
     *,
     include_completed: bool = False,
 ) -> list[TaskOrder]:
-    query = select(TaskOrder).where(
-        TaskOrder.status.in_([OrderStatus.MATERIALIZED.value, OrderStatus.COMPLETED.value])
-        if include_completed
-        else TaskOrder.status == OrderStatus.MATERIALIZED.value,
-        TaskOrder.routing_status.in_(
-            [
+    query = select(TaskOrder).where(TaskOrder.is_benchmark == True)
+    if include_completed:
+        query = query.where(
+            TaskOrder.status.in_([
+                OrderStatus.PENDING.value,
+                OrderStatus.MATERIALIZED.value,
+                OrderStatus.COMPLETED.value,
+            ]),
+            TaskOrder.routing_status.in_([
+                RoutingStatus.PENDING.value,
+                RoutingStatus.COMPUTING.value,
+                RoutingStatus.NETWORK_BINDING_READY.value,
+                RoutingStatus.COMPLETED.value,
+            ]),
+        )
+    else:
+        query = query.where(
+            TaskOrder.status == OrderStatus.MATERIALIZED.value,
+            TaskOrder.routing_status.in_([
                 RoutingStatus.COMPLETED.value,
                 RoutingStatus.NETWORK_BINDING_READY.value,
-            ]
-        ),
-        TaskOrder.is_benchmark == True,
-        TaskOrder.materialized_instance_id.is_not(None),
-    )
+            ]),
+            TaskOrder.materialized_instance_id.is_not(None),
+        )
     rows = await db.execute(_apply_order_visibility(query, current_user))
     orders = rows.scalars().all()
     run_id = payload.benchmark_run_id if payload else None
@@ -3054,7 +3166,7 @@ async def _advance_controlled_benchmark_run(
     }
     recalc_succeeded, recalc_failed = await _reevaluate_orders_from_latest_metrics(
         db,
-        run_orders,
+        [order for order in run_orders if order.materialized_instance_id],
         missing_metric_is_failure=False,
     )
     if recalc_succeeded:
@@ -3191,6 +3303,15 @@ async def _advance_controlled_benchmark_run(
             await db.commit()
     success_count = sum(1 for evaluation in eval_map.values() if evaluation.business_success)
     evaluated_count = len(eval_map)
+    waiting_route = sum(
+        1
+        for order in run_orders
+        if not order.materialized_instance_id
+        and order.routing_status in {
+            RoutingStatus.PENDING.value,
+            RoutingStatus.COMPUTING.value,
+        }
+    )
     pending_to_start = 0
     active_orders = 0
     for order in run_orders:
@@ -3208,6 +3329,7 @@ async def _advance_controlled_benchmark_run(
         "evaluated": evaluated_count,
         "success": success_count,
         "active": active_orders,
+        "waiting_route": waiting_route,
         "pending_to_start": pending_to_start,
         "started": len(started),
         "skipped_busy": skipped_busy,

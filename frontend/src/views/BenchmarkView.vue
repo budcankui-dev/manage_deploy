@@ -1971,8 +1971,7 @@ async function runEvaluationFlow() {
   if (routeMode.value === 'external') {
     await refreshExternalRoutingStatus()
     if (orderStats.value.waitingRoute > 0) {
-      ElMessage.warning('仍有工单等待外部路由结果，路由回写完成后再次点击运行测评。')
-      return null
+      ElMessage.info('部分工单仍在等待外部路由，后台将在已评估实例释放资源后继续推进。')
     }
   } else {
     await doAutoRoute()
