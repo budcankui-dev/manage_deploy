@@ -290,6 +290,9 @@ async def confirm_routing_order_network_ready(
     start_action = "none"
     start_error: str | None = None
 
+    auto_start_requested = payload.auto_start
+    auto_start = payload.auto_start and not order.is_benchmark
+
     if instance and end_time and end_time <= now:
         instance.status = TaskStatus.EXPIRED
         instance.error_message = "业务结束时间已过，network-ready 到达后不再启动"
@@ -298,7 +301,7 @@ async def confirm_routing_order_network_ready(
         start_action = "expired"
         await db.commit()
     else:
-        if instance and payload.auto_start:
+        if instance and auto_start:
             scheduler = TaskScheduler()
             try:
                 if start_time and start_time > now:
@@ -325,6 +328,8 @@ async def confirm_routing_order_network_ready(
                 if db.in_transaction():
                     await db.commit()
         else:
+            if instance and order.is_benchmark and auto_start_requested:
+                start_action = "deferred_benchmark"
             await db.commit()
 
     return {
@@ -334,7 +339,10 @@ async def confirm_routing_order_network_ready(
         "instance_id": order.materialized_instance_id,
         "network_ready": True,
         "already_ready": already_ready,
-        "auto_start": payload.auto_start,
+        # Keep the requested value for compatibility with existing routers and
+        # expose the effective action separately for benchmark orchestration.
+        "auto_start": auto_start_requested,
+        "effective_auto_start": auto_start,
         "start_action": start_action,
         "start_error": start_error,
     }

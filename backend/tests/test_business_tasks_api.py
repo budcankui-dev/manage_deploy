@@ -3601,6 +3601,64 @@ async def test_controlled_benchmark_waits_for_external_network_ready_before_clai
 
 
 @pytest.mark.asyncio
+async def test_external_network_ready_defers_benchmark_start_to_managed_runner(
+    client, db_session, monkeypatch
+):
+    import api.routing as routing_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    headers, user = await _auth_headers(client, db_session, username="benchmark-ready-deferred-user")
+
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="network ready benchmark waits for managed runner",
+        status=OrderStatus.MATERIALIZED,
+        routing_status=RoutingStatus.NETWORK_BINDING_READY.value,
+        runtime_config={
+            "benchmark": {"run_id": "network-ready-deferred-run"},
+            "business_task": {"task_type": "high_throughput_matmul"},
+            "routing_result": {
+                "network_ready_required": True,
+                "network_ready": False,
+            },
+        },
+        is_benchmark=True,
+        materialized_instance_id="network-ready-deferred-instance",
+    )
+    instance = TaskInstance(
+        id="network-ready-deferred-instance",
+        template_id=template_id,
+        name="network ready deferred instance",
+        status=TaskStatus.PENDING,
+        deployment_mode=DeploymentMode.IMMEDIATE,
+    )
+    db_session.add_all([order, instance])
+    await db_session.commit()
+
+    class ShouldNotStartExecutor:
+        def __init__(self, db):
+            self.db = db
+
+        async def execute_dag_start(self, instance_id):
+            raise AssertionError(f"benchmark instance {instance_id} must wait for managed runner")
+
+    monkeypatch.setattr(routing_api, "DAGExecutor", ShouldNotStartExecutor)
+
+    response = await client.post(f"/api/routing-orders/{order.id}/network-ready")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["routing_status"] == RoutingStatus.COMPLETED.value
+    assert body["network_ready"] is True
+    assert body["auto_start"] is True
+    assert body["effective_auto_start"] is False
+    assert body["start_action"] == "deferred_benchmark"
+    refreshed = await db_session.get(TaskInstance, instance.id)
+    assert refreshed.status == TaskStatus.PENDING
+
+
+@pytest.mark.asyncio
 async def test_managed_benchmark_run_exposes_background_status(client, db_session, monkeypatch):
     import api.orders as orders_api
 

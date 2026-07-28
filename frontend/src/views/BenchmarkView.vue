@@ -2367,8 +2367,7 @@ async function startFullFlow() {
     markBenchmarkRunSession(routeMode.value === 'external' ? 'waiting_route' : 'running')
     if (routeMode.value === 'external') {
       await refreshExternalRoutingStatus()
-      ElMessage.info('已创建工单，请等待节点分配完成后再点击运行测评。')
-      return
+      ElMessage.info('已创建工单，后台测评将等待外部路由分配并自动推进。')
     }
     await runEvaluationFlow()
     ElMessage.success('完整测试流程已执行完成，请查看 Step 4 成功率和工单证据。')
