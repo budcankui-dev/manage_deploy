@@ -227,6 +227,53 @@ test('admin can inspect the business task hub', async ({ page }, testInfo) => {
   })
 })
 
+test('switching benchmark task type refreshes the matching baseline rows', async ({ page }) => {
+  await installAdminSession(page)
+  await mockAdminApi(page)
+  await page.route('**/api/baselines**', async route => {
+    const taskType = new URL(route.request().url()).searchParams.get('task_type')
+    const isMetaverse = taskType === 'metaverse_video_fusion'
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        node_id: 'compute-1-id',
+        task_type: taskType,
+        metric_key: isMetaverse ? 'frame_latency_p90_ms' : 'effective_gflops',
+        baseline_value: isMetaverse ? 42.5 : 5500,
+        unit: isMetaverse ? 'ms' : 'GFLOPS',
+        stable: true,
+        raw_values: isMetaverse ? [42.1, 42.9] : [5480, 5500, 5520],
+        diagnostics: { actual_backends: [isMetaverse ? 'modnet_gpu' : 'cupy_gpu'] },
+      }]),
+    })
+  })
+  await page.route('**/api/orders/benchmark/recalculate', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ succeeded: [], failed: {} }),
+  }))
+  await page.route('**/api/business-tasks/summary**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([]),
+  }))
+  await page.route('**/api/orders?**', async route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [] }),
+  }))
+
+  await page.goto('/benchmark')
+  await expect(page.getByText('5500.00 GFLOPS', { exact: true })).toBeVisible()
+
+  await page.locator('.task-select').click()
+  await page.getByRole('option', { name: '元宇宙沉浸式交互' }).click()
+
+  await expect(page.getByText('42.50 ms', { exact: true })).toBeVisible()
+  await expect(page.getByText('5500.00 GFLOPS', { exact: true })).toHaveCount(0)
+})
+
 test('user can copy order id from my orders list and detail toolbar', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('access_token', 'fake-user-token')
@@ -514,6 +561,31 @@ test('selected active benchmark run refreshes without a local run session', asyn
   await expect(page.getByText('已评估 1/2').first()).toBeVisible()
   await expect(page.getByText('已分配待启动', { exact: true })).toBeVisible()
   await expect(page.getByText(/五项数字按当前阶段互斥统计/)).toBeVisible()
+})
+
+test('empty benchmark run clears stale running session lock', async ({ page }) => {
+  const runId = 'high_throughput_matmul-empty-stale-run'
+  await installAdminSession(page)
+  await page.addInitScript(({ staleRunId }) => {
+    window.localStorage.setItem('manage-deploy:benchmark-run-session', JSON.stringify({
+      taskType: 'high_throughput_matmul',
+      benchmarkRunId: staleRunId,
+      phase: 'running',
+      updatedAt: new Date().toISOString(),
+    }))
+    window.localStorage.setItem('manage-deploy:benchmark-run-id', staleRunId)
+    window.__manageDeployBenchmarkRunnerKey = `high_throughput_matmul:${staleRunId}`
+  }, { staleRunId: runId })
+  await mockAdminApi(page)
+  await mockBenchmarkReadApis(page)
+
+  await page.goto(`/benchmark?benchmark_run_id=${runId}`)
+
+  await expect.poll(() => page.evaluate(() => (
+    window.localStorage.getItem('manage-deploy:benchmark-run-session')
+  ))).toBeNull()
+  await expect.poll(() => page.evaluate(() => window.__manageDeployBenchmarkRunnerKey || '')).toBe('')
+  await expect(page.getByRole('button', { name: '运行测评', exact: true })).toBeEnabled()
 })
 
 test('benchmark full-flow click locks immediately before batch API returns', async ({ page }) => {

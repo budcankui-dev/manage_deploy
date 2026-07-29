@@ -196,8 +196,7 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
     )).scalars().all()
     nodes = [node for node in nodes if _is_compute_node(node)]
 
-    succeeded, failed = [], []
-    for node in nodes:
+    async def run_for_node(node):
         try:
             try:
                 result = await run_baseline_on_node(
@@ -209,6 +208,20 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
                 if not payload.allow_local_fallback:
                     raise
                 result = await asyncio.to_thread(run_benchmark, payload.task_type, payload.runs)
+            return node, result, None
+        except Exception as exc:
+            return node, None, exc
+
+    # Remote benchmark containers run independently. Collect their results in
+    # parallel, then persist sequentially because AsyncSession is not task-safe.
+    run_results = await asyncio.gather(*(run_for_node(node) for node in nodes))
+
+    succeeded, failed = [], []
+    for node, result, error in run_results:
+        if error is not None:
+            failed.append({"node": node.hostname, "error": _normalize_baseline_error(error)})
+            continue
+        try:
             existing = (await db.execute(
                 select(NodeBaseline).where(
                     NodeBaseline.node_id == node.id,
@@ -232,6 +245,7 @@ async def batch_run_baseline(payload: BatchBaselineRunRequest, db: AsyncSession 
             await db.commit()
             succeeded.append(node.hostname)
         except Exception as e:
+            await db.rollback()
             failed.append({"node": node.hostname, "error": _normalize_baseline_error(e)})
 
     return {"succeeded": len(succeeded), "failed": failed, "nodes": succeeded}

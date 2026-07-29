@@ -4019,6 +4019,157 @@ async def test_managed_benchmark_retries_transient_advance_errors(db_session, mo
 
 
 @pytest.mark.asyncio
+async def test_controlled_benchmark_includes_terminal_routing_failure(client, db_session):
+    import api.orders as orders_api
+
+    _node_ids, template_id = await _seed_business_fixture(client)
+    _headers, user = await _auth_headers(client, db_session, username="benchmark-route-failed-user")
+    run_id = "terminal-route-failed-run"
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="terminal route failed order",
+        status=OrderStatus.FAILED,
+        routing_status=RoutingStatus.FAILED.value,
+        error_message="no latency path from h1 to compute-1",
+        runtime_config={
+            "benchmark": {"run_id": run_id},
+            "business_task": {"task_type": "metaverse_video_fusion"},
+        },
+        is_benchmark=True,
+    )
+    db_session.add(order)
+    await db_session.commit()
+
+    progress = await orders_api._advance_controlled_benchmark_run(
+        db_session,
+        orders_api.ControlledBenchmarkStartRequest(
+            benchmark_run_id=run_id,
+            task_type="metaverse_video_fusion",
+        ),
+        user,
+    )
+
+    assert progress["total"] == 1
+    assert progress["terminal_failed_count"] == 1
+    assert progress["terminal_failed"] == {
+        order.id: "no latency path from h1 to compute-1",
+    }
+    assert progress["pending_to_start"] == 0
+    assert progress["waiting_route"] == 0
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_stops_immediately_on_terminal_routing_failure(
+    db_session, monkeypatch
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-route-failed-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+
+    attempts = 0
+
+    async def terminal_failure(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return {
+            "total": 1,
+            "evaluated": 0,
+            "active": 0,
+            "waiting_route": 0,
+            "pending_to_start": 0,
+            "started": 0,
+            "cleaned": 0,
+            "cleanup_pending": 0,
+            "terminal_failed_count": 1,
+            "terminal_failed": {"order-1": "no route"},
+            "waiting_resource": {},
+            "failed": {},
+        }
+
+    persisted: list[dict] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", terminal_failure)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    key = "metaverse_video_fusion::managed-route-failed-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-route-failed-run",
+        task_type="metaverse_video_fusion",
+    )
+
+    await orders_api._run_managed_benchmark_loop(key, payload, user.id)
+
+    assert attempts == 1
+    assert persisted[-1]["phase"] == "failed"
+    assert "1 个路由分配或部署失败" in persisted[-1]["error"]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["phase"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_stops_after_run_orders_are_deleted(db_session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-empty-run-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+
+    attempts = 0
+
+    async def empty_run(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return {
+            "total": 0,
+            "evaluated": 0,
+            "active": 0,
+            "waiting_route": 0,
+            "pending_to_start": 0,
+            "started": 0,
+            "cleaned": 0,
+            "cleanup_pending": 0,
+            "terminal_failed_count": 0,
+            "waiting_resource": {},
+            "failed": {},
+        }
+
+    async def no_wait(_seconds):
+        return None
+
+    persisted: list[str] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs["phase"])
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", empty_run)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    monkeypatch.setattr(orders_api.asyncio, "sleep", no_wait)
+    key = "high_throughput_matmul::managed-empty-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-empty-run",
+        task_type="high_throughput_matmul",
+    )
+
+    await orders_api._run_managed_benchmark_loop(key, payload, user.id)
+
+    assert attempts == 3
+    assert persisted == ["blocked"]
+    status = orders_api._MANAGED_BENCHMARK_STATUS[key]
+    assert status["phase"] == "blocked"
+    assert "连续 3 次未找到" in status["message"]
+
+
+@pytest.mark.asyncio
 async def test_managed_benchmark_retries_cleanup_before_completing(db_session, monkeypatch):
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     import api.orders as orders_api

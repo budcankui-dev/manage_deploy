@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 
@@ -29,9 +31,16 @@ async def test_batch_baseline_only_runs_on_compute_nodes(client, monkeypatch):
         created[hostname] = response.json()["id"]
 
     called_endpoints = []
+    active_calls = 0
+    max_active_calls = 0
 
     async def fake_run_baseline_on_node(endpoint, task_type, runs):
+        nonlocal active_calls, max_active_calls
         called_endpoints.append(endpoint)
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0.01)
+        active_calls -= 1
         return {
             "metric_key": "effective_gflops",
             "baseline_value": 100.0,
@@ -61,6 +70,7 @@ async def test_batch_baseline_only_runs_on_compute_nodes(client, monkeypatch):
         "http://compute-2:8001",
         "http://compute-3:8001",
     ]
+    assert max_active_calls == 3
 
 
 @pytest.mark.asyncio

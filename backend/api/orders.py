@@ -2735,10 +2735,40 @@ async def _run_managed_benchmark_loop(
             started = int(progress.get("started") or 0)
             cleaned = int(progress.get("cleaned") or 0)
             cleanup_pending = int(progress.get("cleanup_pending") or 0)
+            terminal_failed_count = int(progress.get("terminal_failed_count") or 0)
             waiting = len(progress.get("waiting_resource") or {})
             failed = len(progress.get("failed") or {})
 
             progress["round"] = round_index
+            if (
+                total > 0
+                and terminal_failed_count > 0
+                and evaluated + terminal_failed_count >= total
+                and not active
+                and not waiting_route
+                and not pending
+                and not cleanup_pending
+            ):
+                message = (
+                    f"本轮 {total} 个测评任务中，{evaluated} 个已完成评估，"
+                    f"{terminal_failed_count} 个路由分配或部署失败。请查看失败工单详情。"
+                )
+                _benchmark_status_payload(
+                    key,
+                    phase="failed",
+                    message=message,
+                    payload=payload,
+                    progress=progress,
+                )
+                await _set_managed_benchmark_control_safely(
+                    benchmark_run_id=payload.benchmark_run_id,
+                    task_type=payload.task_type,
+                    phase="failed",
+                    payload=payload,
+                    user_id=user_id,
+                    error=message,
+                )
+                return
             if total > 0 and evaluated >= total and not cleanup_pending:
                 _benchmark_status_payload(
                     key,
@@ -2796,7 +2826,16 @@ async def _run_managed_benchmark_loop(
                 payload=payload,
                 progress=progress,
             )
-            if phase == "blocked" and idle_rounds >= 3:
+            if (phase == "blocked" or not total) and idle_rounds >= 3:
+                if not total:
+                    message = "连续 3 次未找到本轮测评工单，后台推进已停止；请重新创建测评轮次。"
+                    _benchmark_status_payload(
+                        key,
+                        phase="blocked",
+                        message=message,
+                        payload=payload,
+                        progress=progress,
+                    )
                 await _set_managed_benchmark_control_safely(
                     benchmark_run_id=payload.benchmark_run_id,
                     task_type=payload.task_type,
@@ -3352,12 +3391,14 @@ async def _controlled_benchmark_orders(
                 OrderStatus.PENDING.value,
                 OrderStatus.MATERIALIZED.value,
                 OrderStatus.COMPLETED.value,
+                OrderStatus.FAILED.value,
             ]),
             TaskOrder.routing_status.in_([
                 RoutingStatus.PENDING.value,
                 RoutingStatus.COMPUTING.value,
                 RoutingStatus.NETWORK_BINDING_READY.value,
                 RoutingStatus.COMPLETED.value,
+                RoutingStatus.FAILED.value,
             ]),
         )
     else:
@@ -3522,6 +3563,12 @@ async def _advance_controlled_benchmark_run(
     current_user: User,
 ) -> dict[str, Any]:
     run_orders = await _controlled_benchmark_orders(db, payload, current_user, include_completed=True)
+    terminal_failed = {
+        order.id: order.error_message or "路由分配或部署失败"
+        for order in run_orders
+        if order.status == OrderStatus.FAILED.value
+        or order.routing_status == RoutingStatus.FAILED.value
+    }
     orders = [order for order in run_orders if order.status == OrderStatus.MATERIALIZED]
     startable_instance_ids = {
         order.materialized_instance_id
@@ -3723,6 +3770,8 @@ async def _advance_controlled_benchmark_run(
         "waiting_resource": waiting_resource,
         "cleaned": len(cleaned),
         "cleanup_pending": cleanup_pending,
+        "terminal_failed": terminal_failed,
+        "terminal_failed_count": len(terminal_failed),
         "failed": failed,
         "instance_ids": started,
         "success_rate": success_count / evaluated_count if evaluated_count else None,

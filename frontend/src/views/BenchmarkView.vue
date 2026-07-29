@@ -57,7 +57,9 @@
           <span class="step-num">1</span>
           <div>
             <div class="step-title">计算节点基线</div>
-            <div class="step-desc">仅测试计算节点；终端节点只作为业务源/目的节点参与路由，不参与基线测试。</div>
+            <div class="step-desc">
+              仅测试计算节点；终端节点只作为业务源/目的节点参与路由，不参与基线测试。{{ baselineRunDurationHint }}
+            </div>
           </div>
           <el-button
             class="header-action"
@@ -584,7 +586,7 @@ import { copyTextToClipboard } from '@/utils/clipboard'
 
 const BENCHMARK_RUN_STORAGE_KEY = 'manage-deploy:benchmark-run-id'
 const BASELINE_RUN_LOCK_KEY = 'manage-deploy:benchmark-baseline-run-lock'
-const BASELINE_RUN_LOCK_TTL_MS = 30 * 60 * 1000
+const BASELINE_RUN_LOCK_TTL_MS = 5 * 60 * 1000
 const route = useRoute()
 const router = useRouter()
 const taskConfigs = {
@@ -713,6 +715,12 @@ const activeBenchmarkRunSession = computed(() => benchmarkRunSession.value)
 const currentTaskConfig = computed(() =>
   taskConfigs[taskType.value] || { label: taskType.value, unit: '', objectiveText: '' }
 )
+
+const baselineRunDurationHint = computed(() => (
+  taskType.value === 'metaverse_video_fusion'
+    ? '三台计算节点并行执行，通常约 45-90 秒。'
+    : '各计算节点并行执行。'
+))
 
 const taskTypeValues = Object.keys(taskConfigs)
 
@@ -1416,7 +1424,6 @@ function formatBenchmarkRunOption(run) {
 
 async function loadOrders() {
   if (!currentBenchmarkRunId.value) {
-    dataLoadGeneration.value += 1
     orders.value = []
     return
   }
@@ -1588,6 +1595,11 @@ function reconcileBenchmarkRunSessionAfterLoad() {
   if (!currentRunSessionActive.value) return
   if (benchmarkRunStopped.value) return
   if (benchmarkRunCompleted.value) {
+    clearCurrentBenchmarkRunSession()
+    return
+  }
+  if (!orders.value.length && ['waiting_route', 'running'].includes(activeBenchmarkRunSession.value?.phase)) {
+    clearActiveBenchmarkRunnerKey(currentBenchmarkRunKey())
     clearCurrentBenchmarkRunSession()
     return
   }
@@ -2371,6 +2383,10 @@ async function startFullFlow() {
     }
     await runEvaluationFlow()
     ElMessage.success('完整测试流程已执行完成，请查看 Step 4 成功率和工单证据。')
+  } catch (error) {
+    clearActiveBenchmarkRunnerKey(currentBenchmarkRunKey())
+    clearCurrentBenchmarkRunSession()
+    throw error
   } finally {
     fullFlowLoading.value = false
   }
