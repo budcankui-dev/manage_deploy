@@ -64,11 +64,22 @@ def test_metaverse_catalog_and_routing_resources_are_isolated():
     assert modality_for_task_type("metaverse_video_fusion") == "低时延转发模态"
     assert default_objective_for_task_type("metaverse_video_fusion")["metric_key"] == "frame_latency_p90_ms"
     assert estimate_resources("metaverse_video_fusion", profile)["compute"]["gpu_units"] == 1
-    assert estimate_bandwidth_mbps("metaverse_video_fusion", profile) >= 20
+    assert estimate_bandwidth_mbps("metaverse_video_fusion", profile) == 90
+    assert payload["edges"][0]["bandwidth_mbps"] == 90
     assert payload["job_name"] == "元宇宙沉浸式交互"
     assert payload["modal"] == "低时延转发模态"
     assert payload["routing_strategy"] == "low_latency_forwarding"
     assert payload["policy_type"] == "LATENCY_CONSTRAINED"
+
+
+def test_metaverse_720p_bandwidth_supports_concurrent_routes_and_explicit_override():
+    profile = {"frame_count": 180, "resolution": "720p", "fps": 30, "frame_stride": 1}
+
+    assert estimate_bandwidth_mbps("metaverse_video_fusion", profile) == 40
+    assert estimate_bandwidth_mbps(
+        "metaverse_video_fusion",
+        {**profile, "bandwidth_mbps": 64},
+    ) == 64
 
 
 def test_metaverse_baseline_requires_cuda_modnet():

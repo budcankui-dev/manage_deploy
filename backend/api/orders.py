@@ -2468,6 +2468,7 @@ _MANAGED_BENCHMARK_STATUS: dict[str, dict[str, Any]] = {}
 _MANAGED_BENCHMARK_LOCK = asyncio.Lock()
 _MANAGED_BENCHMARK_ACTIVE_PHASES = {"running", "waiting_resource", "cleaning", "recovering"}
 _MANAGED_BENCHMARK_WATCHDOG_JOB_ID = "managed_benchmark_watchdog"
+_MANAGED_BENCHMARK_ROUTE_WAIT_TIMEOUT_SECONDS = 300
 
 
 def _managed_benchmark_key(task_type: str | None, benchmark_run_id: str | None) -> str:
@@ -2682,6 +2683,8 @@ async def _run_managed_benchmark_loop(
     payload = payload.model_copy(update={"wait_seconds": 0})
     try:
         idle_rounds = 0
+        route_wait_rounds = 0
+        previous_waiting_route: int | None = None
         consecutive_errors = 0
         for round_index in range(1, payload.max_rounds + 1):
             status = _MANAGED_BENCHMARK_STATUS.get(key, {})
@@ -2738,6 +2741,16 @@ async def _run_managed_benchmark_loop(
             terminal_failed_count = int(progress.get("terminal_failed_count") or 0)
             waiting = len(progress.get("waiting_resource") or {})
             failed = len(progress.get("failed") or {})
+
+            if waiting_route:
+                if previous_waiting_route is None or waiting_route < previous_waiting_route:
+                    route_wait_rounds = 1
+                else:
+                    route_wait_rounds += 1
+                previous_waiting_route = waiting_route
+            else:
+                route_wait_rounds = 0
+                previous_waiting_route = None
 
             progress["round"] = round_index
             if (
@@ -2826,6 +2839,32 @@ async def _run_managed_benchmark_loop(
                 payload=payload,
                 progress=progress,
             )
+            if (
+                waiting_route
+                and route_wait_rounds * payload.poll_interval_seconds
+                >= _MANAGED_BENCHMARK_ROUTE_WAIT_TIMEOUT_SECONDS
+            ):
+                message = (
+                    f"外部路由连续 {_MANAGED_BENCHMARK_ROUTE_WAIT_TIMEOUT_SECONDS // 60} 分钟"
+                    f"未完成剩余 {waiting_route} 个工单分配，后台推进已暂停。"
+                    "请检查路由服务后重新运行本轮测评。"
+                )
+                _benchmark_status_payload(
+                    key,
+                    phase="blocked",
+                    message=message,
+                    payload=payload,
+                    progress=progress,
+                )
+                await _set_managed_benchmark_control_safely(
+                    benchmark_run_id=payload.benchmark_run_id,
+                    task_type=payload.task_type,
+                    phase="blocked",
+                    payload=payload,
+                    user_id=user_id,
+                    error=message,
+                )
+                return
             if (phase == "blocked" or not total) and idle_rounds >= 3:
                 if not total:
                     message = "连续 3 次未找到本轮测评工单，后台推进已停止；请重新创建测评轮次。"

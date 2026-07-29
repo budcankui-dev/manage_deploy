@@ -9,8 +9,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from api.orders import RoutingResultPayload, receive_routing_result as receive_order_routing_result
 from database import get_db
-from enums import ConversationStatus, OrderStatus, RoutingStatus, TaskStatus
-from models import Conversation, RoutingResourceEvent, TaskInstance, TaskOrder
+from enums import ConversationStatus, OrderStatus, RoutingRequestStatus, RoutingStatus, TaskStatus
+from models import Conversation, RoutingRequest, RoutingResourceEvent, TaskInstance, TaskOrder
 from services.dag_executor import DAGExecutor
 from services.routing_network import mark_network_ready, network_ready_required
 from services.scheduler import TaskScheduler
@@ -117,6 +117,42 @@ def _resource_event_response(event: RoutingResourceEvent) -> RoutingResourceEven
     )
 
 
+async def _sync_linked_routing_state(
+    db: AsyncSession,
+    order: TaskOrder,
+    *,
+    status: RoutingRequestStatus,
+    error_message: str | None,
+) -> None:
+    routing: RoutingRequest | None = None
+    if order.routing_request_id:
+        routing = await db.get(RoutingRequest, order.routing_request_id)
+    if routing is None:
+        routing = (
+            await db.execute(
+                select(RoutingRequest)
+                .where(RoutingRequest.order_id == order.id)
+                .order_by(RoutingRequest.created_at.desc())
+            )
+        ).scalars().first()
+
+    if routing is not None:
+        routing.status = status
+        routing.error_message = error_message
+        routing.completed_at = business_now() if status == RoutingRequestStatus.FAILED else None
+
+    conversation_id = order.conversation_id or (routing.conversation_id if routing else None)
+    if conversation_id:
+        conversation = await db.get(Conversation, conversation_id)
+        if conversation is not None:
+            conversation.status = (
+                ConversationStatus.FAILED
+                if status == RoutingRequestStatus.FAILED
+                else ConversationStatus.AWAITING_ROUTING
+            )
+            conversation.updated_at = business_now()
+
+
 @router.get("/routing-orders", response_model=list[RoutingOrderResponse])
 async def list_routing_orders(
     status: RoutingStatus = Query(RoutingStatus.PENDING),
@@ -158,6 +194,18 @@ async def claim_routing_order(
         raise HTTPException(status_code=404, detail="Order not found")
     if order.routing_status != RoutingStatus.PENDING.value:
         raise HTTPException(status_code=409, detail=f"Cannot claim: current status is {order.routing_status}")
+    routing_dag = order.routing_input_dag
+    if (
+        not isinstance(routing_dag, dict)
+        or not isinstance(routing_dag.get("nodes"), list)
+        or not routing_dag["nodes"]
+        or not isinstance(routing_dag.get("edges"), list)
+        or not routing_dag["edges"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot claim: routing_input_dag must contain non-empty nodes and edges",
+        )
     runtime_settings = await get_runtime_settings(db)
     if order.is_benchmark and runtime_settings.get("benchmark_routing_mode") == "internal_auto":
         raise HTTPException(
@@ -166,6 +214,13 @@ async def claim_routing_order(
         )
 
     order.routing_status = RoutingStatus.COMPUTING.value
+    order.error_message = None
+    await _sync_linked_routing_state(
+        db,
+        order,
+        status=RoutingRequestStatus.COMPUTING,
+        error_message=None,
+    )
     await db.commit()
     await db.refresh(order)
     return _routing_order_response(order)
@@ -190,6 +245,12 @@ async def requeue_routing_order(
     reason = payload.reason if payload else None
     order.routing_status = RoutingStatus.PENDING.value
     order.error_message = reason
+    await _sync_linked_routing_state(
+        db,
+        order,
+        status=RoutingRequestStatus.PENDING,
+        error_message=reason,
+    )
     await db.commit()
     await db.refresh(order)
     return _routing_order_response(order)
@@ -208,12 +269,25 @@ async def fail_routing_order(
     order = result.scalar_one_or_none()
     if not order or order.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order.routing_status == RoutingStatus.COMPLETED.value:
-        raise HTTPException(status_code=409, detail="Cannot fail: routing result already completed")
+    if order.routing_status not in {
+        RoutingStatus.COMPUTING.value,
+        RoutingStatus.FAILED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot fail: current status is {order.routing_status}",
+        )
 
     reason = payload.reason if payload else None
     order.routing_status = RoutingStatus.FAILED.value
+    order.status = OrderStatus.FAILED
     order.error_message = reason
+    await _sync_linked_routing_state(
+        db,
+        order,
+        status=RoutingRequestStatus.FAILED,
+        error_message=reason,
+    )
     await db.commit()
     await db.refresh(order)
     return _routing_order_response(order)

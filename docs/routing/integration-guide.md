@@ -791,6 +791,7 @@ routing_resource_events(
 - source/sink 是否启动端点容器由平台工单的 `platform_deployment.deployable_roles` 决定；例如 `["source","compute","sink"]` 表示三类角色都部署，`["compute"]` 表示 source/sink 只作为路由端点。
 - `compute` 是路由系统通常需要选择真实拓扑节点的位置。
 - `edges[].bandwidth_mbps` 是带宽需求估计，可作为选路参考。
+- 当前元宇宙双路 720p/30fps 融合任务默认每段链路为 `40 Mbps`，视频 AI 默认约 `20 Mbps`；高分辨率/高帧率元宇宙任务按规格上调但不超过 `200 Mbps`。不要再按旧联调记录中的 `1000 Mbps` 过滤路径。
 - `nodes[].network.port_requirements` 是逻辑端口需求，路由系统不要提前分配真实端口。
 - 用户接入演示中，source/sink 可能额外包含 `business_ip`、`business_port`、`callback_url`。其中 `business_port` 是用户在前端登记或手动启动 receiver 时选择的目的端口，不是平台或路由系统动态分配的端口。
 - `priority` 和 `edges[].flow.priority` 用于识别业务流优先级，取值 `1-8`，`1` 最高。该值由平台“系统设置 -> 模态优先级字典”维护。

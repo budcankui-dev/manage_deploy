@@ -97,6 +97,16 @@
             <el-descriptions-item label="平台受控角色">{{ deployableRolesText }}</el-descriptions-item>
           </el-descriptions>
 
+          <el-alert
+            v-if="routingFailureMessage"
+            class="routing-failure-alert"
+            type="error"
+            show-icon
+            :closable="false"
+            title="路由失败原因"
+            :description="routingFailureMessage"
+          />
+
           <h3 class="section-title">拓扑节点与端口</h3>
           <el-table :data="placementRows" size="small" border empty-text="暂无节点放置信息">
             <el-table-column prop="roleLabel" label="任务角色" width="110" />
@@ -760,6 +770,11 @@ const detail = computed(() => props.detail)
 const resultObjects = computed(() => props.resultObjects || [])
 const businessTask = computed(() => detail.value?.business_task || null)
 const routingResult = computed(() => detail.value?.routing_result || null)
+const routingFailureMessage = computed(() => (
+  detail.value?.routing_status === 'failed'
+    ? (detail.value?.error_message || '外部路由系统未返回具体失败原因。')
+    : ''
+))
 const routingDecision = computed(() => detail.value?.routing_decision || null)
 const nodeCapabilityProfile = computed(() => detail.value?.node_capability_profile || null)
 const userAccessGuide = computed(() => detail.value?.user_access_guide || null)
@@ -1567,6 +1582,10 @@ function nodeStatusLabel(value) {
 }
 
 .routing-overview-desc {
+  margin-bottom: 14px;
+}
+
+.routing-failure-alert {
   margin-bottom: 14px;
 }
 

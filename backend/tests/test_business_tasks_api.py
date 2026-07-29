@@ -6,11 +6,22 @@ from sqlalchemy import select
 from api.auth import hash_password
 from api.business_tasks import _extract_result_metadata
 from api.instances import _trim_metric_tags
-from enums import DeploymentMode, OrderStatus, RoutingStatus, TaskStatus, UserRole
+from enums import (
+    ConversationStatus,
+    DeploymentMode,
+    OrderStatus,
+    RoutingRequestStatus,
+    RoutingStatus,
+    TaskStatus,
+    UserRole,
+)
 from models import (
     BusinessObjectiveEvaluation,
+    Conversation,
+    IntentDraft,
     Node,
     NodeBaseline,
+    RoutingRequest,
     RoutingResourceEvent,
     SystemSetting,
     TaskInstance,
@@ -1280,6 +1291,17 @@ async def test_order_routing_result_persists_router_metadata_and_is_idempotent(c
     assert retried_order.runtime_config["routing_result"]["selected_strategy"] == "GPU_EXCLUSIVE_LOW_RENT"
     assert retried_order.runtime_config["routing_result"]["external_routing_id"] == "route-meta-001"
     assert retried_order.runtime_config["routing_result"]["metadata"]["decision_trace_id"] == "trace-meta-001"
+
+    late_fail = await client.patch(
+        f"/api/routing-orders/{order_id}/fail",
+        json={"reason": "late router callback must not overwrite a valid result"},
+    )
+    assert late_fail.status_code == 409
+    protected_order = (
+        await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
+    ).scalar_one()
+    assert protected_order.routing_status == RoutingStatus.NETWORK_BINDING_READY.value
+    assert protected_order.error_message is None
 
     ready_response = await client.post(
         f"/api/routing-orders/{order_id}/network-ready",
@@ -2581,7 +2603,107 @@ async def test_router_can_requeue_and_fail_routing_order_without_service_token(c
 
     row = await db_session.execute(select(TaskOrder).where(TaskOrder.id == order_id))
     order = row.scalar_one()
+    assert order.status == OrderStatus.FAILED.value
     assert order.error_message == "No feasible placement"
+
+
+@pytest.mark.asyncio
+async def test_router_status_callbacks_keep_user_conversation_in_sync(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    _headers, user = await _auth_headers(client, db_session, username="routing-conversation-sync-user")
+    conversation = Conversation(
+        user_id=user.id,
+        title="routing state sync",
+        status=ConversationStatus.AWAITING_ROUTING,
+    )
+    db_session.add(conversation)
+    await db_session.flush()
+    draft = IntentDraft(conversation_id=conversation.id, task_type="high_throughput_matmul")
+    db_session.add(draft)
+    await db_session.flush()
+    order = TaskOrder(
+        user_id=user.id,
+        conversation_id=conversation.id,
+        intent_draft_id=draft.id,
+        template_id=template_id,
+        name="routing conversation sync order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        routing_input_dag={
+            "nodes": [
+                {"task_node_id": "source"},
+                {"task_node_id": "sink"},
+            ],
+            "edges": [{"from": "source", "to": "sink"}],
+        },
+    )
+    db_session.add(order)
+    await db_session.flush()
+    routing_request = RoutingRequest(
+        conversation_id=conversation.id,
+        order_id=order.id,
+        intent_draft_id=draft.id,
+        status=RoutingRequestStatus.PENDING,
+    )
+    db_session.add(routing_request)
+    await db_session.flush()
+    order.routing_request_id = routing_request.id
+    conversation.materialized_order_id = order.id
+    await db_session.commit()
+
+    claim = await client.patch(f"/api/routing-orders/{order.id}/claim")
+    assert claim.status_code == 200
+    await db_session.refresh(routing_request)
+    assert routing_request.status == RoutingRequestStatus.COMPUTING.value
+
+    requeue = await client.patch(
+        f"/api/routing-orders/{order.id}/requeue",
+        json={"reason": "temporary topology refresh"},
+    )
+    assert requeue.status_code == 200
+    await db_session.refresh(routing_request)
+    await db_session.refresh(conversation)
+    assert routing_request.status == RoutingRequestStatus.PENDING.value
+    assert routing_request.error_message == "temporary topology refresh"
+    assert conversation.status == ConversationStatus.AWAITING_ROUTING.value
+
+    assert (await client.patch(f"/api/routing-orders/{order.id}/claim")).status_code == 200
+    failed = await client.patch(
+        f"/api/routing-orders/{order.id}/fail",
+        json={"reason": "topology has no feasible path"},
+    )
+    assert failed.status_code == 200
+    await db_session.refresh(routing_request)
+    await db_session.refresh(conversation)
+    await db_session.refresh(order)
+    assert routing_request.status == RoutingRequestStatus.FAILED.value
+    assert routing_request.error_message == "topology has no feasible path"
+    assert routing_request.completed_at is not None
+    assert conversation.status == ConversationStatus.FAILED.value
+    assert order.status == OrderStatus.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_router_claim_rejects_incomplete_dag_without_sticking_order(client, db_session):
+    _node_ids, template_id = await _seed_business_fixture(client)
+    _headers, user = await _auth_headers(client, db_session, username="routing-invalid-dag-user")
+    order = TaskOrder(
+        user_id=user.id,
+        template_id=template_id,
+        name="invalid routing dag order",
+        status=OrderStatus.PENDING,
+        routing_status=RoutingStatus.PENDING.value,
+        routing_input_dag={"nodes": [], "edges": []},
+    )
+    db_session.add(order)
+    await db_session.commit()
+
+    response = await client.patch(f"/api/routing-orders/{order.id}/claim")
+
+    assert response.status_code == 422
+    assert "non-empty nodes and edges" in response.json()["detail"]
+    await db_session.refresh(order)
+    assert order.routing_status == RoutingStatus.PENDING.value
 
 
 @pytest.mark.asyncio
@@ -4167,6 +4289,65 @@ async def test_managed_benchmark_stops_after_run_orders_are_deleted(db_session, 
     status = orders_api._MANAGED_BENCHMARK_STATUS[key]
     assert status["phase"] == "blocked"
     assert "连续 3 次未找到" in status["message"]
+
+
+@pytest.mark.asyncio
+async def test_managed_benchmark_stops_after_external_route_wait_timeout(db_session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    import api.orders as orders_api
+
+    user = User(username="managed-route-timeout-user", password_hash="test", role=UserRole.ADMIN)
+    db_session.add(user)
+    await db_session.commit()
+    session_maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(orders_api, "async_session_maker", session_maker)
+    monkeypatch.setattr(orders_api, "_MANAGED_BENCHMARK_ROUTE_WAIT_TIMEOUT_SECONDS", 2)
+
+    attempts = 0
+
+    async def waiting_route(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return {
+            "total": 1,
+            "evaluated": 0,
+            "active": 0,
+            "waiting_route": 1,
+            "pending_to_start": 0,
+            "started": 0,
+            "cleaned": 0,
+            "cleanup_pending": 0,
+            "terminal_failed_count": 0,
+            "waiting_resource": {},
+            "failed": {},
+        }
+
+    async def no_wait(_seconds):
+        return None
+
+    persisted: list[dict] = []
+
+    async def record_control(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(orders_api, "_advance_controlled_benchmark_run", waiting_route)
+    monkeypatch.setattr(orders_api, "_set_managed_benchmark_control_safely", record_control)
+    monkeypatch.setattr(orders_api.asyncio, "sleep", no_wait)
+    key = "metaverse_video_fusion::managed-route-timeout-run"
+    payload = orders_api.ManagedBenchmarkRunRequest(
+        benchmark_run_id="managed-route-timeout-run",
+        task_type="metaverse_video_fusion",
+        poll_interval_seconds=1,
+        max_rounds=10,
+    )
+
+    await orders_api._run_managed_benchmark_loop(key, payload, user.id)
+
+    assert attempts == 2
+    assert persisted[-1]["phase"] == "blocked"
+    assert persisted[-1]["error"] == orders_api._MANAGED_BENCHMARK_STATUS[key]["message"]
+    assert orders_api._MANAGED_BENCHMARK_STATUS[key]["phase"] == "blocked"
+    assert "外部路由连续" in orders_api._MANAGED_BENCHMARK_STATUS[key]["message"]
 
 
 @pytest.mark.asyncio
