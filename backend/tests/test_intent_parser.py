@@ -106,6 +106,21 @@ def test_parse_terminal_route_transfer_is_route_only_source_to_sink():
     assert result.parse_status == "valid"
 
 
+def test_parse_edge_inference_is_not_misclassified_as_route_only_transfer():
+    result = parse_intent(
+        "输电线路巡检边缘计算 source=h7 dest=h5, frames=120, 功耗预算 50W, "
+        "马上开始跑3小时, 低延时链路优先",
+        valid_nodes=["h5", "h7"],
+    )
+
+    assert result.task_type == "energy_efficient_edge_inference"
+    assert result.modality == "高能效边缘计算模态"
+    assert result.data_profile["frame_count"] == 120
+    assert result.data_profile["power_budget_w"] == 50
+    assert result.runtime_plan.get("route_only") is not True
+    assert result.parse_status == "valid"
+
+
 def test_parse_unknown_task_is_incomplete():
     result = parse_intent("帮我订外卖")
     assert result.task_type is None

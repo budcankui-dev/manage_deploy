@@ -359,8 +359,10 @@ def parse_intent(
 
     if _looks_like_terminal_route_transfer(text) and not any(
         k in lower for k in (
-            "矩阵", "matmul", "matrix_size", "matrix", "乘法", "视频", "video", "帧", "fps",
+            "矩阵", "matmul", "matrix_size", "matrix", "乘法", "视频", "video", "帧", "frames", "fps",
             "llm", "大模型", "文本生成", "token", "prompt", "训练", "高安全", "安全传输",
+            "边缘", "巡检", "功耗", "能耗",
+            "存算", "数据拉取", "连接", "终端接入", "确定性", "抖动", "稳定时延", "稳定转发",
         )
     ):
         result.task_type = result.task_type or "terminal_route_transfer"
